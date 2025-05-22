@@ -1,0 +1,19 @@
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: {{ .Values.groupSync.name }}
+  namespace: {{ .Values.groupSync.namespace }}
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+spec:
+  channel: {{ .Values.subscription.channel }}
+  config:
+    env:
+      - name: WATCH_NAMESPACE
+        value: {{ .Values.subscription.watchNamespaces }}
+  installPlanApproval: {{ .Values.subscription.installPlanApproval }}
+  name: ldap-group-sync
+  source: {{ .Values.subscription.source }}
+  sourceNamespace: {{ .Values.subscription.sourceNamespace }}

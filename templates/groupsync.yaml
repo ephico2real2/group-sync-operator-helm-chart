@@ -1,0 +1,52 @@
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: GroupSync
+metadata:
+  name: {{ .Values.groupSync.name }}
+  namespace: {{ .Values.groupSync.namespace }}
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+spec:
+  schedule: {{ .Values.groupSync.schedule | quote }}
+  providers:
+    - name: {{ .Values.groupSync.providerName }}
+      ldap:
+        url: {{ .Values.groupSync.url | quote }}
+        insecure: false
+        prune: true
+        ca:
+          kind: ConfigMap
+          name: {{ .Values.groupSync.ca.name }}
+          key: {{ .Values.groupSync.ca.key }}
+          namespace: {{ .Values.groupSync.ca.namespace }}
+        credentialsSecret:
+          kind: Secret
+          name: {{ .Values.groupSync.credentialsSecret.name }}
+          namespace: {{ .Values.groupSync.credentialsSecret.namespace }}
+        rfc2307:
+          usersQuery:
+            baseDN: {{ .Values.groupSync.rfc2307.usersQuery.baseDN | quote }}
+            derefAliases: "never"
+            pageSize: 0
+            scope: "sub"
+            timeout: 0
+
+          groupsQuery:
+            baseDN: {{ .Values.groupSync.rfc2307.groupsQuery.baseDN | quote }}
+            derefAliases: "never"
+            filter: {{ .Values.groupSync.rfc2307.groupsQuery.filter | quote }}
+            pageSize: 0
+            scope: "sub"
+            timeout: 0
+
+          groupNameAttributes:
+            - cn
+          groupUIDAttribute: dn
+          groupMembershipAttributes:
+            - member
+          userNameAttributes:
+            - uid
+          userUIDAttribute: dn
+          tolerateMemberNotFoundErrors: true
+          tolerateMemberOutOfScopeErrors: true

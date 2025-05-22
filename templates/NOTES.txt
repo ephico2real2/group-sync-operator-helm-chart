@@ -1,0 +1,25 @@
+Thank you for installing {{ .Chart.Name }}.
+
+The Group Sync Operator has been deployed to namespace: {{ .Values.groupSync.namespace }}
+
+To verify the installation, please run the following commands:
+
+1. Check the Operator installation status:
+   $ oc get csv -n {{ .Values.groupSync.namespace }}
+
+2. Verify the GroupSync custom resource:
+   $ oc get groupsync {{ .Values.groupSync.name }} -n {{ .Values.groupSync.namespace }}
+
+3. Monitor the sync process:
+   $ oc get groupsync {{ .Values.groupSync.name }} -n {{ .Values.groupSync.namespace }} -o jsonpath='{.status.conditions[*].message}'
+
+The LDAP group sync is scheduled to run every 30 minutes.
+
+For troubleshooting:
+1. Check operator logs:
+   $ oc logs -l app.kubernetes.io/name={{ include "group-sync-operator-helm.name" . }} -n {{ .Values.groupSync.namespace }}
+
+2. Verify LDAP connectivity:
+   $ oc get groupsync {{ .Values.groupSync.name }} -n {{ .Values.groupSync.namespace }} -o yaml
+
+For more information, please refer to the README.md in the chart directory.

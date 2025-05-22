@@ -1,0 +1,20 @@
+# Helm
+*.tgz
+charts/
+Chart.lock
+
+# OS
+.DS_Store
+
+# IDEs and editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Temp directories
+temp/
+tmp/

@@ -1,0 +1,31 @@
+groupSync:
+  name: ldap-group-sync
+  namespace: group-sync-operator
+  schedule: "0/30 * * * *"
+  providerName: ldap-git-ocp
+
+  ca:
+    name: ca-config-map
+    key: ca.crt
+    namespace: openshift-config
+
+  credentialsSecret:
+    name: ldap-group-sync
+    namespace: group-sync-operator
+
+  url: "ldaps://ldap.ephicoreal2.net:636"
+
+  rfc2307:
+    usersQuery:
+      baseDN: "o=ephicoreal2"
+
+    groupsQuery:
+      baseDN: "ou=Groups,o=ephicoreal2"
+      filter: "(&(objectClass=groupOfNames)(cn=app-git-*))"
+
+subscription:
+  channel: alpha
+  watchNamespaces: group-sync-operator,openshift-config
+  installPlanApproval: Automatic
+  source: community-operators
+  sourceNamespace: openshift-marketplace

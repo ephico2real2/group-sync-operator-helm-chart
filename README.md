@@ -1,5 +1,13 @@
 # Group Sync Operator Helm Chart
 
+> **⚠️ IMPORTANT: OPENSHIFT ONLY** 
+> 
+> This Helm chart is designed **exclusively for OpenShift clusters**. It will not work on standard Kubernetes clusters as it depends on:
+> 
+> - OpenShift Operator Lifecycle Manager (OLM)
+> - OpenShift's catalog sources and OperatorHub
+> - OpenShift-specific APIs
+
 This Helm chart deploys the Group Sync Operator and configures LDAP group synchronization in OpenShift environments.
 
 ## Adding the Helm Repository
@@ -12,7 +20,7 @@ helm repo add group-sync-operator https://ephico2real2.github.io/group-sync-oper
 helm repo update
 
 # Search for the chart
-helm search repo group-sync-operator
+helm search repo group-sync-operator-helm
 ```
 
 ## Overview
@@ -24,9 +32,10 @@ The chart deploys three main components:
 
 ## Prerequisites
 
-- OpenShift 4.x cluster
+- **OpenShift 4.x cluster** (Required - this chart does not work on standard Kubernetes)
 - Helm 3.x
-- Access to OpenShift's default catalog (community-operators)
+- Access to OpenShift's catalog sources (specifically community-operators in openshift-marketplace)
+- OLM must be installed and functioning
 - LDAP server details and credentials
 - CA certificate for LDAPS connection
 
@@ -43,7 +52,7 @@ oc create secret generic ldap-group-sync \
   -n group-sync-operator
 
 # Install the chart
-helm install group-sync group-sync-operator/group-sync-chart -n group-sync-operator
+helm install group-sync group-sync-operator/group-sync-operator-helm -n group-sync-operator
 ```
 
 ## Configuration
@@ -83,7 +92,7 @@ The following tables list the configurable parameters and their default values.
 To override the default values, create a `values.yaml` file and pass it to the helm install command:
 
 ```bash
-helm install group-sync group-sync-operator/group-sync-chart -n group-sync-operator -f values.yaml
+helm install group-sync group-sync-operator/group-sync-operator-helm -n group-sync-operator -f values.yaml
 ```
 
 ## Notes
@@ -102,7 +111,7 @@ When upgrading the chart, note that:
 3. ArgoCD sync waves ensure proper deployment order
 
 ```bash
-helm upgrade group-sync group-sync-operator/group-sync-chart -n group-sync-operator
+helm upgrade group-sync group-sync-operator/group-sync-operator-helm -n group-sync-operator
 ```
 
 ## Troubleshooting
