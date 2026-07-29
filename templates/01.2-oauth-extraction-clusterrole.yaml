@@ -1,0 +1,36 @@
+{{- if .Values.oauthSecretExtraction.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "group-sync-operator-helm.fullname" . }}-oauth-secret-extraction
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: oauth-secret-extraction
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+rules:
+# Access to secrets in openshift-config namespace (source OAuth secret)
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list"]
+  resourceNames: ["{{ .Values.oauthSecretExtraction.sourceSecret.name }}"]
+# Access to secrets in group-sync-operator namespace (target secret)
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list", "create", "update", "patch", "delete"]
+  resourceNames: ["{{ .Values.oauthSecretExtraction.targetSecret.name }}"]
+# Access to create secrets in group-sync-operator namespace (for target secret creation)
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["create"]
+# Access to namespaces (to check and create target namespace if needed)
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get", "list", "create"]
+  resourceNames: ["{{ .Values.oauthSecretExtraction.targetSecret.namespace }}"]
+# Access to check namespace existence
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get"]
+{{- end }}
+

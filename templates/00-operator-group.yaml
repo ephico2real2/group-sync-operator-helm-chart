@@ -1,0 +1,14 @@
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: group-sync-operator-group
+  namespace: {{ .Values.groupSync.namespace }}
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+    olm.providedAPIs: GroupSync.v1alpha1.redhatcop.redhat.io
+spec:
+  targetNamespaces:
+    - {{ .Values.groupSync.namespace }}
+  upgradeStrategy: Default

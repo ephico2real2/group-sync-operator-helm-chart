@@ -1,0 +1,151 @@
+# LDAP Bootstrap Job - References standalone LDIF files via ConfigMaps
+# Run this after creating ConfigMaps from standalone files:
+# kubectl create configmap ldap-structure --from-file=ldap-structure-combined.ldif -n ldap-testing
+# kubectl create configmap ldap-acls --from-file=configure-acls.ldif -n ldap-testing
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ldap-testing
+  labels:
+    name: ldap-testing
+
+---
+# RBAC configuration for OpenLDAP Server
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: openldap-server
+  namespace: ldap-testing
+  labels:
+    app: openldap-server
+
+---
+# Bind the service account to the existing privileged SCC
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ldap-privileged-binding
+  namespace: ldap-testing
+  labels:
+    app: openldap-server
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:openshift:scc:privileged
+subjects:
+- kind: ServiceAccount
+  name: openldap-server
+  namespace: ldap-testing
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ldap-data-pvc
+  namespace: ldap-testing
+  labels:
+    app: openldap-server
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+  storageClassName: crc-csi-hostpath-provisioner
+
+---
+# Bootstrap Job - Uses external ConfigMaps created from standalone files
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ldap-bootstrap-job-combined
+  namespace: ldap-testing
+  labels:
+    app: ldap-bootstrap-combined
+spec:
+  template:
+    metadata:
+      labels:
+        app: ldap-bootstrap-combined
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: openldap-server
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 0
+        fsGroup: 0
+      containers:
+      - name: bootstrap-setup
+        image: registry.redhat.io/ubi8/ubi-minimal:latest
+        command:
+        - /bin/sh
+        - -c
+        - |
+          echo "🔧 Setting up LDAP bootstrap from standalone ConfigMaps..."
+          
+          # Check if already initialized
+          if [ -f /data/.bootstrap-completed ]; then
+            echo "✅ Bootstrap already completed, skipping..."
+            exit 0
+          fi
+          
+          # Create directory structure on PVC
+          mkdir -p /data/bootstrap/ldif/custom || true
+          mkdir -p /data/ldap-db || true
+          mkdir -p /data/ldap-config || true
+          
+          # Copy LDIF files from ConfigMaps to PVC
+          if [ -f /ldif-structure/ldap-structure-combined.ldif ]; then
+            cp /ldif-structure/ldap-structure-combined.ldif /data/bootstrap/ldif/custom/bootstrap.ldif
+            echo "✅ Main LDAP structure copied from standalone file"
+          else
+            echo "❌ ldap-structure ConfigMap not found"
+            echo "Run: kubectl create configmap ldap-structure --from-file=ldap-structure-combined.ldif -n ldap-testing"
+            exit 1
+          fi
+          
+          if [ -f /ldif-acls/configure-acls.ldif ]; then
+            cp /ldif-acls/configure-acls.ldif /data/bootstrap/ldif/custom/
+            echo "✅ ACL configuration copied from standalone file" 
+          else
+            echo "❌ ldap-acls ConfigMap not found"
+            echo "Run: kubectl create configmap ldap-acls --from-file=configure-acls.ldif -n ldap-testing"
+            exit 1
+          fi
+          
+          # Statistics
+          echo "📊 Bootstrap file statistics:"
+          wc -l /data/bootstrap/ldif/custom/bootstrap.ldif | awk '{print "  Lines:", $1}'
+          grep -c "^dn:" /data/bootstrap/ldif/custom/bootstrap.ldif | awk '{print "  LDAP Objects:", $1}' 
+          grep -c "app-ocp-rbac-" /data/bootstrap/ldif/custom/bootstrap.ldif | awk '{print "  RBAC Groups:", $1}'
+          
+          # Mark bootstrap as completed
+          touch /data/.bootstrap-completed
+          echo "🎉 Bootstrap setup completed using standalone LDIF files"
+          echo "📋 No duplication - uses external ConfigMaps from standalone files"
+        volumeMounts:
+        - name: ldap-data
+          mountPath: /data
+        - name: ldif-structure
+          mountPath: /ldif-structure
+        - name: ldif-acls
+          mountPath: /ldif-acls
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "100m"
+          limits:
+            memory: "128Mi"
+            cpu: "200m"
+      volumes:
+      - name: ldap-data
+        persistentVolumeClaim:
+          claimName: ldap-data-pvc
+      - name: ldif-structure
+        configMap:
+          name: ldap-structure
+      - name: ldif-acls
+        configMap:
+          name: ldap-acls

@@ -1,0 +1,168 @@
+# OpenLDAP Server Deployment
+# Domain: ephico2real.com
+# NOTE: Run 03-ldap-bootstrap-job.yaml FIRST before deploying this file
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ldap-config
+  namespace: ldap-testing
+  labels:
+    app: openldap-server
+data:
+  # LDAP configuration environment variables
+  LDAP_ORGANISATION: "Ephico Real"
+  LDAP_DOMAIN: "ephico2real.com"
+  LDAP_BASE_DN: "dc=ephico2real,dc=com"
+  LDAP_ADMIN_PASSWORD: "admin123"
+  LDAP_CONFIG_PASSWORD: "config123"
+  LDAP_READONLY_USER: "false"
+  LDAP_READONLY_USER_USERNAME: "readonly"
+  LDAP_READONLY_USER_PASSWORD: "readonly123"
+  LDAP_RFC2307BIS_SCHEMA: "false"
+  LDAP_BACKEND: "mdb"
+  LDAP_TLS: "true"
+  LDAP_TLS_CRT_FILENAME: "ldap.crt"
+  LDAP_TLS_KEY_FILENAME: "ldap.key"
+  LDAP_TLS_DH_PARAM_FILENAME: "dhparam.pem"
+  LDAP_TLS_CA_CRT_FILENAME: "ca.crt"
+  LDAP_TLS_ENFORCE: "false"
+  LDAP_TLS_CIPHER_SUITE: "SECURE256:-VERS-SSL3.0"
+  LDAP_TLS_VERIFY_CLIENT: "demand"
+  LDAP_REPLICATION: "false"
+  KEEP_EXISTING_CONFIG: "false"
+  LDAP_REMOVE_CONFIG_AFTER_SETUP: "false"
+  LDAP_SSL_HELPER_PREFIX: "ldap"
+  # Configure ACLs to allow service account full read access
+  LDAP_ACCESS_CONTROL: |
+    access to attrs=userPassword
+      by self write
+      by dn="cn=admin,dc=ephico2real,dc=com" write
+      by dn="cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com" read
+      by anonymous auth
+      by * none
+    access to *
+      by dn="cn=admin,dc=ephico2real,dc=com" write
+      by dn="cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com" read
+      by users read
+      by * none
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openldap-server
+  namespace: ldap-testing
+  labels:
+    app: openldap-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openldap-server
+  template:
+    metadata:
+      labels:
+        app: openldap-server
+    spec:
+      serviceAccountName: openldap-server
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 0
+        fsGroup: 0
+      containers:
+      - name: openldap
+        image: osixia/openldap:1.5.0
+        ports:
+        - containerPort: 389
+          name: ldap
+        - containerPort: 636
+          name: ldaps
+        env:
+        - name: LDAP_LOG_LEVEL
+          value: "256"
+        envFrom:
+        - configMapRef:
+            name: ldap-config
+        volumeMounts:
+        - name: ldap-data
+          mountPath: /var/lib/ldap
+          subPath: ldap-db
+        - name: ldap-data
+          mountPath: /etc/ldap/slapd.d
+          subPath: ldap-config
+        - name: ldap-certs
+          mountPath: /container/service/slapd/assets/certs
+        - name: ldap-data
+          mountPath: /container/service/slapd/assets/config/bootstrap/ldif/custom
+          subPath: bootstrap/ldif/custom
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          tcpSocket:
+            port: 389
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          tcpSocket:
+            port: 389
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+      volumes:
+      - name: ldap-data
+        persistentVolumeClaim:
+          claimName: ldap-data-pvc
+      - name: ldap-config-vol
+        emptyDir: {}
+      - name: ldap-certs
+        emptyDir: {}
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openldap-service
+  namespace: ldap-testing
+  labels:
+    app: openldap-server
+spec:
+  selector:
+    app: openldap-server
+  ports:
+  - name: ldap
+    port: 389
+    targetPort: 389
+    protocol: TCP
+  - name: ldaps
+    port: 636
+    targetPort: 636
+    protocol: TCP
+  type: ClusterIP
+
+---
+# Optional: Route for external access (OpenShift)
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: ldap-route
+  namespace: ldap-testing
+  labels:
+    app: openldap-server
+spec:
+  to:
+    kind: Service
+    name: openldap-service
+  port:
+    targetPort: ldap
+  wildcardPolicy: None
+

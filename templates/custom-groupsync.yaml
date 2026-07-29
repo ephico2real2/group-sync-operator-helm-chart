@@ -1,0 +1,38 @@
+{{- /*
+Custom (multi-tenant) GroupSync CRs. See docs/DESIGN_custom_groupsync.md.
+
+For each enabled item under .Values.customGroupSyncs.items we render ONE GroupSync CR:
+  - metadata.name  = item.name          (unique -> unique ownership label)
+  - provider name  = "ldap"             (fixed, never typed by the operator)
+  - group filter   = built from item.groupCn, or item.filter for advanced override
+  - connection     = inherited from .Values.groupSync (same LDAP for the whole org)
+
+One naming pattern = one CR. Patterns must not overlap; that is guaranteed by the
+org naming standard (Kyverno later), not by this chart.
+*/ -}}
+{{- if .Values.customGroupSyncs.enabled }}
+{{- $root := . }}
+{{- range .Values.customGroupSyncs.items }}
+{{- if .enabled }}
+{{- $item := . }}
+{{- /* Build this CR's config by inheriting the base groupSync, then overriding
+       the three per-tenant fields. deepCopy so we never mutate the shared values. */ -}}
+{{- $cfg := deepCopy $root.Values.groupSync }}
+{{- $filter := $item.filter | default (printf "(&(objectClass=groupOfNames)(cn=%s))" $item.groupCn) }}
+{{- $_ := set $cfg.rfc2307.groupsQuery "filter" $filter }}
+{{- $_ := set $cfg "providerName" "ldap" }}
+{{- if $item.schedule }}{{- $_ := set $cfg "schedule" $item.schedule }}{{- end }}
+---
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: GroupSync
+metadata:
+  name: {{ $item.name }}
+  namespace: {{ $item.namespace | default $cfg.namespace }}
+  labels:
+    {{- include "group-sync-operator-helm.labels" $root | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+{{ include "group-sync-operator-helm.groupsyncSpec" $cfg }}
+{{- end }}
+{{- end }}
+{{- end }}

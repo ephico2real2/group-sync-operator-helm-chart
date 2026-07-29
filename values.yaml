@@ -1,31 +1,202 @@
-groupSync:
-  name: ldap-group-sync
-  namespace: group-sync-operator
-  schedule: "0/30 * * * *"
-  providerName: ldap-git-ocp
+# Group Sync Operator Helm Chart Values
+# This file contains the default configuration values for the Group Sync Operator Helm Chart
 
+# -------------------- Naming --------------------
+# Base name used by the "...fullname" helper. Without this, fullname concatenates
+# the release name with the (longer) chart name — e.g. release "group-sync" +
+# chart "group-sync-operator-helm" => "group-sync-group-sync-operator-helm-..."
+# (Helm's dedup guard only fires when the release name CONTAINS the chart name,
+# which never happens here since the chart name is longer). Pinning fullnameOverride
+# keeps the oauth-secret-extraction ClusterRole/ClusterRoleBinding/Job names short
+# and stable: "group-sync-operator-oauth-secret-extraction".
+fullnameOverride: group-sync-operator
+
+# -------------------- GroupSync CR Configuration --------------------
+# Controls the main GroupSync custom resource configuration
+groupSync:
+  # Enable or disable the GroupSync CR creation (set to false for initial operator installation)
+  enabled: true
+  # Name of the GroupSync resource
+  name: ldap-groupsync
+  # Namespace where the GroupSync CR will be created
+  namespace: group-sync-operator
+  # Schedule in cron format (every 2 minutes for testing)
+  schedule: "*/2 * * * *"
+  # Name of the LDAP provider in the GroupSync configuration
+  providerName: ldap
+
+  # CA Certificate configuration
   ca:
-    name: ca-config-map
+    # Name of the ConfigMap containing the CA certificate
+    name: ca-config-map-test
+    # Key within the ConfigMap that contains the certificate
     key: ca.crt
+    # Namespace where the ConfigMap is located
     namespace: openshift-config
 
+  # LDAP authentication credentials configuration
   credentialsSecret:
+    # Name of the Secret containing LDAP credentials
+    name: ldap-group-sync
+    # Namespace where the Secret is located
+    namespace: group-sync-operator
+
+  # LDAP server URL (ldap:// for insecure, ldaps:// for secure connections)
+  url: "ldap://openldap-service.ldap-testing.svc.cluster.local:389"
+  # Set to true for plain LDAP, false for LDAPS with certificates
+  insecure: true
+
+  # RFC2307 schema configuration
+  rfc2307:
+    # Users query configuration
+    usersQuery:
+      # Base DN for searching users
+      baseDN: "dc=ephico2real,dc=com"
+      # Additional query parameters
+      derefAliases: "never"
+      pageSize: 0
+      scope: "sub"
+      timeout: 0
+
+    # Groups query configuration
+    groupsQuery:
+      # Base DN for searching groups
+      baseDN: "ou=Groups,dc=ephico2real,dc=com"
+      # Filter for groups - only sync OpenShift RBAC groups (excludes general-users)
+      filter: "(&(objectClass=groupOfNames)(cn=app-ocp-rbac-*))"
+      # Additional query parameters
+      derefAliases: "never"
+      pageSize: 0
+      scope: "sub"
+      timeout: 0
+
+    # LDAP attribute mappings for groups
+    groupNameAttributes:
+      - cn
+    groupUIDAttribute: dn
+    groupMembershipAttributes:
+      - member
+
+    # LDAP attribute mappings for users
+    userNameAttributes:
+      - uid
+    userUIDAttribute: dn
+
+    # Error tolerance settings
+    tolerateMemberNotFoundErrors: true
+    tolerateMemberOutOfScopeErrors: true
+
+# -------------------- Custom (multi-tenant) GroupSync CRs --------------------
+# Generate ONE additional GroupSync CR per team/tenant. Full guide:
+# docs/DESIGN_custom_groupsync.md
+#
+# Rule: one naming pattern = one CR. Each item needs only a unique name and the
+# group pattern (groupCn). The chart fills in the rest so it is mistake-proof:
+#   - the LDAP filter is built for you: cn=<groupCn> -> (&(objectClass=groupOfNames)(cn=<groupCn>))
+#   - the provider name is always "ldap"
+#   - the connection (url/credentials/ca/usersQuery) is inherited from groupSync above
+#
+# Patterns must never overlap between tenants; that is guaranteed by the org
+# naming standard (enforced by Kyverno later), NOT by this chart.
+customGroupSyncs:
+  # Master switch for ALL custom CRs.
+  enabled: true
+  items:
+    # Big-Data Analytics: syncs every cn=bda-rbac-* group.
+    - name: bda-rbac-groupsync
+      enabled: true
+      groupCn: "bda-rbac-*"
+
+    # Example second tenant (left disabled — enable once its groups exist in LDAP):
+    # - name: xyz-ocp-rbac-groupsync
+    #   enabled: true
+    #   groupCn: "xyz-ocp-rbac-*"
+    #
+    # Optional per-item overrides (rarely needed):
+    #   schedule: "*/5 * * * *"     # override the inherited sync schedule
+    #   namespace: some-namespace   # override where the CR is created
+    #   filter: "(&(objectClass=groupOfNames)(cn=foo-*)(cn=bar-*))"  # raw LDAP filter (advanced)
+
+# -------------------- Operator Subscription Configuration --------------------
+# Controls how the operator is installed via OLM
+subscription:
+  # OLM channel to use (alpha, beta, stable)
+  name: group-sync-operator
+  channel: alpha
+  # Comma-separated list of namespaces for the operator to watch
+  watchNamespaces: group-sync-operator,openshift-config
+  # Installation approval strategy (Automatic or Manual)
+  installPlanApproval: Automatic
+  # Source catalog for the operator
+  source: community-operators
+  # Namespace where the catalog source is located
+  sourceNamespace: openshift-marketplace
+
+# -------------------- OAuth Secret Extraction Configuration --------------------
+# Controls the Job that extracts password from OAuth LDAP secret and creates GroupSync secret
+oauthSecretExtraction:
+  # Enable or disable the OAuth secret extraction job
+  enabled: true
+
+  # Service account configuration for OAuth secret extraction
+  serviceAccount:
+    # Name of the service account to create and use
+    name: oauth-secret-extractor
+
+  # OpenShift CLI image for secret extraction
+  image:
+    repository: registry.redhat.io/openshift4/ose-cli
+    tag: v4.14
+    pullPolicy: IfNotPresent
+
+  # Source secret configuration (OAuth LDAP secret)
+  sourceSecret:
+    name: ldap-secret
+    namespace: openshift-config
+    passwordKey: bindPassword
+
+  # Target secret configuration (GroupSync secret)
+  targetSecret:
     name: ldap-group-sync
     namespace: group-sync-operator
 
-  url: "ldaps://ldap.ephicoreal2.net:636"
+  # LDAP bind DN for the GroupSync secret
+  bindDN: "cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com"
 
-  rfc2307:
-    usersQuery:
-      baseDN: "o=ephicoreal2"
+  # Job configuration
+  waitTimeout: 300  # seconds to wait for source secret
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 300  # cleanup job after 5 minutes
 
-    groupsQuery:
-      baseDN: "ou=Groups,o=ephicoreal2"
-      filter: "(&(objectClass=groupOfNames)(cn=app-git-*))"
+  # Resource limits for the extraction job
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
 
-subscription:
-  channel: alpha
-  watchNamespaces: group-sync-operator,openshift-config
-  installPlanApproval: Automatic
-  source: community-operators
-  sourceNamespace: openshift-marketplace
+# -------------------- Test Configuration --------------------
+# Controls settings for the Helm tests
+test:
+  # Enable or disable the test pods
+  enabled: true
+
+  # OpenShift CLI image configuration for operator health testing
+  operatorHealthImage:
+    # Image repository
+    repository: "registry.redhat.io/openshift4/ose-cli"
+    # Image tag
+    tag: "latest"
+    # Image pull policy
+    pullPolicy: IfNotPresent
+
+  # LDAP client image configuration for LDAP connection testing
+  ldapClientImage:
+    # Image repository
+    repository: "quay.io/redhat-cop/group-sync-operator"
+    # Image tag
+    tag: "latest"
+    # Image pull policy
+    pullPolicy: IfNotPresent

@@ -1,0 +1,12 @@
+{{- if .Values.groupSync.enabled }}
+apiVersion: redhatcop.redhat.io/v1alpha1
+kind: GroupSync
+metadata:
+  name: {{ .Values.groupSync.name }}
+  namespace: {{ .Values.groupSync.namespace }}
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+{{ include "group-sync-operator-helm.groupsyncSpec" .Values.groupSync }}
+{{- end }}

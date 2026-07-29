@@ -24,6 +24,7 @@ We use GitHub to host code, to track issues and feature requests, as well as acc
 To develop the chart locally:
 
 1. Clone the repository:
+
    ```bash
    git clone https://github.com/ephico2real2/group-sync-operator-helm-chart.git
    cd group-sync-operator-helm-chart
@@ -32,6 +33,7 @@ To develop the chart locally:
 2. Make your changes to the chart.
 
 3. Test your changes:
+
    ```bash
    # Lint the chart
    helm lint .
@@ -68,4 +70,3 @@ To release a new version:
 ## Any Questions?
 
 Feel free to open an issue with your question or contact the maintainers directly.
-
