@@ -1,0 +1,97 @@
+# =============================================================================
+# Big-Data Analytics (BDA) RBAC Groups — demo seed for the custom GroupSync CR
+# =============================================================================
+# Naming standard: bda-rbac-{service}-{environment}-{kind}
+#   service:     spark | trino
+#   environment: alpha | delta | theta
+#   kind:        apps  | users
+# The custom CR "bda-rbac-groupsync" syncs all of these via cn=bda-rbac-*.
+#
+# Import (test LDAP already running):
+#   kubectl cp ldap-bda-rbac-groups.ldif ldap-testing/<ldap-pod>:/tmp/
+#   kubectl exec -n ldap-testing <ldap-pod> -- ldapadd -x -H ldap://localhost:389 \
+#       -D "cn=admin,dc=ephico2real,dc=com" -w admin123 -f /tmp/ldap-bda-rbac-groups.ldif
+#
+# Members reuse the existing test users from ldap-structure-combined.ldif.
+# groupOfNames requires at least one member, so every group has one.
+# =============================================================================
+
+# ---- Spark · alpha ----
+dn: cn=bda-rbac-spark-alpha-apps,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: bda-rbac-spark-alpha-apps
+description: BDA Spark alpha application service accounts
+member: cn=john.doe,ou=People,dc=ephico2real,dc=com
+
+dn: cn=bda-rbac-spark-alpha-users,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: bda-rbac-spark-alpha-users
+description: BDA Spark alpha human users
+member: cn=jane.smith,ou=People,dc=ephico2real,dc=com
+member: cn=bob.wilson,ou=People,dc=ephico2real,dc=com
+
+# ---- Spark · delta ----
+dn: cn=bda-rbac-spark-delta-apps,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: bda-rbac-spark-delta-apps
+description: BDA Spark delta application service accounts
+member: cn=john.doe,ou=People,dc=ephico2real,dc=com
+
+dn: cn=bda-rbac-spark-delta-users,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: bda-rbac-spark-delta-users
+description: BDA Spark delta human users
+member: cn=alice.cooper,ou=People,dc=ephico2real,dc=com
+
+# ---- Spark · theta ----
+dn: cn=bda-rbac-spark-theta-apps,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: bda-rbac-spark-theta-apps
+description: BDA Spark theta application service accounts
+member: cn=john.doe,ou=People,dc=ephico2real,dc=com
+
+dn: cn=bda-rbac-spark-theta-users,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: bda-rbac-spark-theta-users
+description: BDA Spark theta human users
+member: cn=charlie.brown,ou=People,dc=ephico2real,dc=com
+
+# ---- Trino · alpha ----
+dn: cn=bda-rbac-trino-alpha-apps,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: bda-rbac-trino-alpha-apps
+description: BDA Trino alpha application service accounts
+member: cn=jane.smith,ou=People,dc=ephico2real,dc=com
+
+dn: cn=bda-rbac-trino-alpha-users,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: bda-rbac-trino-alpha-users
+description: BDA Trino alpha human users
+member: cn=bob.wilson,ou=People,dc=ephico2real,dc=com
+member: cn=charlie.brown,ou=People,dc=ephico2real,dc=com
+
+# ---- Trino · delta ----
+dn: cn=bda-rbac-trino-delta-apps,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: bda-rbac-trino-delta-apps
+description: BDA Trino delta application service accounts
+member: cn=jane.smith,ou=People,dc=ephico2real,dc=com
+
+dn: cn=bda-rbac-trino-delta-users,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: bda-rbac-trino-delta-users
+description: BDA Trino delta human users
+member: cn=alice.cooper,ou=People,dc=ephico2real,dc=com
+
+# ---- Trino · theta ----
+dn: cn=bda-rbac-trino-theta-apps,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: bda-rbac-trino-theta-apps
+description: BDA Trino theta application service accounts
+member: cn=john.doe,ou=People,dc=ephico2real,dc=com
+
+dn: cn=bda-rbac-trino-theta-users,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: bda-rbac-trino-theta-users
+description: BDA Trino theta human users
+member: cn=bob.wilson,ou=People,dc=ephico2real,dc=com

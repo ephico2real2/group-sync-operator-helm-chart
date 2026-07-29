@@ -99,20 +99,24 @@ show_group_members() {
 
 # Force GroupSync to sync immediately
 force_groupsync() {
-    echo -e "${CYAN}🔄 Forcing GroupSync to sync...${NC}"
+    # Optional $1 = GroupSync CR name (defaults to the primary CR). Patching any
+    # annotation triggers the operator to reconcile that CR immediately.
+    local cr_name="${1:-ldap-groupsync}"
+    echo -e "${CYAN}🔄 Forcing GroupSync '${cr_name}' to sync...${NC}"
     TIMESTAMP="manual-sync-$(date +%s)"
-    kubectl patch groupsync ldap-group-sync -n group-sync-operator --type='merge' -p="{\"metadata\":{\"annotations\":{\"sync.redhatcop.redhat.io/sync-now\":\"$TIMESTAMP\"}}}" >/dev/null 2>&1
-    
+    kubectl patch groupsync "$cr_name" -n group-sync-operator --type='merge' -p="{\"metadata\":{\"annotations\":{\"sync.redhatcop.redhat.io/sync-now\":\"$TIMESTAMP\"}}}" >/dev/null 2>&1
+
     echo "⏳ Waiting for sync to complete (10 seconds)..."
     sleep 10
-    echo -e "${GREEN}✅ GroupSync triggered${NC}"
+    echo -e "${GREEN}✅ GroupSync '${cr_name}' triggered${NC}"
 }
 
-# Check OpenShift groups before/after
+# Check OpenShift groups before/after. Optional $2 = grep pattern (default app-ocp-rbac).
 check_openshift_groups() {
     local operation="$1"
-    echo -e "${BLUE}📊 OpenShift RBAC Groups $operation:${NC}"
-    oc get groups 2>/dev/null | grep -E "app-ocp-rbac|NAME" | head -10 || echo "   No RBAC groups found"
+    local pattern="${2:-app-ocp-rbac}"
+    echo -e "${BLUE}📊 OpenShift RBAC Groups $operation (matching '${pattern}'):${NC}"
+    oc get groups 2>/dev/null | grep -E "${pattern}|NAME" | head -20 || echo "   No RBAC groups found"
     echo
 }
 
@@ -489,6 +493,34 @@ scenario_departure() {
     check_openshift_groups "AFTER"
 }
 
+scenario_bda_onboarding() {
+    echo -e "${PURPLE}🎭 SCENARIO: BDA Multi-Tenant Onboarding${NC}"
+    echo "========================================"
+    echo "Onboards a new Big-Data engineer + new BDA groups, then shows the custom"
+    echo "'bda-rbac-groupsync' CR (filter cn=bda-rbac-*) sync them into OpenShift —"
+    echo "brand-new groups and members, with NO chart change."
+
+    check_openshift_groups "BEFORE" "bda-rbac"
+
+    # 1. A new engineer joins the BDA team (created with a uid= DN, the script convention).
+    add_user "dana.lee" "Dana Lee" "dana.lee@ephico2real.com"
+
+    # 2. Onboard a new BDA service (flink) and a new environment (gamma).
+    add_rbac_group "bda-rbac-flink-alpha-apps"  "BDA Flink alpha application service accounts"
+    add_rbac_group "bda-rbac-flink-alpha-users" "BDA Flink alpha human users"
+    add_rbac_group "bda-rbac-spark-gamma-apps"  "BDA Spark gamma application service accounts"
+
+    # 3. Put the new engineer in the new groups (uid= member matches the uid= user DN).
+    add_user_to_group "dana.lee" "bda-rbac-flink-alpha-apps"
+    add_user_to_group "dana.lee" "bda-rbac-flink-alpha-users"
+    add_user_to_group "dana.lee" "bda-rbac-spark-gamma-apps"
+
+    # 4. Trigger the BDA CR specifically (not the primary app-ocp-rbac CR).
+    force_groupsync "bda-rbac-groupsync"
+    check_openshift_groups "AFTER" "bda-rbac"
+    echo -e "${CYAN}Tip: the new groups + member sync under the SAME custom CR — cn=bda-rbac-* covers them.${NC}"
+}
+
 # Interactive menu
 show_menu() {
     echo
@@ -508,6 +540,7 @@ show_menu() {
     echo "s2. Role change (promotion)"
     echo "s3. Team restructuring"
     echo "s4. Employee departure"
+    echo "s5. BDA multi-tenant onboarding (custom GroupSync CR)"
     echo ""
     echo "0. Exit"
     echo
@@ -526,7 +559,7 @@ main() {
         exit 1
     fi
     
-    if ! oc get groupsync ldap-group-sync -n group-sync-operator >/dev/null 2>&1; then
+    if ! oc get groupsync ldap-groupsync -n group-sync-operator >/dev/null 2>&1; then
         echo -e "${YELLOW}⚠️  GroupSync CR not found. Some operations may not sync automatically.${NC}"
     fi
     
@@ -589,6 +622,9 @@ main() {
             s4)
                 scenario_departure
                 ;;
+            s5)
+                scenario_bda_onboarding
+                ;;
             0)
                 echo -e "${GREEN}👋 Goodbye!${NC}"
                 exit 0
@@ -617,8 +653,11 @@ if [ $# -gt 0 ]; then
         departure)
             scenario_departure
             ;;
+        bda-onboarding)
+            scenario_bda_onboarding
+            ;;
         *)
-            echo "Usage: $0 [new-hire|role-change|team-restructure|departure]"
+            echo "Usage: $0 [new-hire|role-change|team-restructure|departure|bda-onboarding]"
             echo "Or run without arguments for interactive mode"
             exit 1
             ;;
