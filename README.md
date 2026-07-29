@@ -1,9 +1,9 @@
 # Group Sync Operator Helm Chart
 
-> **⚠️ IMPORTANT: OPENSHIFT ONLY** 
-> 
+> **⚠️ IMPORTANT: OPENSHIFT ONLY**
+>
 > This Helm chart is designed **exclusively for OpenShift clusters**. It will not work on standard Kubernetes clusters as it depends on:
-> 
+>
 > - OpenShift Operator Lifecycle Manager (OLM)
 > - OpenShift's catalog sources and OperatorHub
 > - OpenShift-specific APIs
@@ -42,7 +42,6 @@ The chart deploys these main components:
 - OLM must be installed and functioning
 - LDAP server details and credentials
 - CA certificate for LDAPS connection
-
 
 ## Detailed CA Certificate Setup
 
@@ -178,6 +177,7 @@ Follow these security best practices to ensure secure deployment and operation o
 ### Credentials Management
 
 - **Regularly rotate LDAP bind credentials**:
+
   ```bash
   # Update the LDAP credentials secret
   oc create secret generic ldap-group-sync \
@@ -434,7 +434,7 @@ The following tables list the configurable parameters and their default values.
 |-----------|-------------|---------|
 | groupSync.name | Name of the primary GroupSync resource | ldap-groupsync |
 | groupSync.namespace | Target namespace | group-sync-operator |
-| groupSync.schedule | Sync schedule (cron format) — fast-track testing default | "*/2 * * * *" |
+| groupSync.schedule | Sync schedule (cron format) — fast-track testing default | "*/2* ** *" |
 | groupSync.providerName | LDAP provider name | ldap |
 | groupSync.insecure | Use plain LDAP (true) or LDAPS with CA (false) | true |
 | groupSync.url | LDAP server URL | ldap://openldap-service.ldap-testing.svc.cluster.local:389 |
@@ -514,21 +514,25 @@ helm upgrade group-sync group-sync-operator/group-sync-operator-helm -n group-sy
 ## Troubleshooting
 
 1. Verify the operator deployment:
+
 ```bash
 oc get csv -n group-sync-operator
 ```
 
-2. Check GroupSync status:
+1. Check GroupSync status:
+
 ```bash
 oc get groupsync -n group-sync-operator
 ```
 
-3. View sync logs:
+1. View sync logs:
+
 ```bash
 oc logs -l app.kubernetes.io/name=group-sync-operator-helm -n group-sync-operator
 ```
 
-4. Monitor real-time sync activity:
+1. Monitor real-time sync activity:
+
 ```bash
 # Watch live sync operations (useful for debugging sync issues)
 kubectl logs -n group-sync-operator deployment/group-sync-operator-controller-manager -c manager --tail=5 -f
@@ -546,7 +550,7 @@ For learning about Helm hooks and advanced deployment patterns:
 ## Source Code
 
 The source code for this Helm chart is available at:
-https://github.com/ephico2real2/group-sync-operator-helm-chart
+<https://github.com/ephico2real2/group-sync-operator-helm-chart>
 
 The Group Sync Operator source code is available at:
-https://github.com/redhat-cop/group-sync-operator
+<https://github.com/redhat-cop/group-sync-operator>

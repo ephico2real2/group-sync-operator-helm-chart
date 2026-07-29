@@ -39,6 +39,7 @@ This setup uses **intentional separation** between production and local testing 
 ## Directory Structure
 
 ### 🏗️ Infrastructure Components (YAML)
+
 | File | Description |
 |------|-------------|
 | `01-ldap-server.yaml` | Complete OpenLDAP deployment (primary infrastructure) |
@@ -46,6 +47,7 @@ This setup uses **intentional separation** between production and local testing 
 | `03-ldap-bootstrap-job.yaml` | Alternative K8s Job-based data import |
 
 ### 🚀 Execution Scripts (Ordered by Priority)
+
 | File | Description |
 |------|-------------|
 | `10-setup-oauth-secrets.sh` | **STEP 1**: Creates source OAuth secrets and CA certificates |
@@ -55,6 +57,7 @@ This setup uses **intentional separation** between production and local testing 
 | `99-cleanup-everything.sh` | **FINAL**: Complete test environment cleanup |
 
 ### 📊 Data Files
+
 | File | Description |
 |------|-------------|
 | `ldap-structure-combined.ldif` | 20+ production RBAC groups (`app-ocp-rbac-*`) and test users |
@@ -66,30 +69,35 @@ This setup uses **intentional separation** between production and local testing 
 ## 🚀 Quick Start (New Organized Workflow)
 
 ### Step 1: Setup Prerequisites
+
 ```bash
 # Creates source OAuth secrets and CA certificates
 ./10-setup-oauth-secrets.sh
 ```
 
 ### Step 2: Deploy LDAP Server
+
 ```bash
 # Deploy the OpenLDAP server
 ./30-manage-ldap-server.sh deploy
 ```
 
 ### Step 3: Import LDAP Data
+
 ```bash
 # Import comprehensive RBAC groups and users
 ./20-import-ldap-data.sh
 ```
 
 ### Step 4: Verify Setup
+
 ```bash
 # Verify all resources are configured correctly
 ./90-verify-all-resources.sh
 ```
 
 ### Step 5: Test Connectivity
+
 ```bash
 # Test LDAP connectivity and queries
 ./30-manage-ldap-server.sh test
@@ -100,6 +108,7 @@ This setup uses **intentional separation** between production and local testing 
 If the bootstrap job doesn't properly import the LDAP structure, you can manually import it:
 
 ### 1. Create the LDAP structure file
+
 ```bash
 cat > import-ldap-structure.ldif << 'EOF'
 # LDAP Structure Import - Creates OUs, service account, users, and groups
@@ -199,6 +208,7 @@ EOF
 ```
 
 ### 2. Import the LDAP structure
+
 ```bash
 # Copy LDIF to LDAP container
 kubectl cp import-ldap-structure.ldif ldap-testing/$(kubectl get pods -n ldap-testing -l app=openldap-server -o jsonpath='{.items[0].metadata.name}'):/tmp/
@@ -208,6 +218,7 @@ kubectl exec -n ldap-testing deployment/openldap-server -- ldapadd -x -H ldap://
 ```
 
 ### 3. Configure service account ACLs
+
 ```bash
 # Create ACL configuration file
 cat > configure-acls.ldif << 'EOF'
@@ -230,6 +241,7 @@ kubectl exec -n ldap-testing deployment/openldap-server -- ldapmodify -x -H ldap
 ```
 
 ### 4. Test service account access
+
 ```bash
 # Test service account can read Groups OU
 kubectl exec -n ldap-testing deployment/openldap-server -- ldapsearch -x -H ldap://localhost:389 -D "cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com" -w "bindpassword123" -b "ou=Groups,dc=ephico2real,dc=com" -s base "(objectclass=*)" dn
@@ -261,7 +273,8 @@ kubectl exec -n ldap-testing deployment/openldap-server -- ldapsearch -x -H ldap
 ## LDAP Configuration
 
 ### Domain Structure
-```
+
+```text
 dc=ephico2real,dc=com
 ├── ou=People                    # User accounts
 │   ├── cn=john.doe
@@ -286,6 +299,7 @@ dc=ephico2real,dc=com
 - **Password**: `bindpassword123`
 
 #### Test Users
+
 | Username | DN | Password | Groups |
 |----------|----|---------|---------|
 | john.doe | `cn=john.doe,ou=People,dc=ephico2real,dc=com` | `password123` | admins, general-users |
@@ -428,6 +442,7 @@ kubectl create secret generic ldap-group-sync \
 ### 3. Deploy GroupSync
 
 **With OAuth Secret Extraction (Recommended):**
+
 ```bash
 helm upgrade group-sync . -n group-sync-operator \
   --set groupSync.url="ldap://openldap-service.ldap-testing.svc.cluster.local:389" \
@@ -438,6 +453,7 @@ helm upgrade group-sync . -n group-sync-operator \
 ```
 
 **Without OAuth Secret Extraction (Manual Secret):**
+
 ```bash
 # First create the secret manually (see Step 2 above)
 helm upgrade group-sync . -n group-sync-operator \
@@ -447,6 +463,7 @@ helm upgrade group-sync . -n group-sync-operator \
 ```
 
 **Verify OAuth Extraction Job:**
+
 ```bash
 # Check if the extraction job ran successfully
 oc get jobs -n group-sync-operator | grep oauth-secret-extraction
@@ -475,9 +492,11 @@ Data persists across pod restarts.
 - **LDAPS Port**: 636
 
 ### External Access (via Port Forward)
+
 ```bash
 ./30-manage-ldap-server.sh port-forward
 ```
+
 - **LDAP**: `ldap://localhost:1389`
 - **LDAPS**: `ldaps://localhost:1636`
 
@@ -487,27 +506,32 @@ An optional Route is created for external access through the OpenShift router.
 ## Troubleshooting
 
 ### Check Pod Status
+
 ```bash
 ./30-manage-ldap-server.sh status
 ```
 
 ### View Logs
+
 ```bash
 ./30-manage-ldap-server.sh logs
 ```
 
 ### Test Connectivity
+
 ```bash
 ./30-manage-ldap-server.sh test
 ```
 
 ### Open Shell for Debugging
+
 ```bash
 ./30-manage-ldap-server.sh shell
 ```
 
 ### Manual LDAP Queries
 From within the pod:
+
 ```bash
 ldapsearch -x -H ldap://localhost:389 \
   -D "cn=admin,dc=ephico2real,dc=com" \
@@ -519,6 +543,7 @@ ldapsearch -x -H ldap://localhost:389 \
 ## Cleanup
 
 To remove the LDAP server:
+
 ```bash
 ./30-manage-ldap-server.sh delete
 ```
@@ -533,7 +558,7 @@ This will delete all resources including the PVC and stored data.
 - Bootstrap data is loaded automatically on first startup
 - Data persists in the PVC even if the pod is restarted
 
-# Local Testing Setup for GroupSync Operator
+## Local Testing Setup for GroupSync Operator
 
 This directory contains the necessary files and commands for setting up a local test environment for the GroupSync Operator.
 
@@ -660,7 +685,8 @@ oc get groupsync ldap-group-sync -n group-sync-operator -o yaml
 ## 🔍 Expected Results
 
 ### Before Helm Chart Deployment
-```
+
+```text
 Status:
   Conditions:
     Message: [secrets "ldap-group-sync" not found, ConfigMap "ca-config-map" not found, ...]
@@ -670,7 +696,8 @@ Status:
 ```
 
 ### After Helm Chart Creates Target Secret Automatically
-```
+
+```text
 Status:
   Conditions:
     Message: could not connect to the LDAP server: LDAP Result Code 200 "Network Error": dial tcp: lookup ldap.ephicoreal2.net on 10.217.4.10:53: no such host
@@ -713,6 +740,7 @@ rm -f ca-cert.pem ca-key.pem
 Replace the demo values with your actual LDAP configuration:
 
 1. **CA Certificate**: Obtain from your LDAP server or Certificate Authority
+
    ```bash
    # Example: Extract from LDAP server
    openssl s_client -connect your-ldap-server:636 -showcerts < /dev/null 2>/dev/null | \
@@ -720,6 +748,7 @@ Replace the demo values with your actual LDAP configuration:
    ```
 
 2. **LDAP Credentials**: Create the source OAuth secret (Helm chart will create target secret)
+
    ```bash
    oc create secret generic ldap-secret \
      --from-literal=bindPassword='your-actual-password' \
@@ -730,6 +759,7 @@ Replace the demo values with your actual LDAP configuration:
    ```
 
 3. **Update values.yaml**: Modify the LDAP URL and base DNs to match your environment
+
    ```yaml
    groupSync:
      url: "ldaps://your-ldap-server.company.com:636"
@@ -772,4 +802,3 @@ This local testing setup demonstrates:
 - ✅ Complete end-to-end deployment process
 
 The demo proves the chart works correctly and is ready for production use with real LDAP credentials and certificates.
-

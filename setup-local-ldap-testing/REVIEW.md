@@ -72,6 +72,7 @@ The `setup-local-ldap-testing` directory is well-structured and comprehensive, p
 **Problem**: `90-verify-all-resources.sh` tries to read `bindDN` and `bindPassword` from secret, but OAuth extraction job creates secret with `username` and `password` keys.
 
 **Current Code (lines 77-78):**
+
 ```bash
 BIND_DN=$(oc get secret ldap-group-sync -n group-sync-operator -o jsonpath='{.data.username}' | base64 -d 2>/dev/null || echo "Unable to decode")
 BIND_PASS=$(oc get secret ldap-group-sync -n group-sync-operator -o jsonpath='{.data.password}' | base64 -d 2>/dev/null || echo "Unable to decode")
@@ -93,6 +94,7 @@ BIND_PASS=$(oc get secret ldap-group-sync -n group-sync-operator -o jsonpath='{.
 - ⚠️ Missing: No check if import was successful (ldapadd exit code)
 
 **Recommendation**: Add validation:
+
 ```bash
 if [[ ! -f ldap-structure-combined.ldif ]]; then
     echo -e "${RED}❌ Error: ldap-structure-combined.ldif not found${NC}"
@@ -106,6 +108,7 @@ fi
 - ⚠️ Missing: No verification that ConfigMap contains valid certificate
 
 **Recommendation**: Add certificate validation:
+
 ```bash
 if ! openssl x509 -in ca-cert.pem -noout -text >/dev/null 2>&1; then
     echo "❌ Invalid certificate file"
@@ -150,6 +153,7 @@ fi
 - No clear error if steps are run out of order
 
 **Recommendation**: Add prerequisite checks:
+
 ```bash
 # In 20-import-ldap-data.sh
 if ! kubectl get job ldap-bootstrap-job-combined -n ldap-testing >/dev/null 2>&1; then
@@ -372,10 +376,10 @@ fi
 3. Update README.md with OAuth extraction automation details
 
 ### **P2 - Nice to Have (Optional)**
-4. Add import success validation in `20-import-ldap-data.sh`
-5. Add ConfigMap verification in `10-setup-oauth-secrets.sh`
-6. Add script execution order validation
-7. Add note in README explaining ConfigMap name separation strategy
+1. Add import success validation in `20-import-ldap-data.sh`
+2. Add ConfigMap verification in `10-setup-oauth-secrets.sh`
+3. Add script execution order validation
+4. Add note in README explaining ConfigMap name separation strategy
 
 ---
 
@@ -421,10 +425,10 @@ The ConfigMap name separation (`ca-config-map` for production, `ca-config-map-te
 1. ✅ **Fixed bindDN path** in `30-manage-ldap-server.sh` line 436 (removed `ou=demo,`)
 
 ### 📋 **Optional Enhancements** (Not Required)
-2. Update README.md with OAuth extraction automation details (enhancement)
-3. Add validation improvements to scripts (nice to have)
-4. Consider adding documentation note about ConfigMap separation strategy (documentation)
-5. Test complete workflow (recommended before production use)
+1. Update README.md with OAuth extraction automation details (enhancement)
+2. Add validation improvements to scripts (nice to have)
+3. Consider adding documentation note about ConfigMap separation strategy (documentation)
+4. Test complete workflow (recommended before production use)
 
 ### 🎉 **Ready for Use**
 The directory is now **production-ready** for local testing. All critical issues have been resolved, and the remaining items are optional enhancements that can be addressed over time.
@@ -444,4 +448,3 @@ The directory is now **production-ready** for local testing. All critical issues
 ---
 
 *Review generated automatically - All critical issues resolved - Ready for production testing* ✅
-

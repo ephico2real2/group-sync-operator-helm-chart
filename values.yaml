@@ -46,7 +46,7 @@ groupSync:
   # Set to true for plain LDAP, false for LDAPS with certificates
   insecure: true
 
-  # RFC2307 schema configuration  
+  # RFC2307 schema configuration
   rfc2307:
     # Users query configuration
     usersQuery:
@@ -69,19 +69,19 @@ groupSync:
       pageSize: 0
       scope: "sub"
       timeout: 0
-    
+
     # LDAP attribute mappings for groups
     groupNameAttributes:
       - cn
     groupUIDAttribute: dn
     groupMembershipAttributes:
       - member
-    
-    # LDAP attribute mappings for users  
+
+    # LDAP attribute mappings for users
     userNameAttributes:
       - uid
     userUIDAttribute: dn
-    
+
     # Error tolerance settings
     tolerateMemberNotFoundErrors: true
     tolerateMemberOutOfScopeErrors: true
@@ -137,37 +137,37 @@ subscription:
 oauthSecretExtraction:
   # Enable or disable the OAuth secret extraction job
   enabled: true
-  
+
   # Service account configuration for OAuth secret extraction
   serviceAccount:
     # Name of the service account to create and use
     name: oauth-secret-extractor
-  
+
   # OpenShift CLI image for secret extraction
   image:
     repository: registry.redhat.io/openshift4/ose-cli
     tag: v4.14
     pullPolicy: IfNotPresent
-  
+
   # Source secret configuration (OAuth LDAP secret)
   sourceSecret:
     name: ldap-secret
     namespace: openshift-config
     passwordKey: bindPassword
-  
+
   # Target secret configuration (GroupSync secret)
   targetSecret:
     name: ldap-group-sync
     namespace: group-sync-operator
-  
+
   # LDAP bind DN for the GroupSync secret
   bindDN: "cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com"
-  
+
   # Job configuration
   waitTimeout: 300  # seconds to wait for source secret
   backoffLimit: 3
   ttlSecondsAfterFinished: 300  # cleanup job after 5 minutes
-  
+
   # Resource limits for the extraction job
   resources:
     requests:
@@ -182,7 +182,7 @@ oauthSecretExtraction:
 test:
   # Enable or disable the test pods
   enabled: true
-  
+
   # OpenShift CLI image configuration for operator health testing
   operatorHealthImage:
     # Image repository
@@ -191,7 +191,7 @@ test:
     tag: "latest"
     # Image pull policy
     pullPolicy: IfNotPresent
-  
+
   # LDAP client image configuration for LDAP connection testing
   ldapClientImage:
     # Image repository

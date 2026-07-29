@@ -6,6 +6,7 @@ Ensure the OpenLDAP server is running in the `ldap-testing` namespace.
 ## Import Comprehensive LDAP Structure
 
 ### Option 1: Automated Script (Recommended)
+
 ```bash
 # Run the comprehensive import script
 ./20-import-ldap-data.sh

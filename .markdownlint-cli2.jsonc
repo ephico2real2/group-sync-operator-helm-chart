@@ -1,0 +1,18 @@
+{
+  // House style: opinionated/cosmetic rules OFF, all real-bug rules ON.
+  // Mirrors the convention used across the operator's other repos.
+  "config": {
+    "default": true,
+    "MD013": false, // line-length — prose docs are not hard-wrapped
+    "MD060": false, // table-column-style — pedantic pipe spacing
+    "MD022": false, // blanks-around-headings
+    "MD032": false, // blanks-around-lists
+    "MD026": false, // trailing-punctuation-in-heading
+    "MD024": { "siblings_only": true } // allow same heading text under different sections
+  },
+  "ignores": [
+    "templates-backup/**",
+    "node_modules/**",
+    ".git/**"
+  ]
+}
