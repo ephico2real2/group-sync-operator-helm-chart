@@ -86,6 +86,37 @@ groupSync:
     tolerateMemberNotFoundErrors: true
     tolerateMemberOutOfScopeErrors: true
 
+# -------------------- Custom (multi-tenant) GroupSync CRs --------------------
+# Generate ONE additional GroupSync CR per team/tenant. Full guide:
+# docs/DESIGN_custom_groupsync.md
+#
+# Rule: one naming pattern = one CR. Each item needs only a unique name and the
+# group pattern (groupCn). The chart fills in the rest so it is mistake-proof:
+#   - the LDAP filter is built for you: cn=<groupCn> -> (&(objectClass=groupOfNames)(cn=<groupCn>))
+#   - the provider name is always "ldap"
+#   - the connection (url/credentials/ca/usersQuery) is inherited from groupSync above
+#
+# Patterns must never overlap between tenants; that is guaranteed by the org
+# naming standard (enforced by Kyverno later), NOT by this chart.
+customGroupSyncs:
+  # Master switch for ALL custom CRs.
+  enabled: true
+  items:
+    # Big-Data Analytics: syncs every cn=bda-rbac-* group.
+    - name: bda-rbac-groupsync
+      enabled: true
+      groupCn: "bda-rbac-*"
+
+    # Example second tenant (left disabled — enable once its groups exist in LDAP):
+    # - name: xyz-ocp-rbac-groupsync
+    #   enabled: true
+    #   groupCn: "xyz-ocp-rbac-*"
+    #
+    # Optional per-item overrides (rarely needed):
+    #   schedule: "*/5 * * * *"     # override the inherited sync schedule
+    #   namespace: some-namespace   # override where the CR is created
+    #   filter: "(&(objectClass=groupOfNames)(cn=foo-*)(cn=bar-*))"  # raw LDAP filter (advanced)
+
 # -------------------- Operator Subscription Configuration --------------------
 # Controls how the operator is installed via OLM
 subscription:

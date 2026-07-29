@@ -49,3 +49,60 @@ Selector labels
 app.kubernetes.io/name: {{ include "group-sync-operator-helm.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
+
+{{/*
+GroupSync spec body — shared by the primary (02-groupsync.yaml) and every custom
+CR (custom-groupsync.yaml). The caller passes a config dict shaped exactly like
+.Values.groupSync (schedule, providerName, url, insecure, ca, credentialsSecret,
+rfc2307). Keeping one copy here means the two templates can never drift apart.
+*/}}
+{{- define "group-sync-operator-helm.groupsyncSpec" -}}
+spec:
+  schedule: {{ .schedule | quote }}
+  providers:
+    - name: {{ .providerName }}
+      ldap:
+        url: {{ .url | quote }}
+        insecure: {{ .insecure | default false }}
+        prune: true
+        {{- if not .insecure }}
+        ca:
+          kind: ConfigMap
+          name: {{ .ca.name }}
+          key: {{ .ca.key }}
+          namespace: {{ .ca.namespace }}
+        {{- end }}
+        credentialsSecret:
+          kind: Secret
+          name: {{ .credentialsSecret.name }}
+          namespace: {{ .credentialsSecret.namespace }}
+        rfc2307:
+          usersQuery:
+            baseDN: {{ .rfc2307.usersQuery.baseDN | quote }}
+            derefAliases: {{ .rfc2307.usersQuery.derefAliases | quote }}
+            {{- if .rfc2307.usersQuery.filter }}
+            filter: {{ .rfc2307.usersQuery.filter | quote }}
+            {{- end }}
+            pageSize: {{ .rfc2307.usersQuery.pageSize }}
+            scope: {{ .rfc2307.usersQuery.scope | quote }}
+            timeout: {{ .rfc2307.usersQuery.timeout }}
+
+          groupsQuery:
+            baseDN: {{ .rfc2307.groupsQuery.baseDN | quote }}
+            derefAliases: {{ .rfc2307.groupsQuery.derefAliases | quote }}
+            filter: {{ .rfc2307.groupsQuery.filter | quote }}
+            pageSize: {{ .rfc2307.groupsQuery.pageSize }}
+            scope: {{ .rfc2307.groupsQuery.scope | quote }}
+            timeout: {{ .rfc2307.groupsQuery.timeout }}
+
+          groupNameAttributes:
+            - cn
+          groupUIDAttribute: dn
+          groupMembershipAttributes:
+            - member
+          userNameAttributes:
+            - uid
+          userUIDAttribute: dn
+          tolerateMemberNotFoundErrors: true
+          tolerateMemberOutOfScopeErrors: true
+{{- end -}}
