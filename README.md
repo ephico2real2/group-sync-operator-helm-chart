@@ -25,10 +25,14 @@ helm search repo group-sync-operator-helm
 
 ## Overview
 
-The chart deploys three main components:
+The chart deploys these main components:
 1. Group Sync Operator (via OLM subscription)
 2. Operator Group configuration
-3. GroupSync Custom Resource for LDAP synchronization
+3. A primary GroupSync Custom Resource for LDAP synchronization
+4. Optional **additional GroupSync CRs — one per team/tenant** — driven from
+   `customGroupSyncs` in `values.yaml` (see
+   [Multi-Tenant GroupSync](#multi-tenant-groupsync-customgroupsyncs) and
+   [docs/DESIGN_custom_groupsync.md](docs/DESIGN_custom_groupsync.md))
 
 ## Prerequisites
 
@@ -210,7 +214,7 @@ Monitor the GroupSync operation using the following commands:
 oc get groupsync -n group-sync-operator -o yaml
 
 # View recent sync activity
-oc logs -l app.kubernetes.io/name=group-sync-operator -n group-sync-operator --tail=100
+oc logs -n group-sync-operator deployment/group-sync-operator-controller-manager -c manager --tail=100
 
 # Monitor real-time sync activity (watch for automatic syncs)
 kubectl logs -n group-sync-operator deployment/group-sync-operator-controller-manager -c manager --tail=5 -f
@@ -232,13 +236,13 @@ To trigger an immediate sync without waiting for the scheduled time:
 
 ```bash
 # Trigger immediate sync
-kubectl annotate groupsync ldap-group-sync -n group-sync-operator sync.redhatcop.redhat.io/sync-now="$(date)" --overwrite
+kubectl annotate groupsync ldap-groupsync -n group-sync-operator sync.redhatcop.redhat.io/sync-now="$(date)" --overwrite
 
 # Using oc command
-oc annotate groupsync ldap-group-sync -n group-sync-operator sync.redhatcop.redhat.io/sync-now="$(date)" --overwrite
+oc annotate groupsync ldap-groupsync -n group-sync-operator sync.redhatcop.redhat.io/sync-now="$(date)" --overwrite
 
 # Check if sync happened (verify completion)
-kubectl get groupsync ldap-group-sync -n group-sync-operator -o yaml | grep lastSyncSuccessTime
+kubectl get groupsync ldap-groupsync -n group-sync-operator -o yaml | grep lastSyncSuccessTime
 
 # Count synced RBAC groups
 kubectl get groups | grep -c app-ocp-rbac
@@ -250,7 +254,7 @@ kubectl logs -n group-sync-operator deployment/group-sync-operator-controller-ma
 kubectl get groups | grep app-ocp-rbac | head -10
 
 # Alternative commands using oc
-oc get groupsync ldap-group-sync -n group-sync-operator -o yaml | grep lastSyncSuccessTime
+oc get groupsync ldap-groupsync -n group-sync-operator -o yaml | grep lastSyncSuccessTime
 oc get groups | grep -c app-ocp-rbac
 oc logs -n group-sync-operator deployment/group-sync-operator-controller-manager -c manager --tail=5
 oc get groups | grep app-ocp-rbac | head -10
@@ -289,18 +293,89 @@ The tests will verify:
 
 ### Adjusting Sync Schedule
 
-The default sync schedule is every 30 minutes. Adjust this based on your needs:
+The schedule uses standard cron format and is set in `values.yaml`.
+
+> **Note:** the shipped default is `*/2 * * * *` (**every 2 minutes**). This is a
+> **fast-track testing** cadence so demo changes appear quickly — it is intentionally
+> aggressive. **For production, slow it down** so you are not hitting the LDAP server
+> every couple of minutes; group membership rarely changes that fast.
 
 ```yaml
 # In your values.yaml file
 groupSync:
-  schedule: "0 */2 * * *"  # Every 2 hours
+  # Fast-track testing (shipped default):
+  schedule: "*/2 * * * *"    # every 2 minutes
+
+  # Production examples (pick one):
+  # schedule: "*/15 * * * *"  # every 15 minutes
+  # schedule: "0 * * * *"     # hourly
+  # schedule: "0 */4 * * *"   # every 4 hours
 ```
+
+Custom (per-tenant) CRs inherit this schedule; override any single tenant with a
+`schedule:` field on its item under `customGroupSyncs.items` (see
+[Multi-Tenant GroupSync](#multi-tenant-groupsync-customgroupsyncs)).
 
 ```bash
 # Apply the updated schedule
 helm upgrade group-sync group-sync-operator/group-sync-operator-helm \
   -n group-sync-operator -f values.yaml
+```
+
+You do not have to wait for the schedule — patching any annotation triggers an
+immediate reconcile (see [Manual Sync Triggering](#manual-sync-triggering)).
+
+## Multi-Tenant GroupSync (`customGroupSyncs`)
+
+Large organisations often have several LDAP group families owned by different teams
+(for example `app-ocp-rbac-*`, `bda-rbac-*`, `xyz-ocp-rbac-*`). This chart can generate
+**one GroupSync CR per team/tenant** so each family syncs independently — its own
+resource, schedule, and on/off switch. If one tenant's sync breaks, the others keep
+working, and a support engineer troubleshoots exactly one resource.
+
+**The one rule:** one naming pattern = one CR, and patterns must not overlap. Overlap is
+prevented by your organisation's naming standard (enforced by Kyverno later), **not** by
+the chart.
+
+### Usage
+
+Add an `items` list under `customGroupSyncs`. Each item needs only a unique `name` and
+the group pattern (`groupCn`):
+
+```yaml
+customGroupSyncs:
+  enabled: true          # master switch for ALL custom CRs
+  items:
+    - name: bda-rbac-groupsync    # becomes a GroupSync resource with this name
+      enabled: true               # on/off for just this one
+      groupCn: "bda-rbac-*"       # LDAP group pattern to sync
+    - name: xyz-ocp-rbac-groupsync
+      enabled: true
+      groupCn: "xyz-ocp-rbac-*"
+```
+
+Everything else is filled in for you to keep it mistake-proof:
+
+- **The LDAP filter** is built from `groupCn` → `(&(objectClass=groupOfNames)(cn=<groupCn>))`,
+  so you cannot break the filter syntax.
+- **The provider name** is always `ldap` (you never type it).
+- **The connection** (URL, credentials, CA, user query) is inherited from the `groupSync`
+  block — one place to set, one place to troubleshoot.
+
+Optional per-item overrides (rarely needed): `schedule`, `namespace`, or a raw `filter`
+for advanced LDAP queries.
+
+Full design, validation steps, and glossary:
+[docs/DESIGN_custom_groupsync.md](docs/DESIGN_custom_groupsync.md).
+
+### Verifying a custom CR
+
+```bash
+# The custom CR exists alongside the primary one
+oc get groupsync -n group-sync-operator
+
+# Its groups are synced and owned by that CR (label <cr-name>_ldap)
+oc get groups -l group-sync-operator.redhat-cop.io/sync-provider=bda-rbac-groupsync_ldap
 ```
 
 ### Upgrading the Operator
@@ -351,13 +426,32 @@ The following tables list the configurable parameters and their default values.
 
 ### GroupSync Configuration
 
+> **Note:** the shipped `values.yaml` is a **fast-track demo/testing** configuration —
+> an in-cluster test LDAP over plain `ldap://`, a `*/2` schedule, and `insecure: true`.
+> Re-point these at your real LDAP (and use `ldaps://` + a CA) for production.
+
+| Parameter | Description | Default (demo) |
+|-----------|-------------|---------|
+| groupSync.name | Name of the primary GroupSync resource | ldap-groupsync |
+| groupSync.namespace | Target namespace | group-sync-operator |
+| groupSync.schedule | Sync schedule (cron format) — fast-track testing default | "*/2 * * * *" |
+| groupSync.providerName | LDAP provider name | ldap |
+| groupSync.insecure | Use plain LDAP (true) or LDAPS with CA (false) | true |
+| groupSync.url | LDAP server URL | ldap://openldap-service.ldap-testing.svc.cluster.local:389 |
+
+### Multi-Tenant GroupSync Configuration
+
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| groupSync.name | Name of the GroupSync resource | ldap-group-sync |
-| groupSync.namespace | Target namespace | group-sync-operator |
-| groupSync.schedule | Sync schedule (cron format) | "0/30 * * * *" |
-| groupSync.providerName | LDAP provider name | ldap-git-ocp |
-| groupSync.url | LDAP server URL | ldaps://ldap.ephicoreal2.net:636 |
+| customGroupSyncs.enabled | Master switch for all custom (per-tenant) CRs | true |
+| customGroupSyncs.items[].name | Unique name of the custom GroupSync resource | — |
+| customGroupSyncs.items[].enabled | On/off for this single custom CR | — |
+| customGroupSyncs.items[].groupCn | LDAP group pattern to sync (filter built for you) | — |
+| customGroupSyncs.items[].schedule | Optional per-item schedule override | inherits groupSync.schedule |
+| customGroupSyncs.items[].namespace | Optional per-item namespace override | inherits groupSync.namespace |
+| customGroupSyncs.items[].filter | Optional raw LDAP filter (advanced) | built from groupCn |
+
+See [Multi-Tenant GroupSync](#multi-tenant-groupsync-customgroupsyncs) for usage.
 
 ### CA Certificate Configuration
 
@@ -400,7 +494,9 @@ helm install group-sync group-sync-operator/group-sync-operator-helm -n group-sy
 - Deployment order is managed via ArgoCD sync waves
 - Labels follow Kubernetes recommended standards
 - LDAP queries use RFC2307 schema
-- Group filtering is set to match 'app-ocp-rbac-*' patterns
+- The primary CR filters for `app-ocp-rbac-*`; additional per-tenant patterns (e.g.
+  `bda-rbac-*`) are added via `customGroupSyncs` — see
+  [Multi-Tenant GroupSync](#multi-tenant-groupsync-customgroupsyncs)
 - Optional test pods can be enabled to validate installation and LDAP connectivity
 
 ## Upgrade Notes
@@ -429,7 +525,7 @@ oc get groupsync -n group-sync-operator
 
 3. View sync logs:
 ```bash
-oc logs -l app.kubernetes.io/name=group-sync-chart -n group-sync-operator
+oc logs -l app.kubernetes.io/name=group-sync-operator-helm -n group-sync-operator
 ```
 
 4. Monitor real-time sync activity:

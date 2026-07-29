@@ -65,10 +65,10 @@ VERIFICATION STEPS:
    $ oc describe groupsync {{ .Values.groupSync.name }} -n {{ .Values.groupSync.namespace }}
 
 4. View synchronization logs:
-   $ oc logs -l app.kubernetes.io/name=group-sync-operator -n {{ .Values.groupSync.namespace }}
+   $ oc logs -n {{ .Values.groupSync.namespace }} deployment/group-sync-operator-controller-manager -c manager --tail=100
 
 5. Verify LDAP connectivity:
-   $ oc -n {{ .Values.groupSync.namespace }} exec deployment/group-sync-operator -- \
+   $ oc -n {{ .Values.groupSync.namespace }} exec deployment/group-sync-operator-controller-manager -c manager -- \
      ldapsearch -H {{ .Values.groupSync.url }} \
      -D $(oc get secret {{ .Values.groupSync.credentialsSecret.name }} -n {{ .Values.groupSync.namespace }} -o jsonpath="{.data.bindDN}" | base64 -d) \
      -w $(oc get secret {{ .Values.groupSync.credentialsSecret.name }} -n {{ .Values.groupSync.namespace }} -o jsonpath="{.data.bindPassword}" | base64 -d) \
@@ -86,7 +86,7 @@ If you encounter issues:
    $ oc get secret {{ .Values.groupSync.credentialsSecret.name }} -n {{ .Values.groupSync.credentialsSecret.namespace }}
 
 3. Look for errors in the operator logs:
-   $ oc logs -l app.kubernetes.io/name=group-sync-operator -n {{ .Values.groupSync.namespace }}
+   $ oc logs -n {{ .Values.groupSync.namespace }} deployment/group-sync-operator-controller-manager -c manager --tail=100
 
 4. Check operator events:
    $ oc get events -n {{ .Values.groupSync.namespace }}

@@ -57,7 +57,8 @@ This setup uses **intentional separation** between production and local testing 
 ### 📊 Data Files
 | File | Description |
 |------|-------------|
-| `ldap-structure-combined.ldif` | 20+ production RBAC groups and test users |
+| `ldap-structure-combined.ldif` | 20+ production RBAC groups (`app-ocp-rbac-*`) and test users |
+| `ldap-bda-rbac-groups.ldif` | 12 Big-Data Analytics groups (`bda-rbac-*`) — demo for the custom GroupSync CR |
 | `configure-acls.ldif` | Service account ACL permissions |
 | `kubectl-import-commands.md` | Manual import command documentation |
 | `README.md` | This comprehensive documentation |
@@ -293,11 +294,89 @@ dc=ephico2real,dc=com
 
 ### OpenShift RBAC Groups
 
-The following groups are configured to sync with OpenShift (matching filter `cn=app-ocp-rbac-*`):
+Two group families are seeded, each synced by its own GroupSync CR:
 
-- **app-ocp-rbac-admins**: Cluster administrators
-- **app-ocp-rbac-developers**: Developers with project access
-- **app-ocp-rbac-viewers**: Read-only users
+**Primary — `app-ocp-rbac-*`** (synced by `ldap-groupsync`, filter `cn=app-ocp-rbac-*`).
+Format `app-ocp-rbac-{team}-{ns|cluster}-{admin|developer|audit}`, e.g.
+`app-ocp-rbac-platform-cluster-admin`. Seeded from `ldap-structure-combined.ldif`.
+
+**Big-Data Analytics — `bda-rbac-*`** (synced by the custom `bda-rbac-groupsync`, filter
+`cn=bda-rbac-*`). Format `bda-rbac-{service}-{env}-{apps|users}` across
+`{spark,trino} × {alpha,delta,theta} × {apps,users}` = 12 groups. Seeded from
+`ldap-bda-rbac-groups.ldif`. Demonstrates the multi-tenant `customGroupSyncs` feature —
+see the **Update Guide** section below.
+
+> **DN-convention gotcha:** seed users (from the LDIF files) have `cn=<user>` DNs, while
+> users created live by `50-simulate-ldap-operations.sh` have `uid=<user>` DNs. The
+> operator matches group members to users by DN, so a group's `member:` value must equal
+> the user's ACTUAL DN. The simulation script resolves this automatically
+> (`resolve_user_dn`); if you hand-write an LDIF, match the `member:` DN to how the user
+> is actually defined, or the member is silently dropped and the group syncs empty.
+
+## 🔄 Update Guide — Onboarding a New Tenant / Group Family
+
+End-to-end path to add a NEW group family (e.g. your own `xyz-ocp-rbac-*`) so it syncs
+into OpenShift under its own GroupSync CR. Two sides: put the groups in LDAP, then tell
+the chart to sync them.
+
+### Step 1 — Create the groups in LDAP
+
+**Option A — static LDIF (reproducible, recommended).** Copy `ldap-bda-rbac-groups.ldif`
+as a template, rename to your family, then import:
+
+```bash
+POD=$(kubectl get pods -n ldap-testing -l app=openldap-server -o jsonpath='{.items[0].metadata.name}')
+kubectl cp ldap-<your-family>-groups.ldif ldap-testing/$POD:/tmp/
+kubectl exec -n ldap-testing $POD -- ldapadd -x -H ldap://localhost:389 \
+  -D "cn=admin,dc=ephico2real,dc=com" -w admin123 -f /tmp/ldap-<your-family>-groups.ldif
+```
+
+**Option B — live, via the simulation script.** Menu option `2` (add group) / `3` (add
+user to group), or the built-in demo scenario (menu shortcut `s5`):
+
+```bash
+./50-simulate-ldap-operations.sh bda-onboarding
+```
+
+### Step 2 — Add a custom GroupSync CR in the chart
+
+In the chart's `values.yaml`, add one item under `customGroupSyncs.items` — a unique
+`name` and the group pattern (`groupCn`). Nothing else is required (the LDAP filter,
+provider name, and connection are supplied for you):
+
+```yaml
+customGroupSyncs:
+  enabled: true
+  items:
+    - name: bda-rbac-groupsync
+      enabled: true
+      groupCn: "bda-rbac-*"
+```
+
+One naming pattern = one CR; patterns must not overlap. Full reference:
+[../docs/DESIGN_custom_groupsync.md](../docs/DESIGN_custom_groupsync.md).
+
+### Step 3 — Apply and verify
+
+```bash
+# From the chart root:
+helm upgrade group-sync . -n default
+
+# The new CR exists alongside the primary one:
+oc get groupsync -n group-sync-operator
+
+# Force an immediate sync (or wait for the schedule):
+oc annotate groupsync bda-rbac-groupsync -n group-sync-operator \
+  sync.redhatcop.redhat.io/sync-now="$(date)" --overwrite
+
+# Confirm the groups landed, owned by the new CR (label <cr-name>_ldap):
+oc get groups -l group-sync-operator.redhat-cop.io/sync-provider=bda-rbac-groupsync_ldap
+```
+
+### Removing a tenant
+
+Set that item's `enabled: false` (or remove it) and `helm upgrade` — only that CR is
+removed; the other tenants are untouched.
 
 ## Testing GroupSync Integration
 
