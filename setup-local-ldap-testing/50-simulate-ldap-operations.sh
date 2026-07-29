@@ -33,49 +33,53 @@ get_ldap_pod() {
 }
 
 # Validate user exists in LDAP
-validate_user_exists() {
+# Count LDAP entries matching a base + filter, printed on stdout.
+# CRITICAL GOTCHA: ldapsearch exits 0 for a SUCCESSFUL search even when it returns
+# ZERO entries. So "if ldapsearch ...; then exists" is always true — callers must
+# count returned entries (^dn: lines), never trust $?. This helper is the single
+# correct primitive for every "does X match" check below.
+ldap_count() {
+    local base="$1" filter="$2"
+    local LDAP_POD=$(get_ldap_pod)
+    kubectl exec -n $NAMESPACE $LDAP_POD -- ldapsearch -x -H ldap://localhost:389 \
+        -D "$LDAP_ADMIN_DN" -w "$LDAP_ADMIN_PASSWORD" -LLL \
+        -b "$base" "$filter" dn 2>/dev/null | grep -c "^dn:"
+}
+
+# Resolve a user's REAL DN by uid. Handles both conventions in this demo directory:
+# seed users are cn=-based (cn=john.doe,...), script-created users are uid=-based
+# (uid=sarah.jones,...). The operator matches group members to users by DN, so the
+# member value must be the user's ACTUAL DN — never an assumed uid=/cn= shape.
+# Prints the DN on stdout, or nothing if the user is not found.
+resolve_user_dn() {
     local username="$1"
     local LDAP_POD=$(get_ldap_pod)
-    
-    if kubectl exec -n $NAMESPACE $LDAP_POD -- ldapsearch -x -H ldap://localhost:389 \
-        -D "$LDAP_SERVICE_DN" -w "$LDAP_SERVICE_PASSWORD" \
-        -b "uid=$username,ou=People,dc=ephico2real,dc=com" \
-        -s base "(objectClass=*)" dn >/dev/null 2>&1; then
-        return 0
-    else
-        return 1
-    fi
+    kubectl exec -n $NAMESPACE $LDAP_POD -- ldapsearch -x -H ldap://localhost:389 \
+        -D "$LDAP_ADMIN_DN" -w "$LDAP_ADMIN_PASSWORD" -LLL \
+        -b "ou=People,dc=ephico2real,dc=com" "(uid=$username)" dn 2>/dev/null \
+        | awk '/^dn: /{print substr($0,5); exit}'
+}
+
+validate_user_exists() {
+    local username="$1"
+    # Match by the uid attribute across the People subtree — handles both cn=- and
+    # uid=-based user DNs.
+    [ "$(ldap_count "ou=People,dc=ephico2real,dc=com" "(uid=$username)")" -gt 0 ]
 }
 
 # Validate group exists in LDAP
 validate_group_exists() {
     local groupname="$1"
-    local LDAP_POD=$(get_ldap_pod)
-    
-    if kubectl exec -n $NAMESPACE $LDAP_POD -- ldapsearch -x -H ldap://localhost:389 \
-        -D "$LDAP_SERVICE_DN" -w "$LDAP_SERVICE_PASSWORD" \
-        -b "cn=$groupname,ou=Groups,dc=ephico2real,dc=com" \
-        -s base "(objectClass=*)" dn >/dev/null 2>&1; then
-        return 0
-    else
-        return 1
-    fi
+    [ "$(ldap_count "ou=Groups,dc=ephico2real,dc=com" "(cn=$groupname)")" -gt 0 ]
 }
 
 # Validate user is member of group
 validate_user_in_group() {
     local username="$1"
     local groupname="$2"
-    local LDAP_POD=$(get_ldap_pod)
-    
-    if kubectl exec -n $NAMESPACE $LDAP_POD -- ldapsearch -x -H ldap://localhost:389 \
-        -D "$LDAP_SERVICE_DN" -w "$LDAP_SERVICE_PASSWORD" \
-        -b "cn=$groupname,ou=Groups,dc=ephico2real,dc=com" \
-        "(member=uid=$username,ou=People,dc=ephico2real,dc=com)" dn >/dev/null 2>&1; then
-        return 0
-    else
-        return 1
-    fi
+    local user_dn=$(resolve_user_dn "$username")
+    [ -z "$user_dn" ] && return 1
+    [ "$(ldap_count "cn=$groupname,ou=Groups,dc=ephico2real,dc=com" "(member=$user_dn)")" -gt 0 ]
 }
 
 # Show group membership details
@@ -87,7 +91,7 @@ show_group_members() {
     local members=$(kubectl exec -n $NAMESPACE $LDAP_POD -- ldapsearch -x -H ldap://localhost:389 \
         -D "$LDAP_SERVICE_DN" -w "$LDAP_SERVICE_PASSWORD" \
         -b "cn=$groupname,ou=Groups,dc=ephico2real,dc=com" \
-        member 2>/dev/null | grep "^member:" | sed 's/member: uid=//g' | sed 's/,ou=People,dc=ephico2real,dc=com//g' | tr '\n' ', ' | sed 's/,$//')
+        member 2>/dev/null | grep "^member:" | sed -E 's/member: (uid|cn)=//g' | sed 's/,ou=People,dc=ephico2real,dc=com//g' | tr '\n' ', ' | sed 's/,$//')
     
     if [ -n "$members" ]; then
         echo -e "   $members"
@@ -243,13 +247,18 @@ add_user_to_group() {
     fi
     
     echo -e "${CYAN}🔗 Adding $username to group $groupname${NC}"
-    
-    # Check if placeholder exists and remove it while adding real user
-    if kubectl exec -n $NAMESPACE $LDAP_POD -- ldapsearch -x -H ldap://localhost:389 \
-        -D "$LDAP_SERVICE_DN" -w "$LDAP_SERVICE_PASSWORD" \
-        -b "cn=$groupname,ou=Groups,dc=ephico2real,dc=com" \
-        "(member=uid=placeholder,ou=People,dc=ephico2real,dc=com)" >/dev/null 2>&1; then
-        
+
+    # Resolve the user's REAL DN so the member value matches the user's actual entry.
+    local user_dn=$(resolve_user_dn "$username")
+    if [ -z "$user_dn" ]; then
+        echo -e "${RED}❌ User $username not found in LDAP — cannot add to group${NC}"
+        return 1
+    fi
+
+    # Check if placeholder exists and remove it while adding real user.
+    # Count entries — ldapsearch exits 0 even when the placeholder is absent.
+    if [ "$(ldap_count "cn=$groupname,ou=Groups,dc=ephico2real,dc=com" "(member=uid=placeholder,ou=People,dc=ephico2real,dc=com)")" -gt 0 ]; then
+
         # Create LDIF to replace placeholder with real user
         cat > /tmp/replace_placeholder.ldif << EOF
 dn: cn=$groupname,ou=Groups,dc=ephico2real,dc=com
@@ -258,7 +267,7 @@ delete: member
 member: uid=placeholder,ou=People,dc=ephico2real,dc=com
 -
 add: member
-member: uid=$username,ou=People,dc=ephico2real,dc=com
+member: $user_dn
 EOF
         kubectl cp /tmp/replace_placeholder.ldif $NAMESPACE/$LDAP_POD:$TMP_DIR/
         
@@ -285,7 +294,7 @@ EOF
 dn: cn=$groupname,ou=Groups,dc=ephico2real,dc=com
 changetype: modify
 add: member
-member: uid=$username,ou=People,dc=ephico2real,dc=com
+member: $user_dn
 EOF
         kubectl cp /tmp/add_member.ldif $NAMESPACE/$LDAP_POD:$TMP_DIR/
         
@@ -321,13 +330,20 @@ remove_user_from_group() {
     fi
     
     echo -e "${YELLOW}🔗 Removing $username from group $groupname${NC}"
-    
+
+    # Resolve the user's REAL DN so we delete the member entry that actually exists.
+    local user_dn=$(resolve_user_dn "$username")
+    if [ -z "$user_dn" ]; then
+        echo -e "${RED}❌ User $username not found in LDAP — cannot remove from group${NC}"
+        return 1
+    fi
+
     # Create LDIF for removing user from group
     cat > /tmp/remove_member.ldif << EOF
 dn: cn=$groupname,ou=Groups,dc=ephico2real,dc=com
 changetype: modify
 delete: member
-member: uid=$username,ou=People,dc=ephico2real,dc=com
+member: $user_dn
 EOF
     
     kubectl cp /tmp/remove_member.ldif $NAMESPACE/$LDAP_POD:$TMP_DIR/
@@ -363,10 +379,18 @@ delete_user() {
     fi
     
     echo -e "${RED}🗑️  Deleting user: $username${NC}"
-    
+
+    # Resolve the user's REAL DN — deleting an assumed uid=$username misses cn=-based
+    # seed users entirely.
+    local user_dn=$(resolve_user_dn "$username")
+    if [ -z "$user_dn" ]; then
+        echo -e "${YELLOW}⚠️  User $username not found in LDAP (nothing to delete)${NC}"
+        return 0
+    fi
+
     if kubectl exec -n $NAMESPACE $LDAP_POD -- ldapdelete -x -H ldap://localhost:389 \
         -D "$LDAP_ADMIN_DN" -w "$LDAP_ADMIN_PASSWORD" \
-        "uid=$username,ou=People,dc=ephico2real,dc=com" >/dev/null 2>&1; then
+        "$user_dn" >/dev/null 2>&1; then
         echo -e "${GREEN}✅ User $username deleted successfully${NC}"
         
         # Validate the deletion
