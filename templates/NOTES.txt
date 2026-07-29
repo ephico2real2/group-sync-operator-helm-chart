@@ -1,25 +1,122 @@
-Thank you for installing {{ .Chart.Name }}.
+********************************************************************************
+  Thank you for installing {{ .Chart.Name }} version {{ .Chart.Version }}.
+  
+  Your release is named {{ .Release.Name }} in namespace {{ .Release.Namespace }}.
+********************************************************************************
 
-The Group Sync Operator has been deployed to namespace: {{ .Values.groupSync.namespace }}
+🔧 INSTALLATION ORDER GUIDANCE:
+==============================
 
-To verify the installation, please run the following commands:
+{{- if .Values.oauthSecretExtraction.enabled }}
+**OAUTH SECRET EXTRACTION ENABLED**
 
-1. Check the Operator installation status:
+The chart will automatically extract the LDAP password from your existing OAuth secret
+and create the required GroupSync secret. The installation order is:
+
+1. OperatorGroup (sync-wave: -1)
+2. Operator Subscription (sync-wave: 0)
+3. ServiceAccount, ClusterRole, ClusterRoleBinding (sync-wave: 1)
+4. OAuth Secret Extraction Job (sync-wave: 2)
+5. GroupSync CR (sync-wave: 3)
+
+The OAuth extraction job will:
+- Extract bindPassword from {{ .Values.oauthSecretExtraction.sourceSecret.name }} ({{ .Values.oauthSecretExtraction.sourceSecret.namespace }})
+- Create {{ .Values.oauthSecretExtraction.targetSecret.name }} secret in {{ .Values.oauthSecretExtraction.targetSecret.namespace }}
+- Use bindDN: {{ .Values.oauthSecretExtraction.bindDN }}
+
+For single-step installation:
+  helm install {{ .Release.Name }} . --set oauthSecretExtraction.enabled=true
+
+{{- else }}
+For a new installation, it's recommended to follow this two-step process:
+
+STEP 1: Install the operator first (without GroupSync CR)
+  helm install {{ .Release.Name }} . --set groupSync.enabled=false
+
+STEP 2: Wait for operator to be ready, then enable GroupSync CR
+  helm upgrade {{ .Release.Name }} . --set groupSync.enabled=true
+
+Alternatively, enable OAuth secret extraction for automated setup:
+  helm install {{ .Release.Name }} . --set oauthSecretExtraction.enabled=true
+{{- end }}
+
+This ensures the OperatorGroup and Subscription are created before the GroupSync CR.
+
+INSTALLATION STATUS:
+===================
+
+The Group Sync Operator is being installed via OLM and should be available shortly.
+The deployment happens in the following order:
+1. OperatorGroup (sync-wave: -1)
+2. Operator Subscription (sync-wave: 0)
+3. GroupSync custom resource (sync-wave: 1)
+
+VERIFICATION STEPS:
+=================
+
+1. Verify the Operator installation:
    $ oc get csv -n {{ .Values.groupSync.namespace }}
+   $ oc get pods -n {{ .Values.groupSync.namespace }}
 
-2. Verify the GroupSync custom resource:
-   $ oc get groupsync {{ .Values.groupSync.name }} -n {{ .Values.groupSync.namespace }}
+2. Verify the GroupSync resource:
+   $ oc get groupsync -n {{ .Values.groupSync.namespace }}
 
-3. Monitor the sync process:
-   $ oc get groupsync {{ .Values.groupSync.name }} -n {{ .Values.groupSync.namespace }} -o jsonpath='{.status.conditions[*].message}'
+3. Check the GroupSync resource status:
+   $ oc describe groupsync {{ .Values.groupSync.name }} -n {{ .Values.groupSync.namespace }}
 
-The LDAP group sync is scheduled to run every 30 minutes.
+4. View synchronization logs:
+   $ oc logs -l app.kubernetes.io/name=group-sync-operator -n {{ .Values.groupSync.namespace }}
 
-For troubleshooting:
-1. Check operator logs:
-   $ oc logs -l app.kubernetes.io/name={{ include "group-sync-operator-helm.name" . }} -n {{ .Values.groupSync.namespace }}
+5. Verify LDAP connectivity:
+   $ oc -n {{ .Values.groupSync.namespace }} exec deployment/group-sync-operator -- \
+     ldapsearch -H {{ .Values.groupSync.url }} \
+     -D $(oc get secret {{ .Values.groupSync.credentialsSecret.name }} -n {{ .Values.groupSync.namespace }} -o jsonpath="{.data.bindDN}" | base64 -d) \
+     -w $(oc get secret {{ .Values.groupSync.credentialsSecret.name }} -n {{ .Values.groupSync.namespace }} -o jsonpath="{.data.bindPassword}" | base64 -d) \
+     -b "{{ .Values.groupSync.rfc2307.groupsQuery.baseDN }}" -s sub "(objectClass=*)" -LLL
 
-2. Verify LDAP connectivity:
-   $ oc get groupsync {{ .Values.groupSync.name }} -n {{ .Values.groupSync.namespace }} -o yaml
+TROUBLESHOOTING:
+==============
+
+If you encounter issues:
+
+1. Check that the CA certificate is correct:
+   $ oc get configmap {{ .Values.groupSync.ca.name }} -n {{ .Values.groupSync.ca.namespace }}
+
+2. Verify LDAP credentials secret:
+   $ oc get secret {{ .Values.groupSync.credentialsSecret.name }} -n {{ .Values.groupSync.credentialsSecret.namespace }}
+
+3. Look for errors in the operator logs:
+   $ oc logs -l app.kubernetes.io/name=group-sync-operator -n {{ .Values.groupSync.namespace }}
+
+4. Check operator events:
+   $ oc get events -n {{ .Values.groupSync.namespace }}
+
+5. For additional help, see the documentation:
+   https://github.com/redhat-cop/group-sync-operator
+
+NEXT STEPS:
+==========
+
+1. Verify that groups are being synchronized correctly
+2. Configure RBAC for the synchronized groups
+3. Test group access in OpenShift
+
+For more information on usage and configuration options, see the chart's README.
+
+{{- if .Values.test.enabled }}
+TEST PODS:
+==========
+
+This installation includes test pods that can be used to verify the installation:
+
+1. Run the tests:
+   $ helm test {{ .Release.Name }} -n {{ .Release.Namespace }}
+
+The tests will verify:
+1. The GroupSync operator and custom resource are properly installed
+2. LDAP connectivity is working correctly
+{{- else }}
+TEST PODS are DISABLED. To enable, set test.enabled=true in values.yaml.
+{{- end }}
 
 For more information, please refer to the README.md in the chart directory.

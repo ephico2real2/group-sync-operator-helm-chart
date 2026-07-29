@@ -1,0 +1,11 @@
+# Configure OpenLDAP ACLs to grant service account read access
+# This modifies the database configuration to add proper access controls
+
+dn: olcDatabase={1}mdb,cn=config
+changetype: modify
+replace: olcAccess
+olcAccess: {0}to attrs=userPassword by self write by dn="cn=admin,dc=ephico2real,dc=com" write by dn="cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com" read by anonymous auth by * none
+olcAccess: {1}to dn.subtree="ou=People,dc=ephico2real,dc=com" by dn="cn=admin,dc=ephico2real,dc=com" write by dn="cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com" read by * none  
+olcAccess: {2}to dn.subtree="ou=Groups,dc=ephico2real,dc=com" by dn="cn=admin,dc=ephico2real,dc=com" write by dn="cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com" read by * none
+olcAccess: {3}to dn.subtree="ou=TrustedApplications,dc=ephico2real,dc=com" by dn="cn=admin,dc=ephico2real,dc=com" write by dn="cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com" read by * none
+olcAccess: {4}to * by dn="cn=admin,dc=ephico2real,dc=com" write by * read

@@ -1,0 +1,113 @@
+# phpLDAPadmin Web Interface for LDAP Management
+# Provides a web-based GUI to manage the OpenLDAP server
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: phpldapadmin
+  namespace: ldap-testing
+  labels:
+    app: phpldapadmin
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: phpldapadmin
+  template:
+    metadata:
+      labels:
+        app: phpldapadmin
+    spec:
+      serviceAccountName: openldap-server
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 0
+        fsGroup: 0
+      containers:
+      - name: phpldapadmin
+        image: osixia/phpldapadmin:0.9.0
+        ports:
+        - containerPort: 80
+          name: http
+        - containerPort: 443
+          name: https
+        env:
+        # Configure to connect to our OpenLDAP server
+        - name: PHPLDAPADMIN_LDAP_HOSTS
+          value: "openldap-service"
+        # Disable HTTPS for simplicity in testing
+        - name: PHPLDAPADMIN_HTTPS
+          value: "false"
+        # Trust self-signed certificates
+        - name: PHPLDAPADMIN_TRUST_PROXY_SSL
+          value: "true"
+        # Set server name
+        - name: PHPLDAPADMIN_SERVER_ADMIN
+          value: "admin@ephico2real.com"
+        # Configure LDAP server details
+        - name: PHPLDAPADMIN_LDAP_CLIENT_TLS
+          value: "false"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 80
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: phpldapadmin-service
+  namespace: ldap-testing
+  labels:
+    app: phpldapadmin
+spec:
+  selector:
+    app: phpldapadmin
+  ports:
+  - name: http
+    port: 80
+    targetPort: 80
+    protocol: TCP
+  - name: https
+    port: 443
+    targetPort: 443
+    protocol: TCP
+  type: ClusterIP
+
+---
+# Route for external access (OpenShift)
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: phpldapadmin-route
+  namespace: ldap-testing
+  labels:
+    app: phpldapadmin
+spec:
+  to:
+    kind: Service
+    name: phpldapadmin-service
+  port:
+    targetPort: http
+  wildcardPolicy: None
+

@@ -1,0 +1,258 @@
+# LDAP Structure Import - Comprehensive RBAC Groups
+# This file can be used both by the bootstrap job and for manual kubectl import
+# Contains full production-pattern RBAC groups matching app-ocp-rbac-* format
+
+# Create organizational units
+dn: ou=People,dc=ephico2real,dc=com
+objectClass: organizationalUnit
+ou: People
+description: Container for user accounts
+
+dn: ou=Groups,dc=ephico2real,dc=com
+objectClass: organizationalUnit
+ou: Groups
+description: Container for group accounts
+
+dn: ou=TrustedApplications,dc=ephico2real,dc=com
+objectClass: organizationalUnit
+ou: TrustedApplications
+description: Container for service accounts
+
+# Create service account for LDAP binding directly under TrustedApplications
+dn: cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com
+objectClass: simpleSecurityObject
+objectClass: organizationalRole
+cn: ocp-ldap-bind-serviceid
+description: OpenShift LDAP binding service account
+userPassword: bindpassword123
+
+# Create test users with comprehensive group memberships
+dn: cn=john.doe,ou=People,dc=ephico2real,dc=com
+objectClass: inetOrgPerson
+objectClass: posixAccount
+objectClass: shadowAccount
+cn: john.doe
+sn: Doe
+givenName: John
+displayName: John Doe
+uid: john.doe
+mail: john.doe@ephico2real.com
+uidNumber: 10001
+gidNumber: 10001
+homeDirectory: /home/john.doe
+loginShell: /bin/bash
+userPassword: {SSHA}password123
+
+dn: cn=jane.smith,ou=People,dc=ephico2real,dc=com
+objectClass: inetOrgPerson
+objectClass: posixAccount
+objectClass: shadowAccount
+cn: jane.smith
+sn: Smith
+givenName: Jane
+displayName: Jane Smith
+uid: jane.smith
+mail: jane.smith@ephico2real.com
+uidNumber: 10002
+gidNumber: 10002
+homeDirectory: /home/jane.smith
+loginShell: /bin/bash
+userPassword: {SSHA}password123
+
+dn: cn=bob.wilson,ou=People,dc=ephico2real,dc=com
+objectClass: inetOrgPerson
+objectClass: posixAccount
+objectClass: shadowAccount
+cn: bob.wilson
+sn: Wilson
+givenName: Bob
+displayName: Bob Wilson
+uid: bob.wilson
+mail: bob.wilson@ephico2real.com
+uidNumber: 10003
+gidNumber: 10003
+homeDirectory: /home/bob.wilson
+loginShell: /bin/bash
+userPassword: {SSHA}password123
+
+dn: cn=alice.cooper,ou=People,dc=ephico2real,dc=com
+objectClass: inetOrgPerson
+objectClass: posixAccount
+objectClass: shadowAccount
+cn: alice.cooper
+sn: Cooper
+givenName: Alice
+displayName: Alice Cooper
+uid: alice.cooper
+mail: alice.cooper@ephico2real.com
+uidNumber: 10004
+gidNumber: 10004
+homeDirectory: /home/alice.cooper
+loginShell: /bin/bash
+userPassword: {SSHA}password123
+
+dn: cn=charlie.brown,ou=People,dc=ephico2real,dc=com
+objectClass: inetOrgPerson
+objectClass: posixAccount
+objectClass: shadowAccount
+cn: charlie.brown
+sn: Brown
+givenName: Charlie
+displayName: Charlie Brown
+uid: charlie.brown
+mail: charlie.brown@ephico2real.com
+uidNumber: 10005
+gidNumber: 10005
+homeDirectory: /home/charlie.brown
+loginShell: /bin/bash
+userPassword: {SSHA}password123
+
+# =============================================================================
+# OpenShift RBAC Groups - Comprehensive Production Pattern
+# Format: app-ocp-rbac-{team/mnemonic}-(ns|cluster)-(admin|developer|audit)
+# =============================================================================
+
+# Platform team groups
+dn: cn=app-ocp-rbac-platform-cluster-admin,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-platform-cluster-admin
+description: Platform team cluster administrators
+member: cn=john.doe,ou=People,dc=ephico2real,dc=com
+member: cn=alice.cooper,ou=People,dc=ephico2real,dc=com
+
+dn: cn=app-ocp-rbac-platform-cluster-developer,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-platform-cluster-developer
+description: Platform team cluster developers
+member: cn=john.doe,ou=People,dc=ephico2real,dc=com
+member: cn=jane.smith,ou=People,dc=ephico2real,dc=com
+
+dn: cn=app-ocp-rbac-platform-ns-admin,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-platform-ns-admin
+description: Platform team namespace administrators
+member: cn=john.doe,ou=People,dc=ephico2real,dc=com
+member: cn=jane.smith,ou=People,dc=ephico2real,dc=com
+
+dn: cn=app-ocp-rbac-platform-ns-audit,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-platform-ns-audit
+description: Platform team namespace audit access
+member: cn=bob.wilson,ou=People,dc=ephico2real,dc=com
+
+# Alpha team groups
+dn: cn=app-ocp-rbac-alpha-cluster-admin,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-alpha-cluster-admin
+description: Alpha team cluster administrators
+member: cn=jane.smith,ou=People,dc=ephico2real,dc=com
+
+dn: cn=app-ocp-rbac-alpha-cluster-developer,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-alpha-cluster-developer
+description: Alpha team cluster developers
+member: cn=jane.smith,ou=People,dc=ephico2real,dc=com
+member: cn=bob.wilson,ou=People,dc=ephico2real,dc=com
+
+dn: cn=app-ocp-rbac-alpha-cluster-audit,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-alpha-cluster-audit
+description: Alpha team cluster audit access
+member: cn=bob.wilson,ou=People,dc=ephico2real,dc=com
+
+dn: cn=app-ocp-rbac-alpha-ns-admin,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-alpha-ns-admin
+description: Alpha team namespace administrators
+member: cn=jane.smith,ou=People,dc=ephico2real,dc=com
+
+dn: cn=app-ocp-rbac-alpha-ns-developer,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-alpha-ns-developer
+description: Alpha team namespace developers
+member: cn=jane.smith,ou=People,dc=ephico2real,dc=com
+member: cn=bob.wilson,ou=People,dc=ephico2real,dc=com
+
+dn: cn=app-ocp-rbac-alpha-ns-audit,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-alpha-ns-audit
+description: Alpha team namespace audit access
+member: cn=bob.wilson,ou=People,dc=ephico2real,dc=com
+
+# Demo team groups
+dn: cn=app-ocp-rbac-demo-cluster-admin,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-demo-cluster-admin
+description: Demo team cluster administrators
+member: cn=john.doe,ou=People,dc=ephico2real,dc=com
+
+dn: cn=app-ocp-rbac-demo-cluster-developer,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-demo-cluster-developer
+description: Demo team cluster developers
+member: cn=jane.smith,ou=People,dc=ephico2real,dc=com
+
+dn: cn=app-ocp-rbac-demo-cluster-audit,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-demo-cluster-audit
+description: Demo team cluster audit access
+member: cn=bob.wilson,ou=People,dc=ephico2real,dc=com
+
+dn: cn=app-ocp-rbac-demo-ns-admin,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-demo-ns-admin
+description: Demo team namespace administrators
+member: cn=john.doe,ou=People,dc=ephico2real,dc=com
+member: cn=jane.smith,ou=People,dc=ephico2real,dc=com
+
+dn: cn=app-ocp-rbac-demo-ns-developer,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-demo-ns-developer
+description: Demo team namespace developers
+member: cn=jane.smith,ou=People,dc=ephico2real,dc=com
+member: cn=bob.wilson,ou=People,dc=ephico2real,dc=com
+
+dn: cn=app-ocp-rbac-demo-ns-audit,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-demo-ns-audit
+description: Demo team namespace audit access
+member: cn=bob.wilson,ou=People,dc=ephico2real,dc=com
+
+# Finance team groups (partial - matching production pattern)
+dn: cn=app-ocp-rbac-finance-cluster-developer,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-finance-cluster-developer
+description: Finance team cluster developers
+member: cn=bob.wilson,ou=People,dc=ephico2real,dc=com
+member: cn=charlie.brown,ou=People,dc=ephico2real,dc=com
+
+# Beta team groups (partial - matching production pattern)
+dn: cn=app-ocp-rbac-beta-ns-admin,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-beta-ns-admin
+description: Beta team namespace administrators
+member: cn=jane.smith,ou=People,dc=ephico2real,dc=com
+member: cn=alice.cooper,ou=People,dc=ephico2real,dc=com
+
+dn: cn=app-ocp-rbac-beta-ns-developer,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-beta-ns-developer
+description: Beta team namespace developers
+member: cn=bob.wilson,ou=People,dc=ephico2real,dc=com
+
+# Newteam cluster admin (matching production pattern)
+dn: cn=app-ocp-rbac-newteam-cluster-admin,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-newteam-cluster-admin
+description: New team cluster administrators
+member: cn=john.doe,ou=People,dc=ephico2real,dc=com
+member: cn=charlie.brown,ou=People,dc=ephico2real,dc=com
+
+# Create a non-RBAC group for testing filters (should not sync to OpenShift)
+dn: cn=general-users,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: general-users
+description: General users group (should not sync to OpenShift)
+member: cn=john.doe,ou=People,dc=ephico2real,dc=com
+member: cn=jane.smith,ou=People,dc=ephico2real,dc=com
+member: cn=bob.wilson,ou=People,dc=ephico2real,dc=com
