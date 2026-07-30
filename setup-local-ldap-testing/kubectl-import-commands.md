@@ -35,6 +35,38 @@ kubectl exec -n ldap-testing $LDAP_POD -- ldapmodify -x -H ldap://localhost:389 
     -f /tmp/configure-acls.ldif
 ```
 
+## Import Optional Group Families
+
+These are additive — import them after the base structure above, in any order.
+
+```bash
+# Big-Data Analytics groups (bda-rbac-*), synced by the custom bda-rbac-groupsync CR
+kubectl cp ldap-bda-rbac-groups.ldif ldap-testing/$LDAP_POD:/tmp/
+kubectl exec -n ldap-testing $LDAP_POD -- ldapadd -x -H ldap://localhost:389 \
+    -D "cn=admin,dc=ephico2real,dc=com" \
+    -w "admin123" \
+    -f /tmp/ldap-bda-rbac-groups.ldif
+
+# Namespace RBAC for the spar / trno mnemonics, used by the BDA namespace demo.
+# Synced by ldap-groupsync (same cn=app-ocp-rbac-* filter as the base structure).
+kubectl cp ldap-rbac-groups-spar-trno.ldif ldap-testing/$LDAP_POD:/tmp/
+kubectl exec -n ldap-testing $LDAP_POD -- ldapadd -x -H ldap://localhost:389 \
+    -D "cn=admin,dc=ephico2real,dc=com" \
+    -w "admin123" \
+    -f /tmp/ldap-rbac-groups-spar-trno.ldif
+```
+
+Confirm the sync picked them up — `ldap-groupsync` runs `*/2 * * * *`, so allow ~2 minutes:
+
+```bash
+oc get groups | grep -E '^app-ocp-rbac-(spar|trno)-ns-'   # expect 6
+oc get groups | grep -c '^bda-rbac-'                      # expect 12 from the LDIF
+```
+
+> If a group syncs with an empty USERS column, the `member:` DN did not match a real user.
+> See the DN-convention gotcha in `README.md` — this directory mixes `cn=` and `uid=` DNs,
+> and a mismatched `member:` is accepted by `ldapadd` but silently dropped at sync.
+
 ## Verification Commands
 
 ```bash

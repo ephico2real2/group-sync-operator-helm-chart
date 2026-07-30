@@ -1,0 +1,101 @@
+# =============================================================================
+# Normalize user DNs to uid= — one-time migration
+# =============================================================================
+# PROBLEM
+# This directory grew two conventions for the same kind of entry:
+#   cn=<user>,ou=People,...   5 users seeded from ldap-structure-combined.ldif
+#   uid=<user>,ou=People,...  4 users created by 50-simulate-ldap-operations.sh
+#
+# The GroupSync operator matches group members to users BY DN, so a `member:` value
+# must equal the user's actual DN. A mismatched member is accepted by ldapadd without
+# error and then silently dropped at sync time — the group syncs with zero users.
+#
+# This was not theoretical. Before this migration, three groups were broken:
+#   app-ocp-rbac-devops-cluster-admin  -> member: uid=john.doe,...      (was cn=john.doe)
+#   app-ocp-rbac-devops-ns-developer   -> member: uid=alice.cooper,...  (was cn=alice.cooper)
+#   app-ocp-rbac-test-cluster-admin    -> member: uid=john.doe,...      (was cn=john.doe)
+# All three synced empty, so john.doe and alice.cooper silently had no access through
+# them — while the ClusterRoleBindings granting ClusterRole/admin sat there looking fine.
+#
+# FIX
+# Standardize on uid= as the RDN, because:
+#   - it is the rfc2307 / inetOrgPerson convention for ou=People
+#   - the GroupSync CR already uses userNameAttributes: [uid]
+#   - all nine users ALREADY have a uid attribute, so no data has to be invented
+#   - the four newest users and the simulation script already do it this way
+#
+# Renaming to uid= also repairs the three broken groups above as a side effect: once
+# john.doe IS uid=john.doe, those dangling references resolve.
+#
+# SAFE TO RUN because the refint overlay is enabled on this server and tracks `member`:
+#   olcOverlay={1}refint  ->  olcRefintAttribute: member
+# so every group's member: value is rewritten automatically by the rename. Without
+# refint you would have to rewrite all 54 member references by hand.
+#
+# deleteoldrdn: 0 keeps the old cn attribute value. inetOrgPerson REQUIRES cn, so
+# dropping it (deleteoldrdn: 1) would make the entry schema-invalid.
+#
+# APPLY
+#   POD=$(oc get pods -n ldap-testing -l app=openldap-server -o name | head -1)
+#   oc cp ldap-normalize-user-dns.ldif ldap-testing/${POD#pod/}:/tmp/
+#   oc exec -n ldap-testing ${POD#pod/} -- ldapmodify -x -H ldap://localhost:389 \
+#       -D "cn=admin,dc=ephico2real,dc=com" -w admin123 \
+#       -f /tmp/ldap-normalize-user-dns.ldif
+#
+# Idempotent? NO. Re-running fails with "no such object" once the entries are renamed,
+# which is harmless but noisy. Check first:
+#   ldapsearch -x -b "ou=People,dc=ephico2real,dc=com" "(objectClass=inetOrgPerson)" dn
+# =============================================================================
+
+dn: cn=alice.cooper,ou=People,dc=ephico2real,dc=com
+changetype: modrdn
+newrdn: uid=alice.cooper
+deleteoldrdn: 0
+
+dn: cn=bob.wilson,ou=People,dc=ephico2real,dc=com
+changetype: modrdn
+newrdn: uid=bob.wilson
+deleteoldrdn: 0
+
+dn: cn=charlie.brown,ou=People,dc=ephico2real,dc=com
+changetype: modrdn
+newrdn: uid=charlie.brown
+deleteoldrdn: 0
+
+dn: cn=jane.smith,ou=People,dc=ephico2real,dc=com
+changetype: modrdn
+newrdn: uid=jane.smith
+deleteoldrdn: 0
+
+dn: cn=john.doe,ou=People,dc=ephico2real,dc=com
+changetype: modrdn
+newrdn: uid=john.doe
+deleteoldrdn: 0
+
+# ---------------------------------------------------------------------------
+# Remove the uid=placeholder references.
+#
+# groupOfNames requires at least one member, so a placeholder DN was used to create
+# groups with no real members yet. The entry was never created, so it is a dangling
+# reference refint cannot clean up (refint only follows renames and deletes of entries
+# that exist).
+#
+# Ordering matters: this runs AFTER the renames above, by which point each of these
+# groups holds at least one member that now resolves. Deleting the placeholder first
+# would leave a memberless groupOfNames and be rejected.
+# ---------------------------------------------------------------------------
+
+dn: cn=app-ocp-rbac-devops-cluster-admin,ou=Groups,dc=ephico2real,dc=com
+changetype: modify
+delete: member
+member: uid=placeholder,ou=People,dc=ephico2real,dc=com
+
+dn: cn=app-ocp-rbac-devops-ns-developer,ou=Groups,dc=ephico2real,dc=com
+changetype: modify
+delete: member
+member: uid=placeholder,ou=People,dc=ephico2real,dc=com
+
+dn: cn=app-ocp-rbac-jeff-ns-admin,ou=Groups,dc=ephico2real,dc=com
+changetype: modify
+delete: member
+member: uid=placeholder,ou=People,dc=ephico2real,dc=com

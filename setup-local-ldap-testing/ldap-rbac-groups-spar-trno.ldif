@@ -1,0 +1,65 @@
+# =============================================================================
+# Namespace RBAC groups for the "spar" and "trno" mnemonics — BDA demo seed
+# =============================================================================
+# Adds the app-ocp-rbac-* groups the standard NamespaceConfig policies expect for
+# the BDA demo namespaces (spar-rnd, spar-qa, trno-uat). Without these, the
+# NamespaceConfig still creates spar-admin-rb / -developer-rb / -audit-rb, but every
+# binding references a group that does not exist and therefore grants nobody.
+#
+# Naming standard: app-ocp-rbac-{mnemonic}-(ns|cluster)-(admin|developer|audit)
+#   mnemonic must be exactly 4 lowercase letters — enforced by the Kyverno rule
+#   validate-group-naming-standards. "spar" and "trno" both satisfy ^[a-z]{4}$.
+#
+# Synced by GroupSync/ldap-groupsync (filter: cn=app-ocp-rbac-*).
+#
+# Import (test LDAP already running):
+#   POD=$(kubectl get pods -n ldap-testing -l app=openldap -o name | head -1)
+#   kubectl cp ldap-rbac-groups-spar-trno.ldif ldap-testing/${POD#pod/}:/tmp/
+#   kubectl exec -n ldap-testing ${POD#pod/} -- ldapadd -x -H ldap://localhost:389 \
+#       -D "cn=admin,dc=ephico2real,dc=com" -w admin123 \
+#       -f /tmp/ldap-rbac-groups-spar-trno.ldif
+#
+# Members reuse existing test users from ldap-structure-combined.ldif. Note the DN
+# forms are mixed in this directory — some users are cn=, some uid= — so member
+# values below match each user's actual DN rather than assuming one form.
+# groupOfNames requires at least one member, so every group has one.
+# =============================================================================
+
+# ---- spar (Spark demo namespaces: spar-rnd, spar-qa) ----
+dn: cn=app-ocp-rbac-spar-ns-admin,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-spar-ns-admin
+description: Namespace admin for the spar (Spark) mnemonic — non-prod only
+member: cn=jane.smith,ou=People,dc=ephico2real,dc=com
+
+dn: cn=app-ocp-rbac-spar-ns-developer,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-spar-ns-developer
+description: Namespace developer (edit) for the spar (Spark) mnemonic
+member: cn=jane.smith,ou=People,dc=ephico2real,dc=com
+member: cn=bob.wilson,ou=People,dc=ephico2real,dc=com
+
+dn: cn=app-ocp-rbac-spar-ns-audit,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-spar-ns-audit
+description: Namespace audit (view) for the spar (Spark) mnemonic
+member: cn=bob.wilson,ou=People,dc=ephico2real,dc=com
+
+# ---- trno (Trino demo namespace: trno-uat) ----
+dn: cn=app-ocp-rbac-trno-ns-admin,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-trno-ns-admin
+description: Namespace admin for the trno (Trino) mnemonic — non-prod only
+member: cn=john.doe,ou=People,dc=ephico2real,dc=com
+
+dn: cn=app-ocp-rbac-trno-ns-developer,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-trno-ns-developer
+description: Namespace developer (edit) for the trno (Trino) mnemonic
+member: cn=charlie.brown,ou=People,dc=ephico2real,dc=com
+
+dn: cn=app-ocp-rbac-trno-ns-audit,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-trno-ns-audit
+description: Namespace audit (view) for the trno (Trino) mnemonic
+member: uid=sarah.jones,ou=People,dc=ephico2real,dc=com

@@ -62,6 +62,8 @@ This setup uses **intentional separation** between production and local testing 
 |------|-------------|
 | `ldap-structure-combined.ldif` | 20+ production RBAC groups (`app-ocp-rbac-*`) and test users |
 | `ldap-bda-rbac-groups.ldif` | 12 Big-Data Analytics groups (`bda-rbac-*`) — demo for the custom GroupSync CR |
+| `ldap-rbac-groups-spar-trno.ldif` | 6 namespace RBAC groups for the `spar` / `trno` mnemonics — pairs with the BDA namespace demo |
+| `ldap-normalize-user-dns.ldif` | One-time migration: renames the 5 `cn=` users to `uid=` so all member DNs resolve |
 | `configure-acls.ldif` | Service account ACL permissions |
 | `kubectl-import-commands.md` | Manual import command documentation |
 | `README.md` | This comprehensive documentation |
@@ -320,12 +322,55 @@ Format `app-ocp-rbac-{team}-{ns|cluster}-{admin|developer|audit}`, e.g.
 `ldap-bda-rbac-groups.ldif`. Demonstrates the multi-tenant `customGroupSyncs` feature —
 see the **Update Guide** section below.
 
-> **DN-convention gotcha:** seed users (from the LDIF files) have `cn=<user>` DNs, while
-> users created live by `50-simulate-ldap-operations.sh` have `uid=<user>` DNs. The
-> operator matches group members to users by DN, so a group's `member:` value must equal
-> the user's ACTUAL DN. The simulation script resolves this automatically
-> (`resolve_user_dn`); if you hand-write an LDIF, match the `member:` DN to how the user
-> is actually defined, or the member is silently dropped and the group syncs empty.
+> The LDIF seeds **12**; a live cluster typically shows **15**, because
+> `50-simulate-ldap-operations.sh` adds `flink-alpha-{apps,users}` and `spark-gamma-apps`.
+> Note `spark-gamma-apps` has no matching `-users` partner — a deliberate asymmetry that is
+> useful for testing the "group referenced but does not exist" path.
+
+**Namespace RBAC for the BDA demo — `app-ocp-rbac-{spar,trno}-ns-*`** (synced by
+`ldap-groupsync`, same `cn=app-ocp-rbac-*` filter). Seeded from
+`ldap-rbac-groups-spar-trno.ldif`: 6 groups covering
+`{spar,trno} × {admin,developer,audit}`.
+
+These exist so the BDA demo namespaces (`spar-rnd`, `spar-qa`, `trno-uat` in
+`openshift-rbac-automation/working-sessions/`) have real groups behind their standard
+RoleBindings. Both mnemonics are exactly 4 lowercase letters, as the Kyverno rule
+`validate-group-naming-standards` requires (`^app-ocp-rbac-[a-z]{4}-(ns|cluster)-(admin|developer|audit)$`).
+
+> **Why this file exists:** without it, the `NamespaceConfig` still creates
+> `spar-admin-rb` / `-developer-rb` / `-audit-rb` in every matching namespace — Kubernetes
+> does not validate that a RoleBinding's subject Group exists. The bindings look healthy,
+> the operator reports `ReconcileSuccess`, and nobody has access. Seeding these groups is
+> what makes the demo actually grant anything. Full write-up:
+> `openshift-rbac-automation/working-sessions/README.md`.
+
+> **DN convention — RESOLVED, all users are now `uid=`.** This directory previously mixed
+> two forms: seed users from the LDIF files were `cn=<user>`, while users created live by
+> `50-simulate-ldap-operations.sh` were `uid=<user>`. The operator matches group members to
+> users **by DN**, so a mismatched `member:` value is accepted by `ldapadd` without error and
+> then silently dropped at sync — the group syncs with zero users.
+>
+> That bit for real. Three groups were broken before the fix:
+>
+> | Group | Bad member ref | User actually was |
+> |---|---|---|
+> | `app-ocp-rbac-devops-cluster-admin` | `uid=john.doe` | `cn=john.doe` |
+> | `app-ocp-rbac-devops-ns-developer` | `uid=alice.cooper` | `cn=alice.cooper` |
+> | `app-ocp-rbac-test-cluster-admin` | `uid=john.doe` | `cn=john.doe` |
+>
+> All three synced empty while their ClusterRoleBindings sat there looking healthy.
+>
+> **Fixed by `ldap-normalize-user-dns.ldif`**, which renames the five `cn=` users to `uid=`.
+> Run it once against an existing directory; new deployments get the correct form from
+> `ldap-structure-combined.ldif` directly. Verify with:
+>
+> ```bash
+> ldapsearch -x -b "ou=People,dc=ephico2real,dc=com" "(objectClass=inetOrgPerson)" dn
+> # every DN should start with uid=
+> ```
+>
+> When hand-writing an LDIF, still check the target DN before writing a `member:` line —
+> nothing validates it.
 
 ## 🔄 Update Guide — Onboarding a New Tenant / Group Family
 
