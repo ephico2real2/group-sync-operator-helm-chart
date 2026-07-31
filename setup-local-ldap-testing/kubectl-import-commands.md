@@ -56,7 +56,10 @@ kubectl exec -n ldap-testing $LDAP_POD -- ldapadd -x -H ldap://localhost:389 \
     -f /tmp/ldap-rbac-groups-spar-trno.ldif
 ```
 
-Confirm the sync picked them up — `ldap-groupsync` runs `*/2 * * * *`, so allow ~2 minutes:
+Confirm the sync picked them up. `ldap-groupsync` runs on the schedule in `values.yaml`
+(default `*/30 * * * *`), so allow up to that long. There is no supported "sync now"
+annotation — tested, and it does not trigger a run. To see results sooner, temporarily
+lower `groupSync.schedule` and `helm upgrade`.
 
 ```bash
 oc get groups | grep -E '^app-ocp-rbac-(spar|trno)-ns-'   # expect 6

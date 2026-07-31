@@ -295,18 +295,21 @@ The tests will verify:
 
 The schedule uses standard cron format and is set in `values.yaml`.
 
-> **Note:** the shipped default is `*/2 * * * *` (**every 2 minutes**). This is a
-> **fast-track testing** cadence so demo changes appear quickly — it is intentionally
-> aggressive. **For production, slow it down** so you are not hitting the LDAP server
-> every couple of minutes; group membership rarely changes that fast.
+> **Note:** the shipped default is `*/30 * * * *` (**every 30 minutes**), which is a
+> reasonable production cadence — group membership rarely changes faster than that.
+> For demo work you may want it quicker so changes appear while you watch; see the
+> examples below.
 
 ```yaml
 # In your values.yaml file
 groupSync:
-  # Fast-track testing (shipped default):
-  schedule: "*/2 * * * *"    # every 2 minutes
+  # Shipped default:
+  schedule: "*/30 * * * *"   # every 30 minutes
 
-  # Production examples (pick one):
+  # Faster, for demo/testing only:
+  # schedule: "*/2 * * * *"   # every 2 minutes — aggressive on the LDAP server
+
+  # Other production examples (pick one):
   # schedule: "*/15 * * * *"  # every 15 minutes
   # schedule: "0 * * * *"     # hourly
   # schedule: "0 */4 * * *"   # every 4 hours

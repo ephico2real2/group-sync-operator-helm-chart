@@ -20,8 +20,8 @@ groupSync:
   name: ldap-groupsync
   # Namespace where the GroupSync CR will be created
   namespace: group-sync-operator
-  # Schedule in cron format (every 2 minutes for testing)
-  schedule: "*/2 * * * *"
+  # Schedule in cron format (every 30 minutes)
+  schedule: "*/30 * * * *"
   # Name of the LDAP provider in the GroupSync configuration
   providerName: ldap
 
@@ -106,6 +106,10 @@ customGroupSyncs:
     - name: bda-rbac-groupsync
       enabled: true
       groupCn: "bda-rbac-*"
+      # Hourly, rather than inheriting the 30-minute primary schedule. Written as
+      # "0 * * * *" not "*/60 * * * *" — the minute field only spans 0-59, so */60 is
+      # non-idiomatic and rejected by some cron parsers.
+      schedule: "0 * * * *"
 
     # Example second tenant (left disabled — enable once its groups exist in LDAP):
     # - name: xyz-ocp-rbac-groupsync
