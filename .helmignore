@@ -13,7 +13,6 @@
 .vscode/
 
 # Repo assets that are NOT part of the deployable chart
-templates-backup/            # pre-edit snapshot of templates/ (local safety only)
 docs/                        # design docs
 setup-local-ldap-testing/    # local test-LDAP harness
 scripts/                     # helper scripts

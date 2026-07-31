@@ -185,9 +185,17 @@ So the new CR has something to sync, we seed the Big-Data groups into the test L
   next `helm upgrade`; the other tenants are untouched.
 - **Disable everything custom:** set `customGroupSyncs.enabled: false` → only the primary CR
   remains.
-- **Revert the code entirely:** the `templates/` folder was snapshotted to
-  **`templates-backup/`** before any edit. Restore from there if needed. (`templates-backup/`
-  is added to `.helmignore` so it never ships inside the chart package.)
+- **Revert the code entirely:** the pre-edit `templates/` snapshot lived in
+  `templates-backup/`, which has since been removed — git history and the **`v0.2.0`** tag
+  preserve it, so a working-tree copy was redundant. Recover a pre-refactor file with:
+
+  ```bash
+  git show v0.2.0:templates-backup/02-groupsync.yaml
+  git checkout v0.2.0 -- templates-backup/        # or restore the whole folder
+  ```
+
+  Only three files actually differed from `templates/` at the time of removal —
+  `02-groupsync.yaml`, `NOTES.txt` and `_helpers.tpl`; the other eleven were identical.
 
 ## 10. Glossary
 
