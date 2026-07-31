@@ -1,0 +1,118 @@
+# =============================================================================
+# Group-pattern examples — exercises the three INDEPENDENT gates
+# =============================================================================
+# A group name has to clear three separate checks before anyone gets access, and
+# each one fails differently. These examples make each gate observable.
+#
+#   GATE 1  SYNC FILTER      GroupSync `filter` decides whether LDAP -> OpenShift
+#                            happens at all. Fails => no Group object exists.
+#                              ldap-groupsync      cn=app-ocp-rbac-*
+#                              bda-rbac-groupsync  cn=bda-rbac-*
+#
+#   GATE 2  NAMING POLICY    Kyverno rbac-standards-enforcement validates the NAME.
+#                            Fails => reported (Audit mode), group still exists and
+#                            still works. Naming validation does NOT block access.
+#                              ^app-ocp-rbac-[a-z]{4}-(ns|cluster)-(admin|developer|audit)$
+#                              ^bda-rbac-(spark|flink|trino)-[a-z0-9]+-(apps|users)$
+#
+#   GATE 3  TEMPLATE SUFFIX  The GroupConfig objectTemplates gate on hasSuffix.
+#                            Fails => group syncs, is valid, and produces NOTHING.
+#                            No error, no event, no object. The quietest failure.
+#                              -cluster-admin  -cluster-audit  -cluster-developer
+#                              -database-admin -ns-admin       -ns-developer
+#
+# Expected outcome per entry is stated inline. Verify with:
+#   oc get groups | grep -E 'plat|toolong|abcd|presto|omega'   # gate 1
+#   oc get clusterrolebinding -o name | grep <group>           # gate 3
+#
+# All member DNs use uid=, per ldap-normalize-user-dns.ldif.
+#
+# APPLY
+#   POD=$(oc get pods -n ldap-testing -l app=openldap-server -o name | head -1)
+#   oc cp ldap-group-pattern-examples.ldif ldap-testing/${POD#pod/}:/tmp/
+#   oc exec -n ldap-testing ${POD#pod/} -- ldapadd -x -H ldap://localhost:389 \
+#       -D "cn=admin,dc=ephico2real,dc=com" -w admin123 \
+#       -f /tmp/ldap-group-pattern-examples.ldif
+#
+# Suffixes were chosen to avoid creating new admin grants: -ns-audit maps to `view`
+# and is not in the GroupConfig hasSuffix list, so these examples grant nothing
+# cluster-wide. Do NOT copy these with a -cluster-admin suffix without meaning it.
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# A. PASSES ALL GATES it applies to — the control case
+#    gate 1 sync: YES (app-ocp-rbac-*)   gate 2 naming: PASS ("plat" is 4 letters)
+#    gate 3: no template handles -ns-audit, so no cluster object is created
+# ---------------------------------------------------------------------------
+dn: cn=app-ocp-rbac-plat-ns-audit,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-plat-ns-audit
+description: EXAMPLE A - valid name, syncs, passes Kyverno
+member: uid=bob.wilson,ou=People,dc=ephico2real,dc=com
+
+# ---------------------------------------------------------------------------
+# B. SYNCS but FAILS naming — mnemonic is 7 letters, not 4
+#    Demonstrates that Kyverno naming validation does not prevent the group from
+#    existing or working. In Audit mode it is a report entry, nothing more.
+# ---------------------------------------------------------------------------
+dn: cn=app-ocp-rbac-toolong-ns-audit,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-toolong-ns-audit
+description: EXAMPLE B - syncs, FAILS Kyverno (mnemonic not 4 letters)
+member: uid=bob.wilson,ou=People,dc=ephico2real,dc=com
+
+# ---------------------------------------------------------------------------
+# C. SYNCS but FAILS naming — role token is not admin|developer|audit
+#    Also fails gate 3: no template has a "-ns-superuser" suffix, so it silently
+#    produces nothing even though the group is present and populated.
+# ---------------------------------------------------------------------------
+dn: cn=app-ocp-rbac-abcd-ns-superuser,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-abcd-ns-superuser
+description: EXAMPLE C - syncs, FAILS Kyverno (invalid role token), no template match
+member: uid=charlie.brown,ou=People,dc=ephico2real,dc=com
+
+# ---------------------------------------------------------------------------
+# D. DOES NOT SYNC — near-miss prefix, missing the leading "app-"
+#    The most dangerous class: it looks right to a human and is invisible to
+#    OpenShift. No Group object, so nothing downstream can reference it.
+# ---------------------------------------------------------------------------
+dn: cn=ocp-rbac-abcd-ns-audit,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: ocp-rbac-abcd-ns-audit
+description: EXAMPLE D - near-miss prefix, filtered out by gate 1, never syncs
+member: uid=charlie.brown,ou=People,dc=ephico2real,dc=com
+
+# ---------------------------------------------------------------------------
+# E. DOES NOT SYNC — unrelated naming, the deliberate filter-negative
+#    Same role as the existing general-users fixture.
+# ---------------------------------------------------------------------------
+dn: cn=platform-legacy-admins,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: platform-legacy-admins
+description: EXAMPLE E - matches no sync filter, never reaches OpenShift
+member: uid=alice.cooper,ou=People,dc=ephico2real,dc=com
+
+# ---------------------------------------------------------------------------
+# F. BDA: SYNCS but FAILS naming — unknown service "presto"
+#    The Kyverno bda rule enumerates spark|flink|trino deliberately, so a typo
+#    like "sprak" is caught. A genuinely new service is caught the same way and
+#    the rule must be widened when one is onboarded. This entry is what that
+#    looks like.
+# ---------------------------------------------------------------------------
+dn: cn=bda-rbac-presto-alpha-users,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: bda-rbac-presto-alpha-users
+description: EXAMPLE F - syncs via bda filter, FAILS Kyverno (service not enumerated)
+member: uid=jane.smith,ou=People,dc=ephico2real,dc=com
+
+# ---------------------------------------------------------------------------
+# G. BDA: SYNCS and PASSES naming — brand new tenant "omega"
+#    Confirms the deliberate asymmetry in the bda rule: service is enumerated,
+#    tenant is [a-z0-9]+ and open, so onboarding a tenant needs no policy edit.
+# ---------------------------------------------------------------------------
+dn: cn=bda-rbac-spark-omega-users,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: bda-rbac-spark-omega-users
+description: EXAMPLE G - syncs, PASSES Kyverno (new tenant needs no rule change)
+member: uid=dana.lee,ou=People,dc=ephico2real,dc=com
