@@ -463,6 +463,32 @@ readable rather than inferred.
 5. **Log-scrape enrichment** — worth the extra RBAC and fragility for per-sync group counts,
    or is poll-and-store enough?
 
+### 13.1 Deployment model — decided 2026-08-01
+
+**One instance per cluster, each observing only itself.** The multi-cluster capability stays
+in the code and is unchanged; this is an operational default, not a removal. A single
+instance can still be pointed at several clusters where that is genuinely wanted.
+
+The reasoning is that cross-cluster polling does not scale the way local polling does: every
+poll crosses a network boundary, and the list calls grow with the observed cluster's group
+count, not with the dashboard's. A cluster with tens of thousands of groups is a large
+recurring transfer over a link that may be firewalled, latent, or occasionally down — and an
+instance that cannot reach a cluster shows a degraded card where an in-cluster instance would
+simply have the data.
+
+This answers three of the five questions above and changes the shape of a fourth:
+
+| | Effect of per-cluster deployment |
+|---|---|
+| **Q1 token lifetime** | **Resolved.** The pod's projected ServiceAccount token is rotated by kubelet and re-read per poll. No long-lived token to mint, store, or expire — the thing §5 flagged as the main operational question stops existing. |
+| **Q3 where it runs** | **Decided: on the observed cluster.** Accepting the known cost — a cluster cannot report its own total outage. That failure is already visible from every other monitoring path, whereas the failures this dashboard exists for are invisible ones *inside* a working cluster. |
+| **Q4 dashboard auth** | **Narrowed, and made solvable.** An instance now only ever holds one cluster's data, so authenticating against that same cluster is sufficient — the per-cluster authorization gap that OAuth cannot express (§ oauth-proxy plan) disappears, because there is no second cluster's data to leak. |
+| **Q5 log-scrape** | unchanged — still open |
+
+The cost to weigh: N clusters means N deployments, N routes, and N places to look. Nothing
+aggregates across them any more. If a single pane over all clusters is later wanted, it is a
+read-only fan-in over the per-cluster APIs, not a return to cross-cluster polling.
+
 ## 14. First slice — built 2026-08-01
 
 Cluster overview + GroupSync detail against **one** cluster, poll-and-store, no log scrape,
