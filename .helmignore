@@ -1,4 +1,15 @@
 # Patterns to ignore when building Helm packages.
+#
+# NOTE: a pattern must sit on a line of its OWN. "#" only starts a comment at the START of a
+# line — a trailing comment becomes part of the pattern, which then matches nothing and the
+# path is silently packaged. That is exactly what happened to the five entries below: each
+# carried a trailing comment, so docs/, setup-local-ldap-testing/, scripts/, docker/ and
+# argocd-application.yaml were all shipped inside the chart tarball, including
+# setup-local-ldap-testing/ca-key.pem — a private key.
+#
+# Verify after editing this file:
+#   helm package . && tar -tzf group-sync-operator-helm-*.tgz
+
 # Standard VCS / editor / OS cruft
 .git/
 .gitignore
@@ -13,10 +24,22 @@
 .vscode/
 
 # Repo assets that are NOT part of the deployable chart
-docs/                        # design docs
-setup-local-ldap-testing/    # local test-LDAP harness
-scripts/                     # helper scripts
-docker/                      # image build context
-argocd-application.yaml      # ArgoCD wrapper, applied separately
+
+# design docs
+docs/
+
+# local test-LDAP harness — also carries ca-key.pem, which must never ship
+setup-local-ldap-testing/
+
+# helper scripts
+scripts/
+
+# image build context
+docker/
+
+# ArgoCD wrapper, applied separately
+argocd-application.yaml
+
 CONTRIBUTING.md
 rendered-templates.yaml
+.markdownlint-cli2.jsonc
