@@ -48,28 +48,31 @@ authoritative at runtime — it adopts and patches this copy on operator install
 
 ### The namespace
 
-`--create-namespace` is required on a first install. Helm writes its release secret into the target
-namespace before pre-install hooks run, so `templates/00-namespace.yaml` cannot create it in time:
+Pass `--create-namespace`. ArgoCD does not need it — the Application sets `CreateNamespace=true`.
 
+`templates/00-namespace.yaml` is **off by default** and is not a helm hook. As a `pre-install` hook
+it deleted a pre-existing namespace and everything in it, because Helm's default hook-delete-policy
+is `before-hook-creation` and no policy value means "never delete". Measured behaviour of the
+alternatives:
+
+| Namespace template | Namespace state | Result |
+|---|---|---|
+| `pre-install` hook | already exists | **deleted, with its contents** |
+| `pre-install` hook | absent, no `--create-namespace` | fails: `namespaces "X" not found` |
+| plain resource | already exists | fails safely: Helm refuses to adopt it |
+| plain resource | absent + `--create-namespace` | fails: `namespaces "X" already exists` |
+
+So it is enabled only for a GitOps tool that applies the rendered manifest where the namespace is
+absent. Everything else uses `--create-namespace` or `CreateNamespace=true`.
+
+If a namespace is mid-deletion every create against it is rejected, and the install fails until it
+finishes. What is holding it:
+
+```bash
+oc get ns group-sync-operator -o jsonpath='{range .status.conditions[*]}{.type}: {.message}{"\n"}{end}'
 ```
-Error: INSTALLATION FAILED: create: failed to create: namespaces "group-sync-operator" not found
-```
 
-ArgoCD does not need it — the Application sets `CreateNamespace=true`.
-
-If the namespace is mid-deletion, every create against it is rejected and the install fails on the
-hook instead:
-
-```
-Error: failed pre-install: Hook pre-install .../00-namespace.yaml failed:
-  object is being deleted: namespaces "group-sync-operator" already exists
-```
-
-Wait for `oc get ns group-sync-operator` to return NotFound, then install. If it never finishes,
-`oc get ns group-sync-operator -o jsonpath='{range .status.conditions[*]}{.type}: {.message}{"\n"}{end}'`
-names what is holding it — usually a non-Available APIService or a resource with a finalizer.
-
-Set `namespace.create=false` where the namespace is managed elsewhere.
+Usually a non-Available APIService or a resource with a finalizer.
 
 ### The wait Jobs
 
