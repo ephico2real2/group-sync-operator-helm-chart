@@ -1,7 +1,90 @@
 # CA Certificate Flow
 
-There are **two** CA ConfigMaps, and confusing them is the single most common way to end up with an
-operator that installs cleanly and never syncs. This document is the reference for which is which.
+The operator reads **one** CA — whatever `groupSync.ca` names. There are three ways to get one there,
+and confusing them is the most common way to end up with an operator that installs cleanly and never
+syncs. This document is the reference.
+
+## Three ways in
+
+| | Enable with | Who populates it | Key | Use when |
+|---|---|---|---|---|
+| **1. Copy** *(default)* | `oauthSecretExtraction.caCopy.enabled: true` | the extraction Job, from `sourceCa` | `ca.crt` | the cluster already has the CA for its OAuth LDAP identity provider |
+| **2. Injected** | `trustedCA.injected.enabled: true` | OpenShift's network operator | `ca-bundle.crt` | the LDAP server's CA is already in `proxy/cluster.spec.trustedCA` |
+| **3. Existing** | both of the above `false` | you, out of band | yours | a CA the cluster has never been told about |
+
+All three end at the same place, so `groupSync.ca` is the constant:
+
+```
+1. openshift-config/ca-config-map ──Job copies──▶ ┐
+2. empty ConfigMap ──OpenShift fills──▶           ├──▶ groupSync.ca ──▶ operator
+3. a ConfigMap you created ──────────────────────▶ ┘
+```
+
+Whichever you pick, the extraction Job preflights it — exists, has the key, key is PEM — so a
+misconfiguration surfaces at install time rather than as an endless reconcile loop.
+
+### 2. Injected — and its one hard limit
+
+The chart creates an **empty** ConfigMap labelled `config.openshift.io/inject-trusted-cabundle: "true"`
+(a **label**, not an annotation). OpenShift's network operator fills `ca-bundle.crt` with the system
+trust store merged with `proxy/cluster.spec.trustedCA`. Measured on a stock cluster: **148 certificates,
+226KB**. Nothing to maintain, no copy step, and rotation is the cluster's problem rather than yours.
+
+**It carries only CAs the cluster already trusts.** So check before enabling:
+
+```bash
+oc get proxy cluster -o jsonpath='{.spec.trustedCA.name}{"\n"}'
+```
+
+- **Non-empty** — your corporate CA is in the bundle. An LDAP server signed by it verifies with no
+  further setup. This is the case injection exists for.
+- **Empty** — the bundle is public roots only. An internal LDAP server will fail with
+  `x509: certificate signed by unknown authority`, because no public root signed it. Use mode 1 or 3.
+
+That second case includes a local cert-manager PKI: a root created on your own cluster is not in
+Mozilla's CA list, so injection cannot verify it. Making it work would mean adding that root to
+`proxy/cluster.spec.trustedCA`, which the Machine Config Operator propagates into the node trust store
+via a new MachineConfig — **rebooting nodes**. Worth knowing before reaching for it in a lab.
+
+Set the key to `ca-bundle.crt`, not `ca.crt`:
+
+```yaml
+trustedCA:
+  injected:
+    enabled: true
+    name: ldap-trusted-ca
+oauthSecretExtraction:
+  caCopy:
+    enabled: false        # nothing to copy
+groupSync:
+  ca:
+    kind: ConfigMap
+    name: ldap-trusted-ca
+    namespace: group-sync-operator
+    key: ca-bundle.crt    # fixed by the injector
+```
+
+Under ArgoCD the ConfigMap carries `ServerSideApply=true` so the network operator keeps ownership of
+what it wrote. That is **not sufficient alone** — the Application also needs an `ignoreDifferences`
+entry for this ConfigMap's `data`, which the chart cannot set. Without both, Argo reverts it to empty on
+every sync and verification breaks until the operator refills it.
+
+### 3. Existing — no flag, and nothing is templated
+
+Turn both off and point `groupSync.ca` at a ConfigMap you created:
+
+```bash
+oc create configmap enterprise-ldap-ca \
+  --from-file=ca.crt=/path/to/root.pem -n group-sync-operator
+```
+
+The certificate is deliberately **not** templated from values: anything in `values.yaml` ends up in
+git, in `helm get values`, and in every CI log that echoes it. RBAC follows the name you set, and the
+preflight validates it like any other.
+
+---
+
+The rest of this document covers **mode 1**, the default, where the two-ConfigMap distinction matters.
 
 ## The two ConfigMaps
 

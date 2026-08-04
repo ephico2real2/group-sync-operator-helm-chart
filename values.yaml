@@ -131,6 +131,42 @@ groupSync:
     tolerateMemberNotFoundErrors: true
     tolerateMemberOutOfScopeErrors: true
 
+# -------------------- Trusted CA injection --------------------
+# THIRD way to give the operator a CA, alongside the copy and a ConfigMap you supply. All three end at
+# the same place: whatever groupSync.ca names. See CA_CERTIFICATE_FLOW.md.
+#
+#   1. copy      oauthSecretExtraction.caCopy.enabled=true  — the Job copies sourceCa to destinationCa
+#   2. injected  trustedCA.injected.enabled=true            — OpenShift fills an empty ConfigMap
+#   3. existing  both of the above false                     — point groupSync.ca at your own ConfigMap
+#
+# Creates an EMPTY ConfigMap labelled config.openshift.io/inject-trusted-cabundle: "true", which
+# OpenShift's network operator fills with the system trust store merged with
+# proxy/cluster.spec.trustedCA. Nothing to maintain and no copy step.
+#
+# THE LIMIT, and it decides whether this is any use to you: the bundle carries only CAs the CLUSTER
+# already trusts. An LDAP server signed by a corporate CA that is in proxy/cluster.spec.trustedCA works
+# with no further setup. One signed by anything else — a lab signer, a local cert-manager root — does
+# NOT, because an empty proxy.spec.trustedCA yields nothing but public roots. Check before enabling:
+#
+#   oc get proxy cluster -o jsonpath='{.spec.trustedCA.name}{"\n"}'
+#
+# When enabled, set caCopy.enabled=false and point groupSync.ca at it — the key is ca-bundle.crt, fixed
+# by the injector, not ca.crt:
+#
+#   groupSync:
+#     ca:
+#       kind: ConfigMap
+#       name: ldap-trusted-ca
+#       namespace: group-sync-operator
+#       key: ca-bundle.crt
+trustedCA:
+  injected:
+    # Off by default: on a cluster with an empty proxy.spec.trustedCA it produces a bundle that cannot
+    # verify anything the public roots do not already cover.
+    enabled: false
+    # The ConfigMap the chart creates, empty, in groupSync.namespace.
+    name: ldap-trusted-ca
+
 # -------------------- Custom (multi-tenant) GroupSync CRs --------------------
 # Generate ONE additional GroupSync CR per team/tenant. Full guide:
 # docs/DESIGN_custom_groupsync.md
