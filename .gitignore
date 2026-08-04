@@ -1,7 +1,17 @@
 # Helm
-*.tgz
-charts/
+# Helm subchart tarballs, which live INSIDE a chart at <chart>/charts/. NOT a bare `charts/`:
+# the chart itself now lives at charts/group-sync-operator-helm, and a bare pattern makes every new
+# file under it invisible to git — `git status` shows nothing and it is silently left out of the chart.
+# The existing files survived only because `git mv` staged them while they were already tracked.
+charts/*/charts/
 Chart.lock
+
+# NOT *.tgz. chart-releaser packages the chart and, with packages_with_index, git-adds the .tgz onto
+# the gh-pages branch — which a *.tgz rule blocks, failing the release with
+# "The following paths are ignored by one of your .gitignore files: <chart>-<version>.tgz".
+# These are chart-releaser's own working directories, which is what actually wants ignoring.
+.cr-release-packages/
+.cr-index/
 
 # OS
 .DS_Store
