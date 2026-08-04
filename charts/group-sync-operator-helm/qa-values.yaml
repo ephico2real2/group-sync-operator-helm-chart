@@ -1,0 +1,53 @@
+# QA cluster: LDAPS, CA copied from the cluster's OAuth LDAP identity provider, everything else
+# discovered.
+#
+# requires-cluster: true
+#
+# Deliberately short. Almost nothing needs setting, because the chart defaults already are what you
+# want here:
+#
+#   groupSync.url                          empty -> read from the OAuth CR's first LDAP provider
+#   groupSync.insecure                     false -> the chain is verified, so a CA is required
+#   groupSync.ca                           ca-config-map-copy in the operator's namespace
+#   caCopy.enabled                         true  -> the Job copies the CA in
+#   caCopy.discoverFromOAuth               true  -> even the source ConfigMap name comes from the CR
+#   oauthSecretExtraction.bindDN           empty -> read from the same LDAP provider
+#   oauthSecretExtraction.sourceSecret     empty -> read from the same LDAP provider
+#   trustedCA.injected.enabled             false -> not using OpenShift trust injection here
+#
+# So this file sets ONLY the things no cluster can tell us: where to look in the directory, and which
+# groups to sync. Those are org decisions, not cluster facts.
+#
+#   helm install group-sync group-sync-operator/group-sync-operator-helm \
+#     -n group-sync-operator --create-namespace \
+#     -f qa-values.yaml
+#   helm test group-sync -n group-sync-operator --logs
+#
+# REQUIRES A LIVE CLUSTER. Discovery uses Helm's `lookup`, which reads the API server — so this works
+# for helm install and upgrade but NOT for `helm template`, `--dry-run`, or an offline GitOps render such
+# as ArgoCD. Set groupSync.url explicitly if you need any of those.
+#
+# Check the cluster can actually supply the rest before installing:
+#
+#   oc get oauth cluster -o jsonpath='{range .spec.identityProviders[?(@.type=="LDAP")]}{.name}{"\t"}{.ldap.url}{"\t"}{.ldap.bindDN}{"\t"}{.ldap.bindPassword.name}{"\t"}{.ldap.ca.name}{"\n"}{end}'
+#
+# Empty output means there is no LDAP identity provider to discover from, and you must set
+# groupSync.url, oauthSecretExtraction.bindDN and sourceSecret.name yourself.
+
+groupSync:
+  rfc2307:
+    # Where users live. Member DNs in your groups must resolve under this subtree, or membership comes
+    # out empty even though the groups themselves sync.
+    usersQuery:
+      baseDN: "ou=People,dc=example,dc=com"
+
+    # Which groups to sync. The filter is the safety boundary: the operator creates an OpenShift Group
+    # for every match, so an over-broad filter imports the whole directory.
+    groupsQuery:
+      baseDN: "ou=Groups,dc=example,dc=com"
+      filter: "(&(objectClass=groupOfNames)(cn=app-ocp-rbac-*))"
+
+# Off: the shipped example targets the local test directory's bda-rbac-* groups. Add tenants here when
+# QA needs a second naming pattern — see docs/DESIGN_custom_groupsync.md.
+customGroupSyncs:
+  enabled: false

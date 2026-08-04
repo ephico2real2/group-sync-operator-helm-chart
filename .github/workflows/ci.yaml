@@ -23,8 +23,11 @@ jobs:
       - name: helm lint
         run: helm lint "$CHART" -f "$CHART/crc-values.yaml"
 
-      # Every values file must render. Base values alone deliberately CANNOT — see the next step.
-      - name: Every values file renders
+      # Every values file must render — EXCEPT one that declares `# requires-cluster: true`, which
+      # relies on values being derived from the cluster's OAuth CR via `lookup`. Those cannot render
+      # offline by design, so they are asserted to fail for the documented reason instead of being
+      # skipped. Skipping would let a genuine breakage hide behind the exemption.
+      - name: Every values file renders (or fails for the documented reason)
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -33,11 +36,28 @@ jobs:
             echo "::error::no values files found under $CHART — did the chart move?"
             exit 1
           fi
+          rendered=0; cluster=0
           for f in "${files[@]}"; do
-            echo "--- $f"
-            helm template release "$CHART" -f "$f" > /dev/null
+            if grep -qE '^#\s*requires-cluster:\s*true' "$f"; then
+              if out=$(helm template release "$CHART" -f "$f" 2>&1); then
+                echo "::error file=$f::declares requires-cluster but rendered offline — either the"
+                echo "::error file=$f::marker is stale, or a value it relies on regained a default"
+                exit 1
+              fi
+              if ! grep -q 'no LDAP url could be derived' <<<"$out"; then
+                echo "::error file=$f::failed, but not for the documented reason:"
+                printf '%s\n' "$out" | tail -5
+                exit 1
+              fi
+              echo "--- $f  needs a cluster, fails as documented"
+              cluster=$((cluster + 1))
+            else
+              helm template release "$CHART" -f "$f" > /dev/null
+              echo "--- $f  renders"
+              rendered=$((rendered + 1))
+            fi
           done
-          echo "${#files[@]} values file(s) rendered"
+          echo "$rendered values file(s) rendered, $cluster requiring a live cluster"
 
       # Pins a deliberate contract: groupSync.url is empty in the base values so each cluster supplies
       # it or it is derived from the OAuth CR at install time. `helm template` cannot read a cluster, so
