@@ -1,22 +1,20 @@
-{{- /*
-Custom (multi-tenant) GroupSync CRs. See docs/DESIGN_custom_groupsync.md.
-
-For each enabled item under .Values.customGroupSyncs.items we render ONE GroupSync CR:
-  - metadata.name  = item.name          (unique -> unique ownership label)
-  - provider name  = "ldap"             (fixed, never typed by the operator)
-  - group filter   = built from item.groupCn, or item.filter for advanced override
-  - connection     = inherited from .Values.groupSync (same LDAP for the whole org)
-
-One naming pattern = one CR. Patterns must not overlap; that is guaranteed by the
-org naming standard (Kyverno later), not by this chart.
-*/ -}}
+# Custom (multi-tenant) GroupSync CRs. See docs/DESIGN_custom_groupsync.md.
+#
+# One CR per enabled item in .Values.customGroupSyncs.items:
+#   name     = item.name (unique -> unique ownership label)
+#   provider = "ldap" (fixed)
+#   filter   = built from item.groupCn, or item.filter to override
+#   conn     = inherited from .Values.groupSync
+#
+# One naming pattern = one CR. Non-overlap is guaranteed by the org naming standard, not here.
 {{- if .Values.customGroupSyncs.enabled }}
 {{- $root := . }}
 {{- range .Values.customGroupSyncs.items }}
 {{- if .enabled }}
 {{- $item := . }}
-{{- /* Build this CR's config by inheriting the base groupSync, then overriding
-       the three per-tenant fields. deepCopy so we never mutate the shared values. */ -}}
+# Inherit the base groupSync, override the three per-tenant fields. deepCopy so the shared
+# values are never mutated.
+
 {{- $cfg := deepCopy $root.Values.groupSync }}
 {{- $filter := $item.filter | default (printf "(&(objectClass=groupOfNames)(cn=%s))" $item.groupCn) }}
 {{- $_ := set $cfg.rfc2307.groupsQuery "filter" $filter }}

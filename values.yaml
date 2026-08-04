@@ -198,16 +198,10 @@ oauthSecretExtraction:
       memory: 256Mi
 
 # -------------------- InstallPlan approver --------------------
-# Only renders when subscription.installPlanApproval is "Manual". With "Automatic" (the current
-# default) OLM approves its own plans and this would be a Job that runs on every sync to find
-# nothing to do.
+# Approves the InstallPlan for this subscription so Manual approval installs unattended, while
+# later upgrades still wait for a human. Refuses any plan that does not name this subscription.
 #
-# Manual is the upgrade gate you want — OLM stages a new CSV instead of moving the operator under
-# you — but it also blocks the FIRST install: OLM stages an unapproved InstallPlan and waits for a
-# human, so an unattended install hangs with a healthy-looking Subscription and no operator. This
-# Job approves the plan for THIS subscription only, and refuses any plan that does not name it, so
-# a chart install can never push through an upgrade an admin deliberately staged for something
-# else.
+# Renders only for Manual; with Automatic, OLM approves its own plans.
 installPlanApprover:
   enabled: true
   waitSeconds: 300
@@ -228,18 +222,12 @@ installPlanApprover:
       memory: 128Mi
 
 # -------------------- Operator readiness wait --------------------
-# A Job that blocks the install until the operator is genuinely serving GroupSync, then reports.
+# A Job that blocks the install until the operator can serve GroupSync: CSV Succeeded, Deployment
+# ready, CRD Established.
 #
-# It does NOT fix the "no matches for kind GroupSync / ensure CRDs are installed first" error —
-# nothing a Job can do fixes that, because Helm resolves every kind in the release against API
-# discovery BEFORE it runs any hook, at any weight. Verified on a live cluster: a CRD placed on a
-# pre-install hook is never created, because the build fails first. That error is solved by
-# crds/groupsyncs.redhatcop.redhat.io.yaml, which Helm installs before rendering templates.
-#
-# This Job solves the failure left over: an install that reports success while nothing reconciles.
-# Helm applies unknown kinds last, sorted by kind name, and "GroupSync" sorts before
-# "Subscription" — so the CR can be created before the operator is subscribed, then sit
-# unprocessed while `helm install` exits 0.
+# Without it an install can report success while nothing reconciles — Helm applies unknown kinds
+# last by name, and "GroupSync" sorts before "Subscription", so a CR can be created before the
+# operator is subscribed.
 operatorWait:
   enabled: true
 

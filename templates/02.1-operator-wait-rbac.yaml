@@ -1,20 +1,10 @@
-{{- /*
-RBAC for the operator-readiness wait Job (02.2). Separate from the oauth-extraction
-ServiceAccount deliberately: that one holds secrets verbs including create/delete, and a Job
-whose entire purpose is to READ status has no business carrying them.
-
-NOT helm hooks, deliberately, unlike the Job that uses them. A hook resource is not recorded in
-the release manifest and is never removed by `helm uninstall` — this SA and its cluster-scoped
-binding would leak on every uninstall, forever. As ordinary resources they are release-managed and
-cleaned up, and they still exist in time: post-install hooks run after the main manifest is
-applied, and under Argo they sit at wave 0 while the Job is a Sync hook at wave 2.
-
-Cluster-scoped rather than namespaced, for one reason only: the Job checks that the GroupSync
-CRD is Established, and CustomResourceDefinition is a cluster-scoped resource. Everything else
-it reads is namespaced and could have been a Role; splitting into both to save one grant would
-add a file and a binding to save nothing, since `get` on CRDs is already the widest verb here
-and it is read-only.
-*/}}
+# RBAC for the readiness wait Job (02.2).
+#
+# Ordinary resources, not hooks — only the Job is a hook. Hooks are untracked by the release and
+# survive `helm uninstall`, so a hooked SA and cluster binding would accumulate. Post-install hooks
+# run after the main manifest, so the Job finds these.
+#
+# Cluster-scoped because it reads CustomResourceDefinition. Read-only throughout.
 {{- if and .Values.operatorWait.enabled .Values.groupSync.enabled }}
 apiVersion: v1
 kind: ServiceAccount
@@ -36,19 +26,19 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "0"
 rules:
-  # The CSV carries the only authoritative answer to "did OLM finish?" — phase=Succeeded.
+  # phase=Succeeded is the only authoritative "OLM finished".
   - apiGroups: ["operators.coreos.com"]
     resources: ["clusterserviceversions", "subscriptions", "installplans"]
     verbs: ["get", "list", "watch"]
-  # A Succeeded CSV does not mean a running pod. The Deployment's availableReplicas does.
+  # A Succeeded CSV does not mean a running pod.
   - apiGroups: ["apps"]
     resources: ["deployments"]
     verbs: ["get", "list", "watch"]
-  # The CRD must be Established before any GroupSync CR can be reconciled.
+  # The CRD must be Established before a GroupSync is accepted.
   - apiGroups: ["apiextensions.k8s.io"]
     resources: ["customresourcedefinitions"]
     verbs: ["get", "list", "watch"]
-  # Read-only. Named so a reviewer can see this Job cannot touch a GroupSync, only observe them.
+  # Read-only, so it is visible this Job cannot touch a GroupSync.
   - apiGroups: ["redhatcop.redhat.io"]
     resources: ["groupsyncs"]
     verbs: ["get", "list", "watch"]

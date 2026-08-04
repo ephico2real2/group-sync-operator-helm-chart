@@ -1,30 +1,16 @@
-# VENDORED — do not edit by hand. Refresh with scripts/refresh-crd.sh.
+# Vendored GroupSync CRD. Refresh from a cluster with the operator installed:
+#   oc get crd groupsyncs.redhatcop.redhat.io -o yaml
+# then strip uid, resourceVersion, creationTimestamp, status and the olm.managed/operatorframework
+# markers.
 #
-# WHY THIS FILE EXISTS. `helm install` resolves every kind in the release against API discovery
-# to build its object list, and that happens BEFORE any hook runs, at any weight. A release
-# holding both the Subscription and a GroupSync CR therefore cannot install on a cluster that
-# does not already have this CRD:
+# Helm installs crds/ before it renders templates, which is what lets one `helm install` contain
+# both the Subscription and a GroupSync CR. Helm resolves every kind in the release against API
+# discovery before running any hook, so no hook or weight can order around it.
 #
-#   Error: unable to build kubernetes objects from release manifest: resource mapping not found
-#   for name: "ldap-groupsync" ... no matches for kind "GroupSync" ... ensure CRDs are installed
-#   first
-#
-# Helm installs everything in crds/ BEFORE it renders templates, which is the only ordering
-# mechanism early enough to fix it. Measured, on a live cluster: a pre-install hook is NOT early
-# enough — the build fails before the hook runs, so the hook never executes at all. Neither hook
-# weights nor argocd sync-waves change this.
-#
-# WHAT IT DOES NOT AFFECT. `helm template` does not emit crds/, so ArgoCD never sees this file,
-# cannot prune it, and cannot fight OLM over it. Argo continues to rely on OLM creating the CRD
-# via the Subscription in sync-wave 0, exactly as before this file existed.
-#
-# SAFE ON THE CLUSTERS THAT ALREADY HAVE IT. Where OLM owns this CRD already, Helm skips it and
-# leaves its olm.managed label untouched; `helm uninstall` never deletes anything in crds/, so
-# removing the release can never cascade-delete a GroupSync CR. All four behaviours verified
-# against a live cluster before this was adopted.
-#
-# Source: the CRD as OLM installed it, from group-sync-operator/group-sync-operator.v0.0.36
-# OLM stays authoritative at runtime — it adopts and patches this copy on operator install.
+# helm template does not emit crds/, so ArgoCD never manages this file; under Argo the CRD comes
+# from OLM via the Subscription. Helm skips it when it already exists, and never deletes or upgrades
+# it — refresh by hand when the operator ships a new CRD version. OLM adopts and patches this copy
+# on operator install.
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:

@@ -1,28 +1,13 @@
-{{- /*
-Approve the operator's InstallPlan, so `installPlanApproval: Manual` still installs unattended.
-
-WHY IT IS GATED ON Manual. With `Automatic` OLM approves its own InstallPlans and this Job would
-be dead weight that runs on every sync to discover it has nothing to do. It renders only when
-subscription.installPlanApproval is Manual, so the chart carries the capability without paying
-for it. Today's default is Automatic, which means this file produces nothing until you change
-that.
-
-WHY YOU WOULD WANT Manual. It is the upgrade gate: OLM stages a new CSV and waits rather than
-moving the operator under you. The cost is that it also blocks the FIRST install — OLM stages an
-unapproved InstallPlan and waits for a human, so an unattended `helm install` or Argo sync hangs
-with a healthy-looking Subscription and no operator. This Job resolves that: it approves the plan
-for THIS subscription and leaves every other unapproved plan on the cluster alone.
-
-ITS RBAC IS NOT A HOOK, only the Job is. A hook resource is never recorded in the release and
-never removed by `helm uninstall`, so a hooked ServiceAccount and cluster-scoped binding would leak
-on every uninstall. Ordinary resources are release-managed and still exist in time, because
-post-install hooks run after the main manifest.
-
-SCOPED ON PURPOSE. It approves only InstallPlans whose clusterServiceVersionNames match this
-chart's subscription. A blanket "approve everything unapproved" would silently push through an
-upgrade for an unrelated operator that an admin had deliberately staged and not yet accepted —
-turning a chart install into a cluster-wide change nobody asked for.
-*/}}
+# Approves the InstallPlan for this subscription, so installPlanApproval: Manual installs
+# unattended while later upgrades still wait for a human.
+#
+# Renders only for Manual; with Automatic, OLM approves its own plans.
+#
+# Reads status.installPlanRef, falling back to scanning RequiresApproval and InstallReady for a plan
+# naming this subscription. Refuses any plan that does not name it, then waits for phase=Complete —
+# approving is not installing.
+#
+# RBAC is release-managed, not hooked (see 02.1). Only the Job is a hook.
 {{- if and .Values.installPlanApprover.enabled (eq .Values.subscription.installPlanApproval "Manual") }}
 apiVersion: v1
 kind: ServiceAccount
@@ -43,8 +28,7 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "0"
 rules:
-  # patch, not update: approval sets one field. `update` would let this SA replace the whole
-  # InstallPlan spec, which is more than approving needs.
+  # patch, not update: approval sets one field.
   - apiGroups: ["operators.coreos.com"]
     resources: ["installplans"]
     verbs: ["get", "list", "watch", "patch"]
@@ -77,15 +61,13 @@ metadata:
     {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
   namespace: {{ .Values.groupSync.namespace }}
   annotations:
-    # Wave 1: after the Subscription (wave 0) exists, before the readiness wait (wave 2). An
-    # InstallPlan cannot be approved before the Subscription that produces it.
+    # After the Subscription (0), before the readiness wait (2).
     argocd.argoproj.io/sync-wave: "1"
     argocd.argoproj.io/hook: Sync
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
     argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true,Replace=true
     helm.sh/hook: post-install,post-upgrade
-    # -1, so approval happens before the readiness wait (0) that would otherwise time out
-    # waiting for an operator whose InstallPlan nobody has approved.
+    # Before the readiness wait (0), which would otherwise time out.
     helm.sh/hook-weight: "-1"
     helm.sh/hook-delete-policy: before-hook-creation
 spec:
@@ -126,8 +108,7 @@ spec:
                    -o jsonpath="{$2}" 2>/dev/null
               }
 
-              # ---- Fast path -------------------------------------------------------------
-              # The common case on any re-sync: already approved, nothing to do, one API call.
+              # Fast path: one API call when the plan is already approved.
               PLAN="$(plan_ref)"
               if [ -n "$PLAN" ] && [ "$(plan_field "$PLAN" .spec.approved)" = "true" ]; then
                 log "InstallPlan ${PLAN} is already approved (phase=$(plan_field "$PLAN" .status.phase))"
@@ -142,11 +123,8 @@ spec:
                 log "attempt ${i}/${ATTEMPTS}: no installPlanRef yet"
                 sleep "$INTERVAL"
               done
-              # FALLBACK, taken from the in-house sample: find a staged plan directly.
-              # status.installPlanRef is the normal source, but it can lag or be cleared while a
-              # plan sits in RequiresApproval — and a plan nobody approves is exactly the state
-              # this Job exists to clear. Scanning by phase covers that without loosening the
-              # ownership check below, which still has to pass.
+              # installPlanRef can lag or clear while a plan sits in RequiresApproval. The
+              # ownership check below still applies, so this widens discovery only.
               if [ -z "$PLAN" ]; then
                 log "no installPlanRef; scanning for a staged plan that names ${SUBSCRIPTION}"
                 for phase in RequiresApproval InstallReady; do
@@ -169,11 +147,7 @@ spec:
                   oc get installplan -n ${NAMESPACE} -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,APPROVED:.spec.approved,CSV:.spec.clusterServiceVersionNames[*]
                 A missing catalog source or an unresolvable channel presents exactly like this."
 
-              # ---- Approve, but only if it is OURS ---------------------------------------
-              # Checked even though the plan came from our own subscription's installPlanRef,
-              # because OLM bundles co-installed operators into one InstallPlan. Approving is
-              # still correct there — it is what our subscription is waiting on — and logging the
-              # CSV list makes it visible when a plan carries more than this operator.
+              # OLM can bundle co-installed operators into one plan, so the CSV list is logged.
               CSVS="$(plan_field "$PLAN" '.spec.clusterServiceVersionNames[*]')"
               log "InstallPlan ${PLAN} installs: ${CSVS:-<unknown>}"
               case "$CSVS" in
@@ -190,9 +164,7 @@ spec:
                   || fail "could not patch InstallPlan ${PLAN}. Inspect: oc describe installplan ${PLAN} -n ${NAMESPACE}"
               fi
 
-              # ---- Confirm it actually completed -----------------------------------------
-              # Approving is not installing. Without this the Job succeeds the moment the patch
-              # lands, and the readiness wait that follows absorbs a failure that belongs here.
+              # Without this the Job succeeds on the patch and the failure lands on the next Job.
               log "waiting for ${PLAN} to reach Complete"
               PHASE=""
               for i in $(seq 1 "$ATTEMPTS"); do
@@ -204,8 +176,7 @@ spec:
               [ "$PHASE" = "Complete" ] || fail "${PLAN} is phase '${PHASE:-<none>}'.
                 Inspect: oc describe installplan ${PLAN} -n ${NAMESPACE}"
 
-              # Final table, from the in-house sample. Cheap, and it is the first thing anyone
-              # asks for when a later plan misbehaves — including plans this Job did not touch.
+              # Every plan in the namespace, including ones this Job did not touch.
               log "InstallPlans in ${NAMESPACE}:"
               oc get installplan -n "$NAMESPACE" --ignore-not-found=true \
                  -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,APPROVED:.spec.approved,CSV:.spec.clusterServiceVersionNames[*] \
