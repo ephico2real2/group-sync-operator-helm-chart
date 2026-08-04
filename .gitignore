@@ -18,3 +18,8 @@ Chart.lock
 # Temp directories
 temp/
 tmp/
+
+# Cluster state captured before a destructive reinstall. These hold real Group objects,
+# their LDAP source DNs and the bind credentials secret — never commit them to a chart
+# repo that gets published.
+.backup-*/

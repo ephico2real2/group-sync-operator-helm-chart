@@ -129,8 +129,24 @@ subscription:
   channel: alpha
   # Comma-separated list of namespaces for the operator to watch
   watchNamespaces: group-sync-operator,openshift-config
-  # Installation approval strategy (Automatic or Manual)
-  installPlanApproval: Automatic
+  # Installation approval strategy (Automatic or Manual).
+  #
+  # MANUAL BY DEFAULT, and that is a deliberate choice with a cost. Manual is the upgrade gate:
+  # OLM stages a new CSV and waits, instead of moving the operator under you the moment the
+  # catalog publishes one. Automatic means an operator upgrade lands unannounced, on the
+  # catalog's schedule rather than yours.
+  #
+  # The cost is that Manual also blocks the FIRST install — OLM stages an unapproved InstallPlan
+  # and waits for a human. `installPlanApprover` below resolves that by approving the plan for
+  # THIS subscription only, so an unattended install still works while a later upgrade still
+  # waits for you.
+  #
+  # IF YOU SET installPlanApprover.enabled=false WITH Manual, expect the install to fail: nobody
+  # approves the plan, so the operator never installs, and the operatorWait Job times out and
+  # fails the release rather than reporting success over a cluster with no operator. That is the
+  # correct outcome, but it is a failure, so approve by hand within operatorWait.waitSeconds if
+  # you deliberately want that shape.
+  installPlanApproval: Manual
   # Source catalog for the operator
   source: community-operators
   # Namespace where the catalog source is located
@@ -180,6 +196,65 @@ oauthSecretExtraction:
     limits:
       cpu: 200m
       memory: 256Mi
+
+# -------------------- InstallPlan approver --------------------
+# Approves the InstallPlan for this subscription so Manual approval installs unattended, while
+# later upgrades still wait for a human. Refuses any plan that does not name this subscription.
+#
+# Renders only for Manual; with Automatic, OLM approves its own plans.
+installPlanApprover:
+  enabled: true
+  waitSeconds: 300
+  # 0: retrying re-waits from zero and turns a 5-minute failure into a 30-minute one with the
+  # same message at the end.
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 300
+  image:
+    repository: registry.redhat.io/openshift4/ose-cli
+    tag: v4.14
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
+# -------------------- Operator readiness wait --------------------
+# A Job that blocks the install until the operator can serve GroupSync: CSV Succeeded, Deployment
+# ready, CRD Established.
+#
+# Without it an install can report success while nothing reconciles — Helm applies unknown kinds
+# last by name, and "GroupSync" sorts before "Subscription", so a CR can be created before the
+# operator is subscribed.
+operatorWait:
+  enabled: true
+
+  # Applies to all three checks together (CSV Succeeded, Deployment available, CRD Established),
+  # not per check. 300s covers a cold catalog pull on a slow cluster. A Manual
+  # installPlanApproval with nobody to approve it will use the whole budget and then fail with
+  # the command to run — which is the right outcome, since it genuinely is not installed.
+  waitSeconds: 300
+
+  # 0, not the default 6. Retrying a timeout re-waits from zero and turns a 5-minute failure into
+  # a 30-minute one, with the same message at the end.
+  backoffLimit: 0
+
+  ttlSecondsAfterFinished: 300
+
+  image:
+    repository: registry.redhat.io/openshift4/ose-cli
+    tag: v4.14
+    pullPolicy: IfNotPresent
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
 
 # -------------------- Test Configuration --------------------
 # Controls settings for the Helm tests

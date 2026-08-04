@@ -1,0 +1,62 @@
+# RBAC for the readiness wait Job (02.2).
+#
+# Ordinary resources, not hooks — only the Job is a hook. Hooks are untracked by the release and
+# survive `helm uninstall`, so a hooked SA and cluster binding would accumulate. Post-install hooks
+# run after the main manifest, so the Job finds these.
+#
+# Cluster-scoped because it reads CustomResourceDefinition. Read-only throughout.
+{{- if and .Values.operatorWait.enabled .Values.groupSync.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "group-sync-operator-helm.fullname" . }}-operator-wait
+  namespace: {{ .Values.groupSync.namespace }}
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+  annotations:
+    # Wave 0 so the SA and binding exist before the wait Job's Sync hook at wave 1.
+    argocd.argoproj.io/sync-wave: "0"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "group-sync-operator-helm.fullname" . }}-operator-wait
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+rules:
+  # phase=Succeeded is the only authoritative "OLM finished".
+  - apiGroups: ["operators.coreos.com"]
+    resources: ["clusterserviceversions", "subscriptions", "installplans"]
+    verbs: ["get", "list", "watch"]
+  # A Succeeded CSV does not mean a running pod.
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+  # The CRD must be Established before a GroupSync is accepted.
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch"]
+  # Read-only, so it is visible this Job cannot touch a GroupSync.
+  - apiGroups: ["redhatcop.redhat.io"]
+    resources: ["groupsyncs"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "group-sync-operator-helm.fullname" . }}-operator-wait
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "group-sync-operator-helm.fullname" . }}-operator-wait
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "group-sync-operator-helm.fullname" . }}-operator-wait
+    namespace: {{ .Values.groupSync.namespace }}
+{{- end }}

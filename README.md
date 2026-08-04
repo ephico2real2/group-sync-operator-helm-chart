@@ -10,6 +10,65 @@
 
 This Helm chart deploys the Group Sync Operator and configures LDAP group synchronization in OpenShift environments.
 
+
+## Install ordering, and why `helm install` used to fail
+
+A single `helm install` on a cluster without the operator failed like this:
+
+```
+Error: INSTALLATION FAILED: unable to build kubernetes objects from release manifest:
+  resource mapping not found for name: "ldap-groupsync" ... no matches for kind "GroupSync"
+  in version "redhatcop.redhat.io/v1alpha1"  ensure CRDs are installed first
+```
+
+**Helm resolves every kind in the release against API discovery to build its object list, and
+that happens before it runs any hook, at any weight.** So neither hook weights nor
+`argocd.argoproj.io/sync-wave` can fix it — the annotations are read long after the failure.
+Measured on a live cluster:
+
+| Attempt | Result |
+|---|---|
+| CR as a `post-install` hook, weight 99 | fails — `unable to build kubernetes object for deleting hook` |
+| CR as a normal resource with `sync-wave: 3` | fails — `unable to build kubernetes objects from release manifest` |
+| CRD on a `pre-install` hook, weight −10 | fails, **and the hook never runs** — the build fails first |
+| CRD in `crds/` | **works** |
+
+That is why `crds/groupsyncs.redhatcop.redhat.io.yaml` exists. Helm installs everything in
+`crds/` before it renders templates, which is early enough. Four properties were verified before
+adopting it:
+
+- on a cluster that already has the CRD from OLM, Helm **skips** it and leaves `olm.managed=true` intact
+- `helm uninstall` never deletes anything in `crds/`, so removing the release cannot cascade-delete a GroupSync CR
+- `helm template` does **not** emit `crds/`, so **ArgoCD never sees the file** — it cannot prune it or fight OLM over it
+- under Argo the CRD still comes from OLM at wave 0, exactly as before
+
+The trade-off, stated plainly: it is a vendored copy of an OLM-owned CRD, and Helm never updates
+`crds/` on upgrade. If the operator ships a new CRD version, refresh the file. OLM remains
+authoritative at runtime — it adopts and patches this copy on operator install.
+
+### The wait Jobs
+
+Fixing the build error leaves a second failure: an install that reports success while nothing is
+reconciling. Helm orders unknown kinds last, sorted by kind name, and `GroupSync` sorts before
+`Subscription` — so the CR can be created before the operator is even subscribed, then sit
+unprocessed while `helm install` exits 0. Under Argo, a Subscription reports Healthy before its
+operator pod is running. Either way the symptom is an absence: no Groups appear and nothing errors.
+
+| Job | When | What it blocks on |
+|---|---|---|
+| `installplan-approver` | wave 1, only when `subscription.installPlanApproval: Manual` | the Subscription's InstallPlan is approved and reaches `Complete` |
+| `operator-wait` | wave 2 | the CSV is `Succeeded`, the operator Deployment has a ready replica, and the CRD is `Established` |
+
+Both carry `argocd.argoproj.io/hook: Sync` so Argo runs them inside the sync at their wave — early
+enough to gate the CRs in wave 3 — and `helm.sh/hook` so plain `helm install` waits for them at
+all: a Job in the main manifest is created and not waited on unless `--wait` is passed. Both
+fast-path to `exit 0` when the cluster is already ready, so a re-sync costs one round of API calls.
+
+The approver is scoped to this chart's subscription and **refuses** an InstallPlan that does not
+name it, so a chart install can never push through an upgrade an admin deliberately staged for
+some other operator.
+
+
 ## Adding the Helm Repository
 
 ```bash
