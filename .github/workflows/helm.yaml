@@ -6,13 +6,19 @@ on:
       - main
 
 jobs:
+  # The same checks that run on every PR, called rather than duplicated. Without this, a direct push to
+  # main — or a merge landing while branch protection is off — would publish unvalidated.
+  validate:
+    uses: ./.github/workflows/ci.yaml
+
   release:
+    needs: validate
     permissions:
       contents: write
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
@@ -22,8 +28,11 @@ jobs:
           git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
 
       - name: Install Helm
-        uses: azure/setup-helm@v3
+        uses: azure/setup-helm@v4
 
+      # charts_dir defaults to `charts`, which is why the chart lives at
+      # charts/group-sync-operator-helm. While it sat at the repo root this action found nothing to
+      # package and published nothing.
       - name: Run chart-releaser
         uses: helm/chart-releaser-action@v1.6.0
         with:

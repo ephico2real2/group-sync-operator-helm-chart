@@ -574,7 +574,7 @@ The following tables list the configurable parameters and their default values.
 | groupSync.schedule | Sync schedule (cron format) | "*/30 * * * *" |
 | groupSync.providerName | LDAP provider name | ldap |
 | groupSync.insecure | `false` verifies the chain. A CA is required for `ldaps://` either way | false |
-| groupSync.url | LDAP server URL. Leave empty to derive it from the OAuth CR | ldaps://openldap-service.ldap-testing.svc.cluster.local:636 |
+| groupSync.url | LDAP server URL. **Empty by default** — supply it per cluster, or leave it out and it is derived from the OAuth CR at install time (not available to `helm template`) | `""` |
 
 ### Multi-Tenant GroupSync Configuration
 
