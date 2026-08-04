@@ -115,12 +115,54 @@ spec:
                 exit 0
               fi
 
-              # ---- Wait for OLM to stage a plan ------------------------------------------
-              log "waiting for subscription ${SUBSCRIPTION} to reference an InstallPlan"
+              csv_phase() {
+                oc get csv -n "$NAMESPACE" --ignore-not-found=true \
+                   -o jsonpath='{range .items[*]}{.metadata.name}{"|"}{.status.phase}{"\n"}{end}' \
+                  2>/dev/null | grep "^${SUBSCRIPTION}\." | head -1
+              }
+
+              # ---- Wait for a plan, OR for the operator to be installed without one ---------
+              # OLM stages an InstallPlan only when there is work to do. Reinstalling over a CSV
+              # that a previous `helm uninstall` left behind produces no plan at all, and the
+              # Subscription's installPlanRef stays empty — so waiting only for a plan runs to
+              # DeadlineExceeded on a cluster where the operator is already fine. Either outcome
+              # ends this Job: a plan to approve, or a Succeeded CSV meaning nothing needs approving.
+              # ResolutionFailed means OLM will never stage a plan, so waiting is pointless. The
+              # usual cause is an orphaned CSV: `helm uninstall` removes the Subscription and OLM
+              # leaves the CSV, then a new Subscription cannot resolve against an unreferenced CSV of
+              # the same package. Detected rather than waited out, because the alternative is
+              # DeadlineExceeded minutes later with nothing pointing at the cause.
+              resolution_failure() {
+                oc get subscription "$SUBSCRIPTION" -n "$NAMESPACE" --ignore-not-found=true \
+                   -o jsonpath='{range .status.conditions[?(@.type=="ResolutionFailed")]}{.status}{"|"}{.message}{end}' \
+                  2>/dev/null
+              }
+
+              log "waiting for an InstallPlan for ${SUBSCRIPTION}, or for its CSV to be Succeeded"
               for i in $(seq 1 "$ATTEMPTS"); do
                 PLAN="$(plan_ref)"
                 [ -n "$PLAN" ] && { log "subscription references InstallPlan ${PLAN}"; break; }
-                log "attempt ${i}/${ATTEMPTS}: no installPlanRef yet"
+                CSV="$(csv_phase)"
+                if [ "${CSV#*|}" = "Succeeded" ]; then
+                  log "${CSV%|*} is Succeeded and no InstallPlan is pending — nothing to approve"
+                  exit 0
+                fi
+                RES="$(resolution_failure)"
+                if [ "${RES%%|*}" = "True" ]; then
+                  echo "[installplan-approver] FAILED: OLM cannot resolve subscription ${SUBSCRIPTION}, so no InstallPlan will ever be staged." >&2
+                  echo "  ${RES#*|}" >&2
+                  case "$RES" in
+                    *"is not referenced by a subscription"*)
+                      echo "" >&2
+                      echo "  An orphaned ClusterServiceVersion is blocking it. helm uninstall removes the" >&2
+                      echo "  Subscription and OLM leaves the CSV behind, which a new Subscription cannot" >&2
+                      echo "  resolve against. Remove it and reinstall:" >&2
+                      oc get csv -n "$NAMESPACE" --ignore-not-found=true -o name 2>/dev/null \
+                        | grep "${SUBSCRIPTION}\." | sed "s|^|    oc delete -n ${NAMESPACE} |" >&2 ;;
+                  esac
+                  exit 1
+                fi
+                log "attempt ${i}/${ATTEMPTS}: no installPlanRef, csv=${CSV:-<none>}"
                 sleep "$INTERVAL"
               done
               # installPlanRef can lag or clear while a plan sits in RequiresApproval. The

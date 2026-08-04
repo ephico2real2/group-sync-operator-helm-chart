@@ -54,8 +54,10 @@ metadata:
   labels:
     {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
 rules:
+# Follows groupSync.ca.kind: the CA can be a Secret copied into this namespace or a ConfigMap
+# referenced directly, and granting the wrong one leaves the test unable to read it.
 - apiGroups: [""]
-  resources: ["configmaps"]
+  resources: [{{ if eq (.Values.groupSync.ca.kind | default "Secret") "Secret" }}"secrets"{{ else }}"configmaps"{{ end }}]
   verbs: ["get", "list"]
   resourceNames: ["{{ .Values.groupSync.ca.name }}"]
 ---

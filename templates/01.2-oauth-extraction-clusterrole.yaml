@@ -32,5 +32,20 @@ rules:
 - apiGroups: [""]
   resources: ["namespaces"]
   verbs: ["get"]
+{{- if include "group-sync-operator-helm.needsCa" .Values.groupSync }}
+# Read the CA that groupSync.ca points at, so the preflight can verify it before the operator
+# reconciles. Named, so this SA cannot read anything else in that namespace.
+- apiGroups: [""]
+  resources: [{{ if eq (.Values.groupSync.ca.kind | default "ConfigMap") "Secret" }}"secrets"{{ else }}"configmaps"{{ end }}]
+  verbs: ["get", "list"]
+  resourceNames: ["{{ .Values.groupSync.ca.name }}"]
+{{- if .Values.oauthSecretExtraction.caCopy.enabled }}
+# The Secret the CA is copied into by the fallback.
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list", "create", "update", "patch"]
+  resourceNames: ["{{ .Values.oauthSecretExtraction.caCopy.targetSecret.name }}"]
+{{- end }}
+{{- end }}
 {{- end }}
 

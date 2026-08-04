@@ -56,6 +56,15 @@ CR (custom-groupsync.yaml). The caller passes a config dict shaped exactly like
 .Values.groupSync (schedule, providerName, url, insecure, ca, credentialsSecret,
 rfc2307). Keeping one copy here means the two templates can never drift apart.
 */}}
+{{/*
+True when the provider needs CA material: an ldaps:// URL always does, and insecure=false does even
+over plain ldap://. insecure only relaxes verification the operator performs itself; it cannot make
+a TLS handshake trust an unknown root.
+*/}}
+{{- define "group-sync-operator-helm.needsCa" -}}
+{{- if or (hasPrefix "ldaps://" (.url | default "")) (not .insecure) -}}true{{- end -}}
+{{- end }}
+
 {{- define "group-sync-operator-helm.groupsyncSpec" -}}
 spec:
   schedule: {{ .schedule | quote }}
@@ -65,11 +74,17 @@ spec:
         url: {{ .url | quote }}
         insecure: {{ .insecure | default false }}
         prune: true
-        {{- if not .insecure }}
-        ca:
-          kind: ConfigMap
+        {{- if include "group-sync-operator-helm.needsCa" . }}
+        # Emitted for ldaps:// even when insecure is true — the handshake still needs the root.
+        #
+        # Field name comes from groupSync.ca.field. The CRD carries both `ca` and `caSecret` and
+        # marks caSecret deprecated, but operator validation checks caSecret: with only `ca` set it
+        # fails every reconcile with "caSecret must be specified when insecure=false". Both accept
+        # kind ConfigMap|Secret and resolve namespace, so the body is identical either way.
+        {{ .ca.field | default "caSecret" }}:
+          kind: {{ .ca.kind | default "ConfigMap" }}
           name: {{ .ca.name }}
-          key: {{ .ca.key }}
+          key: {{ .ca.key | default "ca.crt" }}
           namespace: {{ .ca.namespace }}
         {{- end }}
         credentialsSecret:
