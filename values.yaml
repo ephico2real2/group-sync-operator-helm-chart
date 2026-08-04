@@ -11,6 +11,15 @@
 # and stable: "group-sync-operator-oauth-secret-extraction".
 fullnameOverride: group-sync-operator
 
+# -------------------- Namespace --------------------
+# OFF by default. Use `--create-namespace` for helm; ArgoCD's Application sets CreateNamespace=true.
+#
+# Enabling it fails whenever the namespace already exists (Helm refuses to adopt it) and whenever
+# --create-namespace is passed (Helm creates it, then this tries to create it again). It is here for
+# a GitOps tool that applies the rendered manifest into a cluster where the namespace is absent.
+namespace:
+  create: false
+
 # -------------------- GroupSync CR Configuration --------------------
 # Controls the main GroupSync custom resource configuration
 groupSync:

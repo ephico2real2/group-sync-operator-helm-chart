@@ -46,6 +46,34 @@ The trade-off, stated plainly: it is a vendored copy of an OLM-owned CRD, and He
 `crds/` on upgrade. If the operator ships a new CRD version, refresh the file. OLM remains
 authoritative at runtime — it adopts and patches this copy on operator install.
 
+### The namespace
+
+Pass `--create-namespace`. ArgoCD does not need it — the Application sets `CreateNamespace=true`.
+
+`templates/00-namespace.yaml` is **off by default** and is not a helm hook. As a `pre-install` hook
+it deleted a pre-existing namespace and everything in it, because Helm's default hook-delete-policy
+is `before-hook-creation` and no policy value means "never delete". Measured behaviour of the
+alternatives:
+
+| Namespace template | Namespace state | Result |
+|---|---|---|
+| `pre-install` hook | already exists | **deleted, with its contents** |
+| `pre-install` hook | absent, no `--create-namespace` | fails: `namespaces "X" not found` |
+| plain resource | already exists | fails safely: Helm refuses to adopt it |
+| plain resource | absent + `--create-namespace` | fails: `namespaces "X" already exists` |
+
+So it is enabled only for a GitOps tool that applies the rendered manifest where the namespace is
+absent. Everything else uses `--create-namespace` or `CreateNamespace=true`.
+
+If a namespace is mid-deletion every create against it is rejected, and the install fails until it
+finishes. What is holding it:
+
+```bash
+oc get ns group-sync-operator -o jsonpath='{range .status.conditions[*]}{.type}: {.message}{"\n"}{end}'
+```
+
+Usually a non-Available APIService or a resource with a finalizer.
+
 ### The wait Jobs
 
 Fixing the build error leaves a second failure: an install that reports success while nothing is
@@ -479,7 +507,8 @@ oc create secret generic ldap-group-sync \
   -n group-sync-operator
 
 # Install the chart
-helm install group-sync group-sync-operator/group-sync-operator-helm -n group-sync-operator
+helm install group-sync group-sync-operator/group-sync-operator-helm \
+  -n group-sync-operator --create-namespace
 ```
 
 ## Configuration
@@ -547,7 +576,8 @@ See [Multi-Tenant GroupSync](#multi-tenant-groupsync-customgroupsyncs) for usage
 To override the default values, create a `values.yaml` file and pass it to the helm install command:
 
 ```bash
-helm install group-sync group-sync-operator/group-sync-operator-helm -n group-sync-operator -f values.yaml
+helm install group-sync group-sync-operator/group-sync-operator-helm \
+  -n group-sync-operator --create-namespace -f values.yaml
 ```
 
 ## Notes

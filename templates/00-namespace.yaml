@@ -1,3 +1,16 @@
+# OFF by default, and NOT a helm hook.
+#
+# As a pre-install hook this DELETED a pre-existing namespace and everything in it: Helm's default
+# hook-delete-policy is before-hook-creation, and there is no policy value meaning "never delete".
+#
+# It also cannot help a first `helm install` — Helm writes its release secret into the target
+# namespace before hooks run — and it conflicts with --create-namespace, which creates a namespace
+# this manifest then tries to create again.
+#
+# Use --create-namespace for helm, CreateNamespace=true for ArgoCD (the Application sets it). Enable
+# this only for a GitOps tool that applies the rendered manifest into a cluster where the namespace
+# does not exist.
+{{- if .Values.namespace.create }}
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -7,7 +20,4 @@ metadata:
     app.kubernetes.io/component: namespace
   annotations:
     argocd.argoproj.io/sync-wave: "-2"
-    helm.sh/hook: pre-install
-    helm.sh/hook-weight: "-10"
----
-
+{{- end }}
