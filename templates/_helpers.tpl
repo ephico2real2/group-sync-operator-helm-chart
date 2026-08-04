@@ -71,7 +71,7 @@ spec:
   providers:
     - name: {{ .providerName }}
       ldap:
-        url: {{ .url | quote }}
+        url: {{ include "group-sync-operator-helm.ldapUrl" . | quote }}
         insecure: {{ .insecure | default false }}
         prune: true
         {{- if include "group-sync-operator-helm.needsCa" . }}
@@ -141,5 +141,40 @@ copies that one, but this trigger still follows the configured name.
 {{- toYaml $cm.data | sha256sum | trunc 16 -}}
 {{- else -}}
 unavailable
+{{- end -}}
+{{- end }}
+
+{{/*
+The LDAP url for a provider. Returns .url when set; derives it from the cluster OAuth CR when empty.
+
+The OAuth LDAP identity provider's url is an RFC 2255 LDAP URL — scheme://host:port/basedn?attrs?scope?filter
+— so everything from the first / onwards is the search definition and belongs to authentication, not to
+group sync. Only scheme://host:port is taken, which is exactly what the GroupSync provider wants, and it
+carries ldap:// vs ldaps:// with it.
+
+The first LDAP provider wins. A cluster with several normally points them all at one directory,
+differing only in the basedn that is being stripped anyway.
+
+lookup reads the LIVE cluster, so this resolves during helm install/upgrade only. With .url empty and
+no cluster to read — helm template, --dry-run, an offline GitOps render — there is nothing to derive
+from and the render fails rather than emitting a GroupSync with no url.
+*/}}
+{{- define "group-sync-operator-helm.ldapUrl" -}}
+{{- if .url -}}
+{{- .url -}}
+{{- else -}}
+{{- $found := "" -}}
+{{- $oauth := lookup "config.openshift.io/v1" "OAuth" "" "cluster" -}}
+{{- if $oauth -}}
+{{- range $idp := ((($oauth.spec) | default dict).identityProviders | default list) -}}
+{{- if and (eq (toString $idp.type) "LDAP") (not $found) -}}
+{{- $found = regexFind "^ldaps?://[^/]+" ((($idp.ldap) | default dict).url | default "") -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if not $found -}}
+{{- fail (printf "groupSync.url is empty and no LDAP url could be derived from the cluster OAuth CR.\n  Either set groupSync.url, or install against a cluster whose OAuth CR has an LDAP identity provider.\n  Note that `helm template` and --dry-run cannot read the cluster at all, so url must be set for those.") -}}
+{{- end -}}
+{{- $found -}}
 {{- end -}}
 {{- end }}
