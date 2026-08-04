@@ -23,3 +23,6 @@ tmp/
 # their LDAP source DNs and the bind credentials secret — never commit them to a chart
 # repo that gets published.
 .backup-*/
+
+# Local backups taken by 15-bootstrap-cert-manager-ca.sh before replacing a CA ConfigMap.
+setup-local-ldap-testing/.ca-configmap-backup/

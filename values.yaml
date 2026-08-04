@@ -200,18 +200,33 @@ oauthSecretExtraction:
     name: ldap-group-sync
     namespace: group-sync-operator
 
-  # Optional fallback: copy the CA into a Secret in groupSync.namespace instead of referencing it in
-  # place. Off, because the operator's ServiceAccount can read openshift-config directly.
+  # Copies the CA the cluster's OAuth LDAP identity provider already trusts into
+  # groupSync.namespace, so the operator reads it from its own namespace.
   #
-  # Turn it on where the operator is denied the source namespace, then set groupSync.ca to
-  # kind Secret, name = targetSecret.name, namespace = groupSync.namespace.
+  # On by default. Referencing openshift-config in place needs cross-namespace ConfigMap read,
+  # which the operator has on some clusters and not others, and where it is denied the only symptom
+  # is the operator reconciling forever on "ConfigMap ... not found". A local copy removes the
+  # dependency, so groupSync.ca should point at the target below.
   caCopy:
-    enabled: false
+    enabled: true
+
+    # Reads the ConfigMap name from the OAuth CR's LDAP identity provider rather than trusting
+    # sourceConfigMap.name, so a cluster that named it something else still works. Falls back to the
+    # configured name when the OAuth CR has no LDAP provider.
+    #
+    # Only the NAME is discovered: oauth.spec.identityProviders[].ldap.ca is a name-only reference,
+    # and the API fixes the namespace to openshift-config and the key to ca.crt.
+    discoverFromOAuth: true
+
     sourceConfigMap:
       name: ca-config-map
       namespace: openshift-config
       key: ca.crt
-    targetSecret:
+
+    # ConfigMap, not Secret: a CA is public, and groupSync.ca.kind defaults to ConfigMap. Set kind
+    # to Secret to keep it out of reach of namespace readers.
+    target:
+      kind: ConfigMap
       name: ldap-ca
       key: ca.crt
 

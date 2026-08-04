@@ -31,9 +31,12 @@ groupSync:
     # its Service DNS name. Use ca-config-map in openshift-config instead when the LDAP server has
     # an enterprise certificate.
     kind: ConfigMap
-    name: openshift-service-ca.crt
+    # The copy the extraction job writes into this namespace, not the source in
+    # openshift-config. Cross-namespace ConfigMap read is granted on some clusters and
+    # denied on others, and where denied the operator just loops on "ConfigMap not found".
+    name: ldap-ca
     namespace: group-sync-operator
-    key: service-ca.crt
+    key: ca.crt
 
   credentialsSecret:
     name: ldap-group-sync

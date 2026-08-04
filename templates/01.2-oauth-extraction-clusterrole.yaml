@@ -40,12 +40,66 @@ rules:
   verbs: ["get", "list"]
   resourceNames: ["{{ .Values.groupSync.ca.name }}"]
 {{- if .Values.oauthSecretExtraction.caCopy.enabled }}
-# The Secret the CA is copied into by the fallback.
+# The copy target in groupSync.namespace, which is what groupSync.ca should point at.
 - apiGroups: [""]
-  resources: ["secrets"]
-  verbs: ["get", "list", "create", "update", "patch"]
-  resourceNames: ["{{ .Values.oauthSecretExtraction.caCopy.targetSecret.name }}"]
+  resources: [{{ if eq (.Values.oauthSecretExtraction.caCopy.target.kind | default "ConfigMap") "Secret" }}"secrets"{{ else }}"configmaps"{{ end }}]
+  verbs: ["get", "update", "patch"]
+  resourceNames: ["{{ .Values.oauthSecretExtraction.caCopy.target.name }}"]
+# create takes no resourceNames — RBAC ignores them for create, so the name cannot be pinned here.
+- apiGroups: [""]
+  resources: [{{ if eq (.Values.oauthSecretExtraction.caCopy.target.kind | default "ConfigMap") "Secret" }}"secrets"{{ else }}"configmaps"{{ end }}]
+  verbs: ["create"]
+{{- if .Values.oauthSecretExtraction.caCopy.discoverFromOAuth }}
+# Discovery reads the ConfigMap name off the cluster OAuth CR. Cluster-scoped, so it must live in
+# a ClusterRole, and pinned to the one object named "cluster".
+- apiGroups: ["config.openshift.io"]
+  resources: ["oauths"]
+  verbs: ["get"]
+  resourceNames: ["cluster"]
 {{- end }}
 {{- end }}
+{{- end }}
+{{- end }}
+{{- if and .Values.oauthSecretExtraction.enabled .Values.oauthSecretExtraction.caCopy.enabled (include "group-sync-operator-helm.needsCa" .Values.groupSync) }}
+---
+# A Role, not more ClusterRole rules. The source name is not known until the Job reads the OAuth
+# CR, and an unpinned rule in a ClusterRole would grant it in EVERY namespace. Scoped here to the
+# one namespace that holds it.
+#
+# get alone is not enough: listing is how the Job reports the available keys when the expected one
+# is missing, and RBAC does not honour resourceNames for list.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "group-sync-operator-helm.fullname" . }}-oauth-ca-read
+  namespace: {{ .Values.oauthSecretExtraction.caCopy.sourceConfigMap.namespace }}
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: oauth-secret-extraction
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+rules:
+- apiGroups: [""]
+  resources: ["configmaps"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "group-sync-operator-helm.fullname" . }}-oauth-ca-read
+  namespace: {{ .Values.oauthSecretExtraction.caCopy.sourceConfigMap.namespace }}
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: oauth-secret-extraction
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "group-sync-operator-helm.fullname" . }}-oauth-ca-read
+subjects:
+- kind: ServiceAccount
+  name: {{ .Values.oauthSecretExtraction.serviceAccount.name }}
+  namespace: {{ .Values.groupSync.namespace }}
 {{- end }}
 

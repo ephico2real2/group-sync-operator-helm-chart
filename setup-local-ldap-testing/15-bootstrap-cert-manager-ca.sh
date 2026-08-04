@@ -354,9 +354,23 @@ print(json.dumps({'spec':{
   'securityContext':{'runAsNonRoot':True,'seccompProfile':{'type':'RuntimeDefault'}},
   'volumes':[{'name':'ca','configMap':{'name':'${CA_CONFIGMAP_NAME}'}}]}}))")
 
-  oc run "ldaps-verify-$$" -n "$OPERATOR_NS" --rm -i --restart=Never \
-     --image=registry.redhat.io/rhel9/openssl:latest \
-     --overrides="$overrides" 2>&1 | sed 's/^/  /'
+  # Asserted on the success string, not on an exit code. oc run's status is masked by the pipe, and
+  # a chain that fails to verify still produces output — so a missing "Verify return code: 0" is the
+  # only reliable signal that this did NOT pass.
+  local out
+  out=$(oc run "ldaps-verify-$$" -n "$OPERATOR_NS" --rm -i --restart=Never \
+        --image=registry.redhat.io/rhel9/openssl:latest \
+        --overrides="$overrides" 2>&1) || true
+  printf '%s\n' "$out" | sed 's/^/  /'
+
+  printf '%s' "$out" | grep -q 'Verify return code: 0 (ok)' \
+    || die "the LDAPS endpoint did not verify against ${CA_CONFIGMAP_NAME}.
+  Either the endpoint is not serving the cert-manager certificate (run switch-ldap), or the CA in
+  the ConfigMap is not the one that signed it (run apply)."
+
+  printf '%s' "$out" | grep -q "DNS:${SAN_FQDN}" \
+    || die "the served certificate has no SAN for ${SAN_FQDN}, so a verifying client will reject it."
+  log "verified: chain OK and SAN matches ${SAN_FQDN}"
 }
 
 cmd_delete() {
