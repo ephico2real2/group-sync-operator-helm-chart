@@ -1,0 +1,30 @@
+apiVersion: v1
+entries:
+  group-sync-operator-helm:
+  - annotations:
+      artifacthub.io/operator: "true"
+      artifacthub.io/operatorCapabilities: Basic Install
+    apiVersion: v2
+    appVersion: "1.1"
+    created: "2026-08-04T23:42:11.585955683Z"
+    description: A Helm chart to deploy the GroupSync Operator and its configuration
+      for LDAP synchronization in OpenShift
+    digest: b935118e3937f0eb00759bd5a24d6c6a174c4dc6b36f58679b4e3eab89404a8b
+    home: https://github.com/ephico2real2/group-sync-operator-helm-chart
+    icon: https://raw.githubusercontent.com/redhat-cop/group-sync-operator/master/assets/logo.png
+    keywords:
+    - openshift
+    - ldap
+    - group-sync
+    - operator
+    maintainers:
+    - name: ephico2real2
+    name: group-sync-operator-helm
+    sources:
+    - https://github.com/ephico2real2/group-sync-operator-helm-chart
+    - https://github.com/redhat-cop/group-sync-operator
+    type: application
+    urls:
+    - group-sync-operator-helm-0.3.0.tgz
+    version: 0.3.0
+generated: "2026-08-04T23:42:11.585963358Z"
