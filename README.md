@@ -46,6 +46,31 @@ The trade-off, stated plainly: it is a vendored copy of an OLM-owned CRD, and He
 `crds/` on upgrade. If the operator ships a new CRD version, refresh the file. OLM remains
 authoritative at runtime — it adopts and patches this copy on operator install.
 
+### The namespace
+
+`--create-namespace` is required on a first install. Helm writes its release secret into the target
+namespace before pre-install hooks run, so `templates/00-namespace.yaml` cannot create it in time:
+
+```
+Error: INSTALLATION FAILED: create: failed to create: namespaces "group-sync-operator" not found
+```
+
+ArgoCD does not need it — the Application sets `CreateNamespace=true`.
+
+If the namespace is mid-deletion, every create against it is rejected and the install fails on the
+hook instead:
+
+```
+Error: failed pre-install: Hook pre-install .../00-namespace.yaml failed:
+  object is being deleted: namespaces "group-sync-operator" already exists
+```
+
+Wait for `oc get ns group-sync-operator` to return NotFound, then install. If it never finishes,
+`oc get ns group-sync-operator -o jsonpath='{range .status.conditions[*]}{.type}: {.message}{"\n"}{end}'`
+names what is holding it — usually a non-Available APIService or a resource with a finalizer.
+
+Set `namespace.create=false` where the namespace is managed elsewhere.
+
 ### The wait Jobs
 
 Fixing the build error leaves a second failure: an install that reports success while nothing is
@@ -479,7 +504,8 @@ oc create secret generic ldap-group-sync \
   -n group-sync-operator
 
 # Install the chart
-helm install group-sync group-sync-operator/group-sync-operator-helm -n group-sync-operator
+helm install group-sync group-sync-operator/group-sync-operator-helm \
+  -n group-sync-operator --create-namespace
 ```
 
 ## Configuration
@@ -547,7 +573,8 @@ See [Multi-Tenant GroupSync](#multi-tenant-groupsync-customgroupsyncs) for usage
 To override the default values, create a `values.yaml` file and pass it to the helm install command:
 
 ```bash
-helm install group-sync group-sync-operator/group-sync-operator-helm -n group-sync-operator -f values.yaml
+helm install group-sync group-sync-operator/group-sync-operator-helm \
+  -n group-sync-operator --create-namespace -f values.yaml
 ```
 
 ## Notes

@@ -11,6 +11,16 @@
 # and stable: "group-sync-operator-oauth-secret-extraction".
 fullnameOverride: group-sync-operator
 
+# -------------------- Namespace --------------------
+# Renders the target Namespace. Helm stores its release secret in that namespace before pre-install
+# hooks run, so this does NOT remove the need for `--create-namespace` on a first install; ArgoCD
+# covers it with CreateNamespace=true.
+#
+# Set false when the namespace is managed elsewhere. A create against a Terminating namespace fails
+# the install, so this is the switch to reach for if that happens.
+namespace:
+  create: true
+
 # -------------------- GroupSync CR Configuration --------------------
 # Controls the main GroupSync custom resource configuration
 groupSync:
