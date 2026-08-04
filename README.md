@@ -10,6 +10,44 @@
 
 This Helm chart deploys the Group Sync Operator and configures LDAP group synchronization in OpenShift environments.
 
+## Quick start
+
+```bash
+helm repo add group-sync-operator https://ephico2real2.github.io/group-sync-operator-helm-chart
+helm repo update
+helm search repo group-sync-operator-helm
+```
+
+Then install with a values file for your cluster. `groupSync.url`, `oauthSecretExtraction.bindDN` and
+`sourceSecret.name` are **empty** in the chart defaults — supply them, or leave them out and they are
+read from the cluster's OAuth LDAP identity provider at install time:
+
+```bash
+helm install group-sync group-sync-operator/group-sync-operator-helm \
+  -n group-sync-operator --create-namespace \
+  -f my-cluster-values.yaml
+
+helm test group-sync -n group-sync-operator --logs
+```
+
+A minimal `my-cluster-values.yaml` for a directory the cluster does **not** authenticate against:
+
+```yaml
+groupSync:
+  url: "ldaps://ldap.example.com:636"
+oauthSecretExtraction:
+  bindDN: "cn=svc-bind,ou=TrustedApplications,dc=example,dc=com"
+  sourceSecret:
+    name: ldap-secret          # in openshift-config, key bindPassword
+```
+
+Working examples live in the chart: `crc-values.yaml` (LDAPS with the CA copied),
+`crc-injected-values.yaml` (LDAPS via OpenShift trusted-CA injection) and
+`environments/ldap-plain-values.yaml` (plain LDAP, no cert-manager). See
+[CA_CERTIFICATE_FLOW.md](CA_CERTIFICATE_FLOW.md) for how the CA reaches the operator, and
+[setup-local-ldap-testing/](setup-local-ldap-testing/) to stand up a test directory.
+
+
 
 ## Install ordering, and why `helm install` used to fail
 
@@ -96,19 +134,6 @@ The approver is scoped to this chart's subscription and **refuses** an InstallPl
 name it, so a chart install can never push through an upgrade an admin deliberately staged for
 some other operator.
 
-
-## Adding the Helm Repository
-
-```bash
-# Add the Helm repository
-helm repo add group-sync-operator https://ephico2real2.github.io/group-sync-operator-helm-chart
-
-# Update your local Helm chart repository cache
-helm repo update
-
-# Search for the chart
-helm search repo group-sync-operator-helm
-```
 
 ## Overview
 
