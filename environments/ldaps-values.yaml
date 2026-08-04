@@ -14,6 +14,8 @@ groupSync:
   schedule: "*/30 * * * *"
   providerName: ldap
 
+  # Must match a SAN on the server certificate. service-ca issues for <svc>.<ns>.svc and
+  # <svc>.<ns>.svc.cluster.local, so either form works.
   url: "ldaps://openldap-service.ldap-testing.svc.cluster.local:636"
   # Verification on. Note the CA is required either way: an ldaps:// url needs the root regardless of
   # this flag, because insecure only relaxes checks the operator makes itself.
@@ -23,12 +25,15 @@ groupSync:
     # caSecret, not ca. Operator validation checks caSecret and fails every reconcile with
     # "caSecret must be specified when insecure=false" when only ca is set.
     field: caSecret
-    # A ConfigMap in another namespace: the operator resolves namespace and its ServiceAccount can
-    # read openshift-config, so the cluster's existing OAuth CA is reused rather than copied.
+    # openshift-service-ca.crt is injected by OpenShift into EVERY namespace, so this needs no
+    # cross-namespace read and no copying. It holds the service-serving-signer that signs any
+    # certificate service-ca issues — which is how the LDAP server gets a certificate whose SAN is
+    # its Service DNS name. Use ca-config-map in openshift-config instead when the LDAP server has
+    # an enterprise certificate.
     kind: ConfigMap
-    name: ca-config-map
-    namespace: openshift-config
-    key: ca.crt
+    name: openshift-service-ca.crt
+    namespace: group-sync-operator
+    key: service-ca.crt
 
   credentialsSecret:
     name: ldap-group-sync
