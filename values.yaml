@@ -243,6 +243,7 @@ oauthSecretExtraction:
     destinationCa:
       kind: ConfigMap
       name: ca-config-map-copy
+      namespace: group-sync-operator
       key: ca.crt
 
   # LDAP bind DN for the GroupSync secret
