@@ -13,6 +13,11 @@ unapproved InstallPlan and waits for a human, so an unattended `helm install` or
 with a healthy-looking Subscription and no operator. This Job resolves that: it approves the plan
 for THIS subscription and leaves every other unapproved plan on the cluster alone.
 
+ITS RBAC IS NOT A HOOK, only the Job is. A hook resource is never recorded in the release and
+never removed by `helm uninstall`, so a hooked ServiceAccount and cluster-scoped binding would leak
+on every uninstall. Ordinary resources are release-managed and still exist in time, because
+post-install hooks run after the main manifest.
+
 SCOPED ON PURPOSE. It approves only InstallPlans whose clusterServiceVersionNames match this
 chart's subscription. A blanket "approve everything unapproved" would silently push through an
 upgrade for an unrelated operator that an admin had deliberately staged and not yet accepted —
@@ -28,9 +33,6 @@ metadata:
     {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
   annotations:
     argocd.argoproj.io/sync-wave: "0"
-    helm.sh/hook: post-install,post-upgrade
-    helm.sh/hook-weight: "-2"
-    helm.sh/hook-delete-policy: before-hook-creation
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -40,9 +42,6 @@ metadata:
     {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
   annotations:
     argocd.argoproj.io/sync-wave: "0"
-    helm.sh/hook: post-install,post-upgrade
-    helm.sh/hook-weight: "-2"
-    helm.sh/hook-delete-policy: before-hook-creation
 rules:
   # patch, not update: approval sets one field. `update` would let this SA replace the whole
   # InstallPlan spec, which is more than approving needs.
@@ -61,9 +60,6 @@ metadata:
     {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
   annotations:
     argocd.argoproj.io/sync-wave: "0"
-    helm.sh/hook: post-install,post-upgrade
-    helm.sh/hook-weight: "-2"
-    helm.sh/hook-delete-policy: before-hook-creation
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole

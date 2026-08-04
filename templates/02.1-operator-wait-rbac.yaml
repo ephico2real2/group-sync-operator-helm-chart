@@ -3,6 +3,12 @@ RBAC for the operator-readiness wait Job (02.2). Separate from the oauth-extract
 ServiceAccount deliberately: that one holds secrets verbs including create/delete, and a Job
 whose entire purpose is to READ status has no business carrying them.
 
+NOT helm hooks, deliberately, unlike the Job that uses them. A hook resource is not recorded in
+the release manifest and is never removed by `helm uninstall` — this SA and its cluster-scoped
+binding would leak on every uninstall, forever. As ordinary resources they are release-managed and
+cleaned up, and they still exist in time: post-install hooks run after the main manifest is
+applied, and under Argo they sit at wave 0 while the Job is a Sync hook at wave 2.
+
 Cluster-scoped rather than namespaced, for one reason only: the Job checks that the GroupSync
 CRD is Established, and CustomResourceDefinition is a cluster-scoped resource. Everything else
 it reads is namespaced and could have been a Role; splitting into both to save one grant would
@@ -20,10 +26,6 @@ metadata:
   annotations:
     # Wave 0 so the SA and binding exist before the wait Job's Sync hook at wave 1.
     argocd.argoproj.io/sync-wave: "0"
-    helm.sh/hook: post-install,post-upgrade
-    # -1 so the ServiceAccount and its binding exist before the Job that mounts it (weight 0).
-    helm.sh/hook-weight: "-1"
-    helm.sh/hook-delete-policy: before-hook-creation
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -33,9 +35,6 @@ metadata:
     {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
   annotations:
     argocd.argoproj.io/sync-wave: "0"
-    helm.sh/hook: post-install,post-upgrade
-    helm.sh/hook-weight: "-1"
-    helm.sh/hook-delete-policy: before-hook-creation
 rules:
   # The CSV carries the only authoritative answer to "did OLM finish?" — phase=Succeeded.
   - apiGroups: ["operators.coreos.com"]
@@ -62,9 +61,6 @@ metadata:
     {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
   annotations:
     argocd.argoproj.io/sync-wave: "0"
-    helm.sh/hook: post-install,post-upgrade
-    helm.sh/hook-weight: "-1"
-    helm.sh/hook-delete-policy: before-hook-creation
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
