@@ -42,12 +42,12 @@ rules:
 {{- if .Values.oauthSecretExtraction.caCopy.enabled }}
 # The copy target in groupSync.namespace, which is what groupSync.ca should point at.
 - apiGroups: [""]
-  resources: [{{ if eq (.Values.oauthSecretExtraction.caCopy.target.kind | default "ConfigMap") "Secret" }}"secrets"{{ else }}"configmaps"{{ end }}]
+  resources: [{{ if eq (.Values.oauthSecretExtraction.caCopy.destinationCa.kind | default "ConfigMap") "Secret" }}"secrets"{{ else }}"configmaps"{{ end }}]
   verbs: ["get", "update", "patch"]
-  resourceNames: ["{{ .Values.oauthSecretExtraction.caCopy.target.name }}"]
+  resourceNames: ["{{ .Values.oauthSecretExtraction.caCopy.destinationCa.name }}"]
 # create takes no resourceNames — RBAC ignores them for create, so the name cannot be pinned here.
 - apiGroups: [""]
-  resources: [{{ if eq (.Values.oauthSecretExtraction.caCopy.target.kind | default "ConfigMap") "Secret" }}"secrets"{{ else }}"configmaps"{{ end }}]
+  resources: [{{ if eq (.Values.oauthSecretExtraction.caCopy.destinationCa.kind | default "ConfigMap") "Secret" }}"secrets"{{ else }}"configmaps"{{ end }}]
   verbs: ["create"]
 {{- if .Values.oauthSecretExtraction.caCopy.discoverFromOAuth }}
 # Discovery reads the ConfigMap name off the cluster OAuth CR. Cluster-scoped, so it must live in
@@ -72,7 +72,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: {{ include "group-sync-operator-helm.fullname" . }}-oauth-ca-read
-  namespace: {{ .Values.oauthSecretExtraction.caCopy.sourceConfigMap.namespace }}
+  namespace: {{ .Values.oauthSecretExtraction.caCopy.sourceCa.namespace }}
   labels:
     {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
     app.kubernetes.io/component: oauth-secret-extraction
@@ -87,7 +87,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: {{ include "group-sync-operator-helm.fullname" . }}-oauth-ca-read
-  namespace: {{ .Values.oauthSecretExtraction.caCopy.sourceConfigMap.namespace }}
+  namespace: {{ .Values.oauthSecretExtraction.caCopy.sourceCa.namespace }}
   labels:
     {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
     app.kubernetes.io/component: oauth-secret-extraction

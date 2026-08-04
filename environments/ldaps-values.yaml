@@ -34,7 +34,7 @@ groupSync:
     # The copy the extraction job writes into this namespace, not the source in
     # openshift-config. Cross-namespace ConfigMap read is granted on some clusters and
     # denied on others, and where denied the operator just loops on "ConfigMap not found".
-    name: ldap-ca
+    name: ca-config-map-copy
     namespace: group-sync-operator
     key: ca.crt
 

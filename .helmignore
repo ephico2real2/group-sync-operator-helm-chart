@@ -32,7 +32,9 @@ docs/
 setup-local-ldap-testing/
 
 # helper scripts
-scripts/
+# scripts/ is NOT ignored on purpose. templates/tests/test-scripts-configmap.yaml loads the test
+# scripts with .Files.Get, which returns EMPTY for an ignored path — the scripts shipped as 0 bytes
+# and every test passed without executing anything.
 
 # image build context
 docker/

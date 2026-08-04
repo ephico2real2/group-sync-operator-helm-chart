@@ -37,22 +37,23 @@ groupSync:
   # CA for LDAPS. Required whenever the url is ldaps://, even with insecure true — insecure relaxes
   # verification the operator does itself, it does not make a handshake trust an unknown root.
   #
-  # kind is ConfigMap|Secret and namespace is resolved by the operator, whose ServiceAccount can read
-  # openshift-config, so the cluster's existing OAuth CA can be referenced in place. The ConfigMap
-  # must exist: a missing one leaves the operator reconciling forever with
-  # "ConfigMap ... not found, caSecret must be specified when insecure=false".
+  # This names the COPY that oauthSecretExtraction.caCopy writes into this namespace, not the source
+  # in openshift-config. Referencing openshift-config directly needs cross-namespace ConfigMap read
+  # that the operator has on some clusters and not others, and where it is denied the only symptom is
+  # the operator reconciling forever on "ConfigMap ... not found, caSecret must be specified when
+  # insecure=false" — which names neither the namespace nor the permission.
   ca:
     # caSecret or ca. The CRD has both and calls caSecret deprecated, but operator validation checks
     # caSecret — with only `ca` set it fails every reconcile with "caSecret must be specified when
     # insecure=false" even though the referenced resource exists. Switch to ca on a version that
     # honours it.
     field: caSecret
-    # ConfigMap or Secret. namespace is resolved by the operator, whose ServiceAccount can read
-    # openshift-config, so the cluster's existing OAuth CA can be referenced in place.
+    # Must match oauthSecretExtraction.caCopy.target. Point this at openshift-config only if you
+    # have confirmed the operator's ServiceAccount can read ConfigMaps there.
     kind: ConfigMap
-    name: ca-config-map
+    name: ca-config-map-copy
     key: ca.crt
-    namespace: openshift-config
+    namespace: group-sync-operator
 
   # LDAP authentication credentials configuration
   credentialsSecret:
@@ -218,16 +219,21 @@ oauthSecretExtraction:
     # and the API fixes the namespace to openshift-config and the key to ca.crt.
     discoverFromOAuth: true
 
-    sourceConfigMap:
+    # Where the CA comes from. The cluster's OAuth LDAP identity provider reads it here, and the
+    # name is overridden by discovery above when the OAuth CR names a different one.
+    sourceCa:
       name: ca-config-map
       namespace: openshift-config
       key: ca.crt
 
-    # ConfigMap, not Secret: a CA is public, and groupSync.ca.kind defaults to ConfigMap. Set kind
-    # to Secret to keep it out of reach of namespace readers.
-    target:
+    # Where the operator reads it. Named -copy on purpose: the extraction job overwrites it on every
+    # install and upgrade, so hand edits are lost — the name says so.
+    #
+    # ConfigMap, not Secret: a CA is public, and groupSync.ca.kind defaults to ConfigMap. Set kind to
+    # Secret to keep it out of reach of namespace readers. Must match groupSync.ca.
+    destinationCa:
       kind: ConfigMap
-      name: ldap-ca
+      name: ca-config-map-copy
       key: ca.crt
 
   # LDAP bind DN for the GroupSync secret
@@ -322,10 +328,14 @@ test:
     pullPolicy: IfNotPresent
 
   # LDAP client image configuration for LDAP connection testing
+  # Seconds Test 4 waits for a GroupSync to report a first successful sync.
+  syncWaitSeconds: 180
+
+  # ose-cli, not the operator image: the connection test needs openssl to verify the LDAPS chain
+  # and oc to read the CA and the sync status. The operator image has neither, so every check
+  # degraded to "informational" and the suite passed without testing anything.
   ldapClientImage:
-    # Image repository
-    repository: "quay.io/redhat-cop/group-sync-operator"
-    # Image tag
+    repository: "registry.redhat.io/openshift4/ose-cli"
     tag: "latest"
     # Image pull policy
     pullPolicy: IfNotPresent
