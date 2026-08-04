@@ -10,31 +10,28 @@ The LDAP server is configured with:
 - **Storage**: PVC backed by `crc-csi-hostpath-provisioner`
 - **Namespace**: `ldap-testing`
 
-### 🔐 ConfigMap Name Separation Strategy
+### 🔐 The three CA ConfigMaps
 
-This setup uses **intentional separation** between production and local testing ConfigMaps to prevent collisions:
+Three names appear in this setup and they are **not** interchangeable. Full reference:
+[CA_CERTIFICATE_FLOW.md](../CA_CERTIFICATE_FLOW.md).
 
-| Environment | ConfigMap Name | Purpose |
-|------------|----------------|---------|
-| **Production** | `ca-config-map` | Used by production Helm chart deployments |
-| **Local Testing** | `ca-config-map-test` | Used by local testing scripts (this directory) |
+| ConfigMap | Namespace | Created by | Read by |
+|---|---|---|---|
+| `ca-config-map` | `openshift-config` | `15-bootstrap-cert-manager-ca.sh apply` | the chart's extraction Job — **the source** |
+| `ca-config-map-copy` | `group-sync-operator` | the extraction Job | **the operator** — this is what `groupSync.ca` names |
+| `ca-config-map-test` | `openshift-config` | `10-setup-oauth-secrets.sh` | nothing in the chart — a standalone demo CA from the older scripts |
 
-**Why this separation?**
-- Prevents local testing from interfering with production deployments
-- Allows parallel testing without affecting production configurations
-- Makes it clear which environment you're working with
+The flow the chart actually uses:
 
-**Files using each name:**
-- **`ca-config-map-test`** (Local Testing):
-  - `values.yaml` (line 21) - Local testing configuration
-  - `30-manage-ldap-server.sh` (ca-cert-extract function) - Creates test ConfigMap
-  - `10-setup-oauth-secrets.sh` - Creates test ConfigMap
-  
-- **`ca-config-map`** (Production References):
-  - Production Helm chart deployments
-  - Production documentation examples
+```
+ca-config-map  ──the Job copies it──▶  ca-config-map-copy  ──▶  operator
+```
 
-**Note**: If you want to test with the production ConfigMap name locally, you can override in `values.yaml` or use `--set groupSync.ca.name=ca-config-map` during Helm install.
+`ca-config-map-test` is left over from before the copy mechanism existed. It is harmless and unrelated
+— `10-setup-oauth-secrets.sh` still creates it alongside the OAuth bind secret, which **is** needed.
+
+Never hand-edit `ca-config-map-copy`: the Job overwrites it on every install and upgrade, which is why
+it carries that name. Edit the source and run `helm upgrade`.
 
 ## Directory Structure
 
@@ -80,7 +77,17 @@ This setup uses **intentional separation** between production and local testing 
 | **A — plain LDAP** | no | `ldap://…:389` | Sync only. The bind password crosses the network in the clear |
 | **B — LDAPS** | yes | `ldaps://…:636` | Sync plus the whole CA path: preflight, copy, chain and SAN verification |
 
-The chart **defaults to B**. Path A needs `-f environments/ldap-plain-values.yaml`.
+The chart **defaults to B**, but either path needs a values file, because the base `values.yaml`
+leaves `groupSync.url`, `oauthSecretExtraction.bindDN` and `sourceSecret.name` **empty** on purpose —
+each cluster supplies them, or they are derived from that cluster's OAuth CR. The local test directory
+appears in no OAuth CR, so it supplies them:
+
+| Path | Values file |
+|---|---|
+| A — plain LDAP | `-f ../environments/ldap-plain-values.yaml` |
+| B — LDAPS | `-f ../crc-values.yaml` |
+
+Without one, the render fails with `groupSync.url is empty and no LDAP url could be derived`.
 
 One manifest serves both: the cert-manager secret is mounted `optional: true`, so the server starts
 whether or not the PKI exists. On path A the initContainer logs
@@ -110,7 +117,8 @@ Same, with the PKI created **before** the server, because the server mounts the 
 ./20-import-ldap-data.sh
 ./90-verify-all-resources.sh
 
-helm install group-sync .. -n group-sync-operator --create-namespace   # chart defaults are LDAPS
+helm install group-sync .. -n group-sync-operator --create-namespace \
+  -f ../crc-values.yaml
 helm test group-sync -n group-sync-operator --logs
 ./15-bootstrap-cert-manager-ca.sh verify    # proves the chain and SAN from inside the cluster
 ```
@@ -135,7 +143,7 @@ with `oc logs -f <pod> -n ldap-testing -c openldap` and you will see the progres
 ```bash
 ./15-bootstrap-cert-manager-ca.sh apply
 oc delete groups -l group-sync-operator.redhat-cop.io/sync-provider
-helm upgrade group-sync .. -n group-sync-operator --reset-values
+helm upgrade group-sync .. -n group-sync-operator --reset-values -f ../crc-values.yaml
 ```
 
 Both extra steps are load-bearing:

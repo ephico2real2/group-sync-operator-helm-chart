@@ -132,7 +132,24 @@ The chart deploys these main components:
 
 ## Detailed CA Certificate Setup
 
-The GroupSync Operator requires a CA certificate to establish secure LDAPS connections. This section guides you through the process of setting up and configuring your CA certificate.
+> **📄 Full reference: [CA_CERTIFICATE_FLOW.md](CA_CERTIFICATE_FLOW.md)** — which ConfigMap is which,
+> when a CA is required, rotation, verification and troubleshooting.
+
+**There are two CA ConfigMaps and this section describes only the first.** The one you create below is
+the **source**, in `openshift-config`. The operator does **not** read it. The chart's extraction Job
+copies it to `ca-config-map-copy` in the operator's own namespace, and that copy is what `groupSync.ca`
+names and what the operator loads.
+
+```
+openshift-config/ca-config-map  ──copy──▶  group-sync-operator/ca-config-map-copy  ──▶  operator
+   (you create this)                            (the Job creates this)
+```
+
+The copy exists because reading `openshift-config` from the operator's namespace needs cross-namespace
+ConfigMap read, which some clusters grant and others deny — and where it is denied the only symptom is
+the operator reconciling forever on `ConfigMap ... not found`. Skip creating the source entirely if the
+cluster already has an OAuth LDAP identity provider: it already has the ConfigMap, and the chart
+discovers its name from the OAuth CR.
 
 ### Obtaining the CA Certificate
 
@@ -148,27 +165,48 @@ openssl s_client -connect ldap.example.com:636 -showcerts </dev/null 2>/dev/null
   openssl x509 -outform PEM > ldap-ca.crt
 ```
 
-### Creating the ConfigMap
-
-Once you have the CA certificate, create a ConfigMap in the appropriate namespace:
+### Creating the ConfigMap (the source)
 
 ```bash
-# Create the ConfigMap in the openshift-config namespace
+# The SOURCE, in openshift-config. The key must be ca.crt.
 oc create configmap ca-config-map \
   --from-file=ca.crt=./ldap-ca.crt \
   -n openshift-config
 ```
 
-### Verifying the CA Certificate
-
-Verify that your CA certificate works correctly by testing the LDAPS connection:
+Nothing further is needed: the extraction Job discovers this ConfigMap, preflights it, and copies it
+into the operator's namespace on every install and upgrade. To confirm the copy landed:
 
 ```bash
-# Test LDAPS connection using the CA certificate
+oc get configmap ca-config-map-copy -n group-sync-operator \
+  -o jsonpath='{.metadata.annotations.group-sync\.redhat-cop\.io/source-hash}{"\n"}'
+```
+
+### Verifying the CA Certificate
+
+Two different questions. This checks the **source** file, from wherever you are:
+
+```bash
 openssl s_client -connect ldap.example.com:636 -CAfile ldap-ca.crt
 ```
 
-If the connection is successful, you'll see "Verify return code: 0 (ok)" in the output.
+`Verify return code: 0 (ok)` means the CA signed the server's certificate.
+
+But the question that matters is whether **the CA the operator loads** verifies the endpoint **from
+inside the cluster** — a SAN mismatch only surfaces there, because it depends on the name the operator
+connects to. That is what `helm test` checks:
+
+```bash
+helm test group-sync -n group-sync-operator --logs
+```
+
+```
+✅ CA read: 1 certificate(s)
+✅ chain verifies against group-sync-operator/ca-config-map-copy, hostname matches ldap.example.com
+```
+
+See [CA_CERTIFICATE_FLOW.md](CA_CERTIFICATE_FLOW.md#verifying) for checking the source and copy are in
+sync, and for the common failures.
 
 ## LDAP Configuration Guide
 

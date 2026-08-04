@@ -62,26 +62,33 @@ groupSync:
     # Namespace where the Secret is located
     namespace: group-sync-operator
 
-  # ldaps:// on 636. Plain ldap:// on 389 sends the bind password across the network in the clear, and
-  # it leaves every CA path above inert — needsCa is false for ldap:// with insecure true, so no
-  # caSecret is emitted and caCopy never runs.
+  # EMPTY on purpose: set it in the per-cluster values file, or leave it out and let it be derived
+  # from the cluster OAuth CR's first LDAP identity provider. Only scheme://host:port is taken — the
+  # basedn and query in an OAuth LDAP url describe authentication, not group sync. An explicit value
+  # always wins, so this cannot silently repoint an existing install.
   #
-  # Changing the host or port here after groups exist needs care: the operator compares
+  # CAUTION — deriving needs a LIVE cluster. It uses `lookup`, which works for helm install and
+  # upgrade but returns nothing for `helm template`, `--dry-run`, and offline GitOps renders such as
+  # ArgoCD. The render FAILS there rather than emitting a GroupSync with no url, so set this
+  # explicitly if you use any of them.
+  #
+  # Changing the host or port after groups exist needs care either way: the operator compares
   # openshift.io/ldap.url on each Group against host:port and refuses to adopt a mismatch
-  # ("annotation did not match sync host"). Re-annotating the groups is enough — they do not need
-  # deleting.
+  # ("annotation did not match sync host"). Deleting the operator-managed groups is enough — the next
+  # sync recreates them:
+  #   oc delete groups -l group-sync-operator.redhat-cop.io/sync-provider
   #
-  # Leave it EMPTY to derive it from the cluster OAuth CR's LDAP identity provider: the scheme, host
-  # and port are taken and the basedn/query dropped, since those describe authentication rather than
-  # group sync. An explicit value always wins, so this cannot silently repoint an existing install.
+  # The local test directory value, for reference:
+  #   url: "ldaps://openldap-service.ldap-testing.svc.cluster.local:636"
+  url: ""
+
+  # false, so the operator verifies the chain, and a CA is therefore required. Note that a CA is
+  # required for any ldaps:// url regardless of this flag: insecure relaxes checks the operator makes
+  # itself, it cannot make a TLS handshake trust an unknown root.
   #
-  # Empty only works during helm install/upgrade — lookup cannot read a cluster from helm template,
-  # --dry-run, or an offline GitOps render, and the render fails there instead of emitting no url.
-  # Note also that an empty value set with --set PERSISTS into later upgrades, so a cluster that
-  # later loses its LDAP identity provider will fail to upgrade until you pass --reset-values.
-  url: "ldaps://openldap-service.ldap-testing.svc.cluster.local:636"
-  # false, so the operator verifies the chain. A CA is required for ldaps:// either way: insecure
-  # relaxes checks the operator makes itself, it cannot make a handshake trust an unknown root.
+  # Setting this true AND leaving url empty is the one combination to avoid: needsCa is evaluated on
+  # the url as written, so an empty url with insecure true emits no CA — and if the derived url turns
+  # out to be ldaps://, the operator will have no root to verify against.
   insecure: false
 
   # RFC2307 schema configuration
@@ -209,7 +216,16 @@ oauthSecretExtraction:
 
   # Source secret configuration (OAuth LDAP secret)
   sourceSecret:
-    name: ldap-secret
+    # EMPTY on purpose: read from the same LDAP identity provider as bindDN above, so the DN and the
+    # password always belong together. Resolved at RUNTIME by the Job, so it is safe under
+    # `helm template` too. When empty, RBAC grants the read through a Role in the namespace below
+    # rather than a pinned resourceNames rule, since the name is not known at render time.
+    #
+    # The local test directory value, for reference:
+    #   name: ldap-secret
+    name: ""
+    # Fixed by the OpenShift API: oauth.spec.identityProviders[].ldap.bindPassword is a name-only
+    # reference in openshift-config, with the password under the bindPassword key.
     namespace: openshift-config
     passwordKey: bindPassword
 
@@ -256,7 +272,13 @@ oauthSecretExtraction:
       key: ca.crt
 
   # LDAP bind DN for the GroupSync secret
-  bindDN: "cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com"
+  # EMPTY on purpose: read from the cluster OAuth CR's first LDAP identity provider by the extraction
+  # Job. Unlike groupSync.url this is resolved at RUNTIME, so it is safe to leave empty under
+  # `helm template` and an offline GitOps render — the Job reads the CR when it runs.
+  #
+  # The local test directory value, for reference:
+  #   bindDN: "cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com"
+  bindDN: ""
 
   # Job configuration
   waitTimeout: 300  # seconds to wait for source secret

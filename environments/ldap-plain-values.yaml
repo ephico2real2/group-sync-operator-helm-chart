@@ -37,3 +37,12 @@ groupSync:
     name: ca-config-map-copy
     namespace: group-sync-operator
     key: ca.crt
+
+# The base values leave url, bindDN and sourceSecret.name EMPTY so each cluster supplies them or has
+# them derived from its OAuth CR. The local test directory is not in any OAuth CR, so they are given
+# here explicitly — without them the render fails on url and the extraction Job fails on the bind
+# credentials.
+oauthSecretExtraction:
+  bindDN: "cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com"
+  sourceSecret:
+    name: ldap-secret
