@@ -66,7 +66,11 @@ CA_CONFIGMAP_NAMESPACES="${CA_CONFIGMAP_NAMESPACES:-openshift-config}"
 # Where the chart puts the copy. Only read, never written, by this script — verify checks the CA the
 # operator actually loads rather than the source it was made from.
 COPY_NAME="${COPY_NAME:-ca-config-map-copy}"
-BACKUP_DIR="${BACKUP_DIR:-./.ca-configmap-backup}"
+# Anchored to this script's directory, not the caller's. As ./.ca-configmap-backup it followed the
+# working directory, so running the script from the repo root dropped cluster material outside the one
+# path .gitignore covers.
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+BACKUP_DIR="${BACKUP_DIR:-${SCRIPT_DIR}/.ca-configmap-backup}"
 
 SAN_SHORT="${LDAP_SVC}.${LDAP_NS}.svc"
 SAN_FQDN="${LDAP_SVC}.${LDAP_NS}.svc.cluster.local"

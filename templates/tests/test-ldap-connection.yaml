@@ -70,7 +70,6 @@ spec:
         capabilities:
           drop:
           - ALL
-        runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
   volumes:
@@ -83,8 +82,13 @@ spec:
         secretName: {{ .Values.oauthSecretExtraction.targetSecret.name }}
         defaultMode: 0400
   restartPolicy: Never
+  # runAsNonRoot is deliberately NOT set. The image declares USER 0, so asserting it without a
+  # runAsUser depends entirely on the SCC injecting one: restricted-v2 assigns a UID from the
+  # namespace range and it works, but a RunAsAny SCC injects nothing and the kubelet refuses with
+  # "container has runAsNonRoot and image will run as root". Pinning a runAsUser instead would
+  # break restricted-v2, whose MustRunAsRange rejects any UID outside the namespace range — so the
+  # SCC governs the user, and this keeps only the hardening that never conflicts.
   securityContext:
-    runAsNonRoot: true
     seccompProfile:
       type: RuntimeDefault
 {{- end }}

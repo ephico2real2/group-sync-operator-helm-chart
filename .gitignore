@@ -26,3 +26,5 @@ tmp/
 
 # Local backups taken by 15-bootstrap-cert-manager-ca.sh before replacing a CA ConfigMap.
 setup-local-ldap-testing/.ca-configmap-backup/
+# Also matched at any depth, since BACKUP_DIR can be overridden.
+.ca-configmap-backup/
