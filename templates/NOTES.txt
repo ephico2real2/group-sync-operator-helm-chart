@@ -13,11 +13,18 @@
 The chart will automatically extract the LDAP password from your existing OAuth secret
 and create the required GroupSync secret. The installation order is:
 
-1. OperatorGroup (sync-wave: -1)
-2. Operator Subscription (sync-wave: 0)
-3. ServiceAccount, ClusterRole, ClusterRoleBinding (sync-wave: 1)
-4. OAuth Secret Extraction Job (sync-wave: 2)
-5. GroupSync CR (sync-wave: 3)
+1. Namespace (sync-wave: -2)
+2. OperatorGroup (sync-wave: -1)
+3. Operator Subscription + Job RBAC (sync-wave: 0)
+4. InstallPlan approver Job, only when installPlanApproval=Manual (sync-wave: 1)
+   OAuth extraction ServiceAccount/ClusterRole/ClusterRoleBinding (sync-wave: 1)
+5. Operator readiness wait Job (sync-wave: 2)
+   OAuth Secret Extraction Job (sync-wave: 2)
+6. GroupSync CR (sync-wave: 3)
+
+The GroupSync CRD itself is NOT in this list: `helm install` installs it from crds/ before it
+renders any template, which is the only ordering mechanism early enough. Under ArgoCD it comes
+from OLM at wave 0 instead, and Argo never sees crds/ at all.
 
 The OAuth extraction job will:
 - Extract bindPassword from {{ .Values.oauthSecretExtraction.sourceSecret.name }} ({{ .Values.oauthSecretExtraction.sourceSecret.namespace }})
@@ -47,9 +54,12 @@ INSTALLATION STATUS:
 
 The Group Sync Operator is being installed via OLM and should be available shortly.
 The deployment happens in the following order:
-1. OperatorGroup (sync-wave: -1)
-2. Operator Subscription (sync-wave: 0)
-3. GroupSync custom resource (sync-wave: 1)
+1. Namespace (sync-wave: -2)
+2. OperatorGroup (sync-wave: -1)
+3. Operator Subscription (sync-wave: 0)
+4. Operator readiness wait Job (sync-wave: 2) — blocks until the CSV is Succeeded, the
+   operator Deployment has a ready replica, and the GroupSync CRD is Established
+5. GroupSync custom resource (sync-wave: 3)
 
 VERIFICATION STEPS:
 =================

@@ -1,0 +1,76 @@
+{{- /*
+RBAC for the operator-readiness wait Job (02.2). Separate from the oauth-extraction
+ServiceAccount deliberately: that one holds secrets verbs including create/delete, and a Job
+whose entire purpose is to READ status has no business carrying them.
+
+Cluster-scoped rather than namespaced, for one reason only: the Job checks that the GroupSync
+CRD is Established, and CustomResourceDefinition is a cluster-scoped resource. Everything else
+it reads is namespaced and could have been a Role; splitting into both to save one grant would
+add a file and a binding to save nothing, since `get` on CRDs is already the widest verb here
+and it is read-only.
+*/}}
+{{- if and .Values.operatorWait.enabled .Values.groupSync.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "group-sync-operator-helm.fullname" . }}-operator-wait
+  namespace: {{ .Values.groupSync.namespace }}
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+  annotations:
+    # Wave 0 so the SA and binding exist before the wait Job's Sync hook at wave 1.
+    argocd.argoproj.io/sync-wave: "0"
+    helm.sh/hook: post-install,post-upgrade
+    # -1 so the ServiceAccount and its binding exist before the Job that mounts it (weight 0).
+    helm.sh/hook-weight: "-1"
+    helm.sh/hook-delete-policy: before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "group-sync-operator-helm.fullname" . }}-operator-wait
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "-1"
+    helm.sh/hook-delete-policy: before-hook-creation
+rules:
+  # The CSV carries the only authoritative answer to "did OLM finish?" — phase=Succeeded.
+  - apiGroups: ["operators.coreos.com"]
+    resources: ["clusterserviceversions", "subscriptions", "installplans"]
+    verbs: ["get", "list", "watch"]
+  # A Succeeded CSV does not mean a running pod. The Deployment's availableReplicas does.
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch"]
+  # The CRD must be Established before any GroupSync CR can be reconciled.
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch"]
+  # Read-only. Named so a reviewer can see this Job cannot touch a GroupSync, only observe them.
+  - apiGroups: ["redhatcop.redhat.io"]
+    resources: ["groupsyncs"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "group-sync-operator-helm.fullname" . }}-operator-wait
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "-1"
+    helm.sh/hook-delete-policy: before-hook-creation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "group-sync-operator-helm.fullname" . }}-operator-wait
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "group-sync-operator-helm.fullname" . }}-operator-wait
+    namespace: {{ .Values.groupSync.namespace }}
+{{- end }}

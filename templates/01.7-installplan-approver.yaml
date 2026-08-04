@@ -1,0 +1,190 @@
+{{- /*
+Approve the operator's InstallPlan, so `installPlanApproval: Manual` still installs unattended.
+
+WHY IT IS GATED ON Manual. With `Automatic` OLM approves its own InstallPlans and this Job would
+be dead weight that runs on every sync to discover it has nothing to do. It renders only when
+subscription.installPlanApproval is Manual, so the chart carries the capability without paying
+for it. Today's default is Automatic, which means this file produces nothing until you change
+that.
+
+WHY YOU WOULD WANT Manual. It is the upgrade gate: OLM stages a new CSV and waits rather than
+moving the operator under you. The cost is that it also blocks the FIRST install — OLM stages an
+unapproved InstallPlan and waits for a human, so an unattended `helm install` or Argo sync hangs
+with a healthy-looking Subscription and no operator. This Job resolves that: it approves the plan
+for THIS subscription and leaves every other unapproved plan on the cluster alone.
+
+SCOPED ON PURPOSE. It approves only InstallPlans whose clusterServiceVersionNames match this
+chart's subscription. A blanket "approve everything unapproved" would silently push through an
+upgrade for an unrelated operator that an admin had deliberately staged and not yet accepted —
+turning a chart install into a cluster-wide change nobody asked for.
+*/}}
+{{- if and .Values.installPlanApprover.enabled (eq .Values.subscription.installPlanApproval "Manual") }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "group-sync-operator-helm.fullname" . }}-installplan-approver
+  namespace: {{ .Values.groupSync.namespace }}
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "-2"
+    helm.sh/hook-delete-policy: before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "group-sync-operator-helm.fullname" . }}-installplan-approver
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "-2"
+    helm.sh/hook-delete-policy: before-hook-creation
+rules:
+  # patch, not update: approval sets one field. `update` would let this SA replace the whole
+  # InstallPlan spec, which is more than approving needs.
+  - apiGroups: ["operators.coreos.com"]
+    resources: ["installplans"]
+    verbs: ["get", "list", "watch", "patch"]
+  - apiGroups: ["operators.coreos.com"]
+    resources: ["subscriptions"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "group-sync-operator-helm.fullname" . }}-installplan-approver
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "-2"
+    helm.sh/hook-delete-policy: before-hook-creation
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "group-sync-operator-helm.fullname" . }}-installplan-approver
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "group-sync-operator-helm.fullname" . }}-installplan-approver
+    namespace: {{ .Values.groupSync.namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "group-sync-operator-helm.fullname" . }}-installplan-approver
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+  namespace: {{ .Values.groupSync.namespace }}
+  annotations:
+    # Wave 1: after the Subscription (wave 0) exists, before the readiness wait (wave 2). An
+    # InstallPlan cannot be approved before the Subscription that produces it.
+    argocd.argoproj.io/sync-wave: "1"
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true,Replace=true
+    helm.sh/hook: post-install,post-upgrade
+    # -1, so approval happens before the readiness wait (0) that would otherwise time out
+    # waiting for an operator whose InstallPlan nobody has approved.
+    helm.sh/hook-weight: "-1"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: {{ .Values.installPlanApprover.backoffLimit }}
+  activeDeadlineSeconds: {{ add .Values.installPlanApprover.waitSeconds 120 }}
+  ttlSecondsAfterFinished: {{ .Values.installPlanApprover.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        {{- include "group-sync-operator-helm.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "group-sync-operator-helm.fullname" . }}-installplan-approver
+      restartPolicy: Never
+      containers:
+        - name: approve-install-plan
+          image: "{{ .Values.installPlanApprover.image.repository }}:{{ .Values.installPlanApprover.image.tag }}"
+          imagePullPolicy: {{ .Values.installPlanApprover.image.pullPolicy }}
+          command:
+            - /bin/bash
+            - -c
+            - |
+              set -uo pipefail
+
+              NAMESPACE="{{ .Values.groupSync.namespace }}"
+              SUBSCRIPTION="{{ .Values.subscription.name }}"
+              ATTEMPTS={{ div .Values.installPlanApprover.waitSeconds 5 }}
+              INTERVAL=5
+
+              log()  { echo "[installplan-approver] $*"; }
+              fail() { echo "[installplan-approver] FAILED: $*" >&2; exit 1; }
+
+              plan_ref() {
+                oc get subscription "$SUBSCRIPTION" -n "$NAMESPACE" --ignore-not-found=true \
+                   -o jsonpath='{.status.installPlanRef.name}' 2>/dev/null
+              }
+              plan_field() {
+                oc get installplan "$1" -n "$NAMESPACE" --ignore-not-found=true \
+                   -o jsonpath="{$2}" 2>/dev/null
+              }
+
+              # ---- Fast path -------------------------------------------------------------
+              # The common case on any re-sync: already approved, nothing to do, one API call.
+              PLAN="$(plan_ref)"
+              if [ -n "$PLAN" ] && [ "$(plan_field "$PLAN" .spec.approved)" = "true" ]; then
+                log "InstallPlan ${PLAN} is already approved (phase=$(plan_field "$PLAN" .status.phase))"
+                exit 0
+              fi
+
+              # ---- Wait for OLM to stage a plan ------------------------------------------
+              log "waiting for subscription ${SUBSCRIPTION} to reference an InstallPlan"
+              for i in $(seq 1 "$ATTEMPTS"); do
+                PLAN="$(plan_ref)"
+                [ -n "$PLAN" ] && { log "subscription references InstallPlan ${PLAN}"; break; }
+                log "attempt ${i}/${ATTEMPTS}: no installPlanRef yet"
+                sleep "$INTERVAL"
+              done
+              [ -n "$PLAN" ] || fail "subscription ${SUBSCRIPTION} never referenced an InstallPlan.
+                Inspect: oc describe subscription ${SUBSCRIPTION} -n ${NAMESPACE}
+                A missing catalog source or an unresolvable channel presents exactly like this."
+
+              # ---- Approve, but only if it is OURS ---------------------------------------
+              # Checked even though the plan came from our own subscription's installPlanRef,
+              # because OLM bundles co-installed operators into one InstallPlan. Approving is
+              # still correct there — it is what our subscription is waiting on — and logging the
+              # CSV list makes it visible when a plan carries more than this operator.
+              CSVS="$(plan_field "$PLAN" '.spec.clusterServiceVersionNames[*]')"
+              log "InstallPlan ${PLAN} installs: ${CSVS:-<unknown>}"
+              case "$CSVS" in
+                *"${SUBSCRIPTION}"*) : ;;
+                *) fail "InstallPlan ${PLAN} does not mention ${SUBSCRIPTION} (it installs: ${CSVS}).
+                Refusing to approve a plan this chart did not cause. Inspect:
+                  oc get installplan -n ${NAMESPACE} -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,APPROVED:.spec.approved,CSV:.spec.clusterServiceVersionNames[*]" ;;
+              esac
+
+              if [ "$(plan_field "$PLAN" .spec.approved)" != "true" ]; then
+                log "approving ${PLAN}"
+                oc patch installplan "$PLAN" -n "$NAMESPACE" --type merge \
+                   -p '{"spec":{"approved":true}}' \
+                  || fail "could not patch InstallPlan ${PLAN}. Inspect: oc describe installplan ${PLAN} -n ${NAMESPACE}"
+              fi
+
+              # ---- Confirm it actually completed -----------------------------------------
+              # Approving is not installing. Without this the Job succeeds the moment the patch
+              # lands, and the readiness wait that follows absorbs a failure that belongs here.
+              log "waiting for ${PLAN} to reach Complete"
+              PHASE=""
+              for i in $(seq 1 "$ATTEMPTS"); do
+                PHASE="$(plan_field "$PLAN" .status.phase)"
+                [ "$PHASE" = "Complete" ] && { log "${PLAN} is Complete"; break; }
+                log "attempt ${i}/${ATTEMPTS}: phase=${PHASE:-<none>}"
+                sleep "$INTERVAL"
+              done
+              [ "$PHASE" = "Complete" ] || fail "${PLAN} is phase '${PHASE:-<none>}'.
+                Inspect: oc describe installplan ${PLAN} -n ${NAMESPACE}"
+
+              log "done — the operator's InstallPlan is approved and complete"
+          resources: {{- toYaml .Values.installPlanApprover.resources | nindent 12 }}
+{{- end }}

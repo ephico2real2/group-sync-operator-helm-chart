@@ -1,0 +1,177 @@
+{{- /*
+Wait until the group-sync-operator is genuinely serving GroupSync, before the CRs in wave 3.
+
+WHAT THIS DOES NOT SOLVE, stated first because it is the obvious assumption. It does NOT make
+`helm install` able to create a GroupSync CR on a cluster without the CRD. Nothing a Job can do
+fixes that: Helm resolves every kind in the release against API discovery to build its object
+list, and that happens BEFORE any hook runs, at any weight. Measured on a live cluster — a CRD
+placed on a `pre-install` hook is never created, because the build fails first and the hook never
+executes. That error is solved by crds/groupsyncs.redhatcop.redhat.io.yaml, which Helm installs
+before it renders templates.
+
+What this Job solves is the failure left over once the CRD is present: an install that reports
+success while nothing is reconciling.
+
+  * Under HELM, the CR is applied in the main phase and Helm orders unknown kinds last, sorted by
+    kind name — "GroupSync" sorts before "Subscription" — so the CR can be created before the
+    operator is even subscribed, then sit unprocessed while `helm install` exits 0.
+  * Under ARGOCD, wave 3 begins once wave 2 is Healthy, and a Subscription reports Healthy before
+    its operator pod is running.
+
+Either way the symptom is an absence: no Groups appear, nothing errors. Three checks, ordered by
+how they fail:
+
+  1. the CSV reaches phase=Succeeded            — OLM finished installing
+  2. the Deployment has a ready replica         — a Succeeded CSV does not mean a running pod
+  3. the CRD is Established                     — the apiserver will actually accept a GroupSync
+
+BOTH SETS OF HOOK ANNOTATIONS ARE DELIBERATE. `argocd.argoproj.io/hook: Sync` runs this inside
+the sync at wave 2, early enough to gate the CRs in wave 3; Argo's explicit annotation takes precedence over
+the helm one it would otherwise translate. `helm.sh/hook` is what makes plain `helm install` WAIT
+for the Job — a Job in the main manifest is created and not waited on unless --wait is passed, so
+without it this would gate nothing on the helm path. Replace=true because a Job spec is immutable
+and a re-sync would otherwise fail on it.
+*/}}
+{{- if and .Values.operatorWait.enabled .Values.groupSync.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "group-sync-operator-helm.fullname" . }}-operator-wait
+  namespace: {{ .Values.groupSync.namespace }}
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+  annotations:
+    # Wave 2: after the InstallPlan approver (wave 1), before the GroupSync CRs (wave 3).
+    argocd.argoproj.io/sync-wave: "2"
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true,Replace=true
+    helm.sh/hook: post-install,post-upgrade
+    # 0, so this runs before the oauth-secret extraction Job (weight 5): a failure here is
+    # reported before a second Job runs against an operator that is not up.
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: {{ .Values.operatorWait.backoffLimit }}
+  # Covers the whole wait plus container start, so Kubernetes cannot kill the Job while it is
+  # still legitimately waiting and replace a precise message with DeadlineExceeded.
+  activeDeadlineSeconds: {{ add .Values.operatorWait.waitSeconds 120 }}
+  ttlSecondsAfterFinished: {{ .Values.operatorWait.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        {{- include "group-sync-operator-helm.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "group-sync-operator-helm.fullname" . }}-operator-wait
+      restartPolicy: Never
+      containers:
+        - name: wait-for-readiness
+          image: "{{ .Values.operatorWait.image.repository }}:{{ .Values.operatorWait.image.tag }}"
+          imagePullPolicy: {{ .Values.operatorWait.image.pullPolicy }}
+          command:
+            - /bin/bash
+            - -c
+            - |
+              # No `set -e`: every check handles its own failure with a message naming the command
+              # to run next. Dying on an empty jsonpath would print nothing useful.
+              set -uo pipefail
+
+              NAMESPACE="{{ .Values.groupSync.namespace }}"
+              SUBSCRIPTION="{{ .Values.subscription.name }}"
+              CRD="groupsyncs.redhatcop.redhat.io"
+              ATTEMPTS={{ div .Values.operatorWait.waitSeconds 5 }}
+              INTERVAL=5
+
+              log()  { echo "[operator-wait] $*"; }
+              fail() { echo "[operator-wait] FAILED: $*" >&2; exit 1; }
+
+              # The CSV name carries the version (group-sync-operator.v0.0.36), so it is matched
+              # by PREFIX. Pinning the full name would break this Job on every operator upgrade.
+              csv_phase() {
+                oc get csv -n "$NAMESPACE" --ignore-not-found=true \
+                   -o jsonpath='{range .items[*]}{.metadata.name}{"|"}{.status.phase}{"\n"}{end}' \
+                  2>/dev/null | grep "^${SUBSCRIPTION}\." | head -1
+              }
+              operator_deploy() {
+                oc get deploy -n "$NAMESPACE" --ignore-not-found=true -o name 2>/dev/null \
+                  | grep -- "${SUBSCRIPTION}" | head -1
+              }
+              deploy_ready() {
+                local dep="$1"
+                [ -z "$dep" ] && { echo 0; return; }
+                oc get "$dep" -n "$NAMESPACE" --ignore-not-found=true \
+                   -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo 0
+              }
+              crd_established() {
+                oc get crd "$CRD" --ignore-not-found=true \
+                   -o jsonpath='{.status.conditions[?(@.type=="Established")].status}' \
+                  2>/dev/null || echo "False"
+              }
+
+              # ---- Fast path -------------------------------------------------------------
+              # A re-sync or a re-run on a healthy cluster should cost one round of API calls,
+              # not the full poll. This is the common case once the operator is installed.
+              echo "=== Fast-path: is the operator already serving GroupSync? ==="
+              FP_CSV="$(csv_phase)"; FP_DEP="$(operator_deploy)"
+              FP_READY="$(deploy_ready "$FP_DEP")"; FP_EST="$(crd_established)"
+              log "csv=${FP_CSV:-<none>} deployment=${FP_DEP:-<none>} ready=${FP_READY:-0} crdEstablished=${FP_EST:-False}"
+              if [ "${FP_CSV#*|}" = "Succeeded" ] && [ "${FP_READY:-0}" -ge 1 ] 2>/dev/null \
+                 && [ "$FP_EST" = "True" ]; then
+                log "already ready — nothing to wait for"
+                log "sync status:   oc get groupsync -n ${NAMESPACE} -o wide"
+                exit 0
+              fi
+              log "not ready yet; entering the full wait (${ATTEMPTS} attempts x ${INTERVAL}s)"
+
+              # ---- 1. OLM finished -------------------------------------------------------
+              echo "=== Waiting for a ClusterServiceVersion ${SUBSCRIPTION}.* to reach Succeeded ==="
+              PHASE=""
+              for i in $(seq 1 "$ATTEMPTS"); do
+                CSV="$(csv_phase)"; PHASE="${CSV#*|}"
+                [ "$PHASE" = "Succeeded" ] && { log "CSV ${CSV%|*} is Succeeded"; break; }
+                log "attempt ${i}/${ATTEMPTS}: csv phase=${PHASE:-<not present yet>}"
+                sleep "$INTERVAL"
+              done
+              [ "$PHASE" = "Succeeded" ] || fail "no ${SUBSCRIPTION}.* CSV reached Succeeded.
+                Inspect: oc get csv,subscription,installplan -n ${NAMESPACE}
+                installPlanApproval: Manual leaves the InstallPlan unapproved and hangs here."
+
+              # ---- 2. A pod is actually running ------------------------------------------
+              # Without this the Job passes while the operator CrashLoopBackOffs and no CR is
+              # ever reconciled — the exact silent failure it exists to catch.
+              echo "=== Waiting for the operator Deployment to have a ready replica ==="
+              READY=0
+              for i in $(seq 1 "$ATTEMPTS"); do
+                DEP="$(operator_deploy)"; READY="$(deploy_ready "$DEP")"
+                [ "${READY:-0}" -ge 1 ] 2>/dev/null && { log "${DEP} ready=${READY}"; break; }
+                log "attempt ${i}/${ATTEMPTS}: deployment=${DEP:-<not created yet>} ready=${READY:-0}"
+                sleep "$INTERVAL"
+              done
+              [ "${READY:-0}" -ge 1 ] 2>/dev/null || fail "the operator Deployment has no ready replica.
+                Inspect: oc get pods -n ${NAMESPACE}
+                         oc logs -n ${NAMESPACE} deploy/${SUBSCRIPTION}-controller-manager"
+
+              # ---- 3. The apiserver will accept a GroupSync ------------------------------
+              # A CRD can exist without being Established, and a CR applied in that window is
+              # rejected. Established is the condition that says the kind is being served.
+              echo "=== Waiting for CRD ${CRD} to be Established ==="
+              EST="False"
+              for i in $(seq 1 "$ATTEMPTS"); do
+                EST="$(crd_established)"
+                [ "$EST" = "True" ] && { log "CRD ${CRD} is Established"; break; }
+                log "attempt ${i}/${ATTEMPTS}: crd Established=${EST:-<not present yet>}"
+                sleep "$INTERVAL"
+              done
+              [ "$EST" = "True" ] || fail "CRD ${CRD} is not Established.
+                Inspect: oc get crd ${CRD} -o yaml"
+
+              # ---- Report ---------------------------------------------------------------
+              # The CR count is informational, never a gate: on a first install the CRs may
+              # legitimately not be reconciled yet, and failing on that would make a correct
+              # install look broken.
+              FOUND="$(oc get groupsync -n "$NAMESPACE" --no-headers --ignore-not-found=true 2>/dev/null | wc -l | tr -d ' ')"
+              log "operator is ready; ${FOUND:-0} GroupSync CR(s) present in ${NAMESPACE}"
+              log "sync status:   oc get groupsync -n ${NAMESPACE} -o wide"
+              log "synced groups: oc get groups -l app.kubernetes.io/managed-by=group-sync-operator"
+          resources: {{- toYaml .Values.operatorWait.resources | nindent 12 }}
+{{- end }}
