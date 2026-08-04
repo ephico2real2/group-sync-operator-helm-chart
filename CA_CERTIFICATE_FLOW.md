@@ -215,7 +215,7 @@ cert-manager PKI and writes the source for you.
 
 ## How the copy is made
 
-The extraction Job (`templates/01.5-oauth-secret-extraction-job.yaml`) runs as a
+The extraction Job (`charts/group-sync-operator-helm/templates/01.5-oauth-secret-extraction-job.yaml`) runs as a
 `post-install,post-upgrade` hook and:
 
 1. **Discovers the source name** from the cluster OAuth CR's first LDAP identity provider, rather than
@@ -317,5 +317,5 @@ Either reissue for that name or use the name it was issued for.
 
 **The copy is stale**
 
-Only an upgrade rebuilds it. `helm upgrade group-sync . -n group-sync-operator` — and if the values
+Only an upgrade rebuilds it. `helm upgrade group-sync charts/group-sync-operator-helm -n group-sync-operator` — and if the values
 also need resetting, see the `--reset-values` note in the README's Upgrade Notes.

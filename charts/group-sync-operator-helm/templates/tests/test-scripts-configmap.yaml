@@ -13,8 +13,8 @@ metadata:
     {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
 data:
   operator-health-test.sh: |
-{{ .Files.Get "scripts/operator-health-test.sh" | indent 4 }}
+{{ .Files.Get "files/operator-health-test.sh" | indent 4 }}
   ldap-connection-test.sh: |
-{{ .Files.Get "scripts/ldap-connection-test.sh" | indent 4 }}
+{{ .Files.Get "files/ldap-connection-test.sh" | indent 4 }}
 {{- end }}
 

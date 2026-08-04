@@ -3,7 +3,7 @@
 # NOTE: a pattern must sit on a line of its OWN. "#" only starts a comment at the START of a
 # line — a trailing comment becomes part of the pattern, which then matches nothing and the
 # path is silently packaged. That is exactly what happened to the five entries below: each
-# carried a trailing comment, so docs/, setup-local-ldap-testing/, scripts/, docker/ and
+# carried a trailing comment, so docs/, setup-local-ldap-testing/, files/, docker/ and
 # argocd-application.yaml were all shipped inside the chart tarball, including
 # setup-local-ldap-testing/ca-key.pem — a private key.
 #
@@ -32,9 +32,10 @@ docs/
 setup-local-ldap-testing/
 
 # helper scripts
-# scripts/ is NOT ignored on purpose. templates/tests/test-scripts-configmap.yaml loads the test
-# scripts with .Files.Get, which returns EMPTY for an ignored path — the scripts shipped as 0 bytes
-# and every test passed without executing anything.
+# files/ is NOT ignored on purpose. templates/tests/test-scripts-configmap.yaml loads the test
+# scripts from it with .Files.Get, which returns EMPTY for an ignored path — they shipped as 0 bytes
+# and every test passed without executing anything. Renamed from scripts/ to match Helm's convention
+# for .Files.Get content.
 
 # image build context
 docker/

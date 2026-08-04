@@ -36,14 +36,17 @@ To develop the chart locally:
 
    ```bash
    # Lint the chart
-   helm lint .
+   helm lint charts/group-sync-operator-helm -f charts/group-sync-operator-helm/crc-values.yaml
 
-   # Run a template test
-   helm template . --debug
+   # Render it. A values file is required: groupSync.url is empty in the base values, and
+   # deriving it from the OAuth CR needs a live cluster, which helm template does not have.
+   helm template charts/group-sync-operator-helm -f charts/group-sync-operator-helm/crc-values.yaml --debug
 
    # Test installation (if you have a test cluster)
-   helm install group-sync . --dry-run --debug
+   helm install group-sync charts/group-sync-operator-helm -f charts/group-sync-operator-helm/crc-values.yaml --dry-run --debug
    ```
+
+   The same checks run in CI on every PR — see `.github/workflows/ci.yaml`.
 
 ## Release Process
 

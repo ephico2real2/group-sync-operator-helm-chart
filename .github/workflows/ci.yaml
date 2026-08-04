@@ -1,0 +1,181 @@
+name: CI
+
+# Runs on every PR, on every push to main, and — via workflow_call — as the gate in front of
+# publishing. See .github/workflows/helm.yaml, which calls this and will not release unless it passes.
+# That keeps the checks defined once, and means a release can never skip them even on a direct push.
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_call:
+
+env:
+  CHART: charts/group-sync-operator-helm
+
+jobs:
+  chart:
+    name: Chart renders and lints
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+
+      - name: helm lint
+        run: helm lint "$CHART" -f "$CHART/crc-values.yaml"
+
+      # Every values file must render. Base values alone deliberately CANNOT — see the next step.
+      - name: Every values file renders
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=("$CHART"/*-values.yaml "$CHART"/environments/*.yaml)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::no values files found under $CHART — did the chart move?"
+            exit 1
+          fi
+          for f in "${files[@]}"; do
+            echo "--- $f"
+            helm template release "$CHART" -f "$f" > /dev/null
+          done
+          echo "${#files[@]} values file(s) rendered"
+
+      # Pins a deliberate contract: groupSync.url is empty in the base values so each cluster supplies
+      # it or it is derived from the OAuth CR at install time. `helm template` cannot read a cluster, so
+      # rendering with no values file MUST fail — with that specific message, not some later accident.
+      - name: Base values alone must fail, by design
+        run: |
+          set -uo pipefail
+          if out=$(helm template release "$CHART" 2>&1); then
+            echo "::error::rendering with no values file SUCCEEDED — groupSync.url has regained a default"
+            exit 1
+          fi
+          if ! grep -q 'no LDAP url could be derived' <<<"$out"; then
+            echo "::error::it failed, but not for the documented reason:"
+            printf '%s\n' "$out" | tail -5
+            exit 1
+          fi
+          echo "fails as documented"
+
+  test-scripts:
+    name: Test scripts are actually shipped
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+
+      # THE check this repo most needs. .helmignore once listed the directory these are loaded from, so
+      # .Files.Get returned empty, both scripts shipped as 0 BYTES, and `helm test` passed every suite
+      # without executing a line — while the LDAP directory was in CrashLoopBackOff. Nothing was red.
+      #
+      # .Files.Get resolves relative to the CHART directory, so this also fails if files/ is ever moved
+      # outside it or caught by a new .helmignore pattern.
+      - name: ConfigMap data is non-empty
+        run: |
+          set -euo pipefail
+          helm template release "$CHART" -f "$CHART/crc-values.yaml" > /tmp/rendered.yaml
+          python3 - <<'PY'
+          import sys, yaml
+          found = {}
+          for d in yaml.safe_load_all(open('/tmp/rendered.yaml')):
+              if d and d.get('kind') == 'ConfigMap' and 'test-scripts' in d['metadata']['name']:
+                  found = d.get('data') or {}
+          if not found:
+              print("::error::no test-scripts ConfigMap rendered, or it has no data")
+              sys.exit(1)
+          bad = [k for k, v in found.items() if len(v) < 500]
+          for k, v in sorted(found.items()):
+              print(f"  {k}: {len(v)} bytes")
+          if bad:
+              print(f"::error::shipped empty or truncated: {bad}. .Files.Get is not finding them — "
+                    f"check .helmignore and that files/ is inside the chart directory.")
+              sys.exit(1)
+          print(f"{len(found)} script(s) shipped with content")
+          PY
+
+      # A syntax error in a templated shell script only shows up when the pod runs, which in a hook is
+      # after the install has half-completed. Caught here instead.
+      - name: Shell syntax — source scripts and rendered job scripts
+        run: |
+          set -euo pipefail
+          for f in "$CHART"/files/*.sh; do
+            bash -n "$f" && echo "  ok  $f"
+          done
+          python3 - <<'PY' > /tmp/scripts.txt
+          import yaml
+          out = []
+          for d in yaml.safe_load_all(open('/tmp/rendered.yaml')):
+              if not d: continue
+              spec = None
+              if d.get('kind') == 'Job':   spec = d['spec']['template']['spec']
+              elif d.get('kind') == 'Pod': spec = d['spec']
+              if not spec: continue
+              for c in spec.get('initContainers', []) + spec['containers']:
+                  cmd = c.get('command') or []
+                  if len(cmd) >= 3 and cmd[0].endswith(('bash', 'sh')):
+                      out.append((d['metadata']['name'], c['name'], cmd[-1]))
+          for name, ctr, body in out:
+              open(f"/tmp/{name}--{ctr}.sh", "w").write(body)
+              print(f"{name}--{ctr}.sh")
+          PY
+          while read -r s; do
+            bash -n "/tmp/$s" && echo "  ok  rendered: $s"
+          done < /tmp/scripts.txt
+
+  docs:
+    name: Docs match the chart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Found six wrong rows when first run by hand, including test.openldapClientImage.* — a parameter
+      # that did not exist at all, so anyone setting it would have been silently ignored.
+      - name: README parameter tables match values.yaml
+        run: |
+          python3 - <<'PY'
+          import re, sys, pathlib, yaml, os
+          chart = os.environ['CHART']
+          values = yaml.safe_load(open(f"{chart}/values.yaml"))
+
+          def dig(path):
+              cur = values
+              for key in path.split('.'):
+                  if not isinstance(cur, dict) or key not in cur:
+                      return None
+                  cur = cur[key]
+              return cur
+
+          rows = re.findall(
+              r'^\| ((?:groupSync|oauthSecretExtraction|test|trustedCA)\.[\w.]+) \|[^|]*\| ([^|]+)\|',
+              pathlib.Path('README.md').read_text(), re.M)
+          if not rows:
+              print("::error::no parameter rows found in README.md — did the table format change?")
+              sys.exit(1)
+
+          bad = 0
+          for param, documented in rows:
+              actual = dig(param)
+              documented = documented.strip().strip('`').strip('"')
+              if actual is None:
+                  print(f"::error file=README.md::{param} does not exist in values.yaml")
+                  bad += 1
+              elif str(actual).lower() != documented.lower() and documented.lower() not in str(actual).lower():
+                  print(f"::error file=README.md::{param}: README says '{documented}', values.yaml has '{actual}'")
+                  bad += 1
+          print(f"{len(rows)} documented parameters checked, {bad} mismatched")
+          sys.exit(1 if bad else 0)
+          PY
+
+      # Chart paths in docs broke when the chart moved into charts/. A bare `.` or `..` now resolves to
+      # a directory with no Chart.yaml, so the command in the docs simply does not work.
+      - name: No bare chart paths in documented helm commands
+        run: |
+          set -uo pipefail
+          hits=$(grep -rnE 'helm (install|upgrade|template|lint) [a-z0-9-]* ?(\.|\.\.)([[:space:]]|\\|$)' \
+                   --include='*.md' --include='*.yaml' . \
+                   | grep -v '^\./\.git' || true)
+          if [ -n "$hits" ]; then
+            echo "::error::helm commands with a bare . or .. chart path — they no longer resolve to a chart:"
+            printf '%s\n' "$hits"
+            exit 1
+          fi
+          echo "all documented helm commands use an explicit chart path"

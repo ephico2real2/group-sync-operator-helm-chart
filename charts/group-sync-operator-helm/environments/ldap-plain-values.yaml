@@ -4,14 +4,14 @@
 # setup-local-ldap-testing/15-bootstrap-cert-manager-ca.sh creates. This file is the way in without
 # it: the directory serves 389 regardless, and no CA is involved anywhere.
 #
-#   helm install group-sync . -n group-sync-operator --create-namespace \
-#     -f environments/ldap-plain-values.yaml
+#   helm install group-sync charts/group-sync-operator-helm -n group-sync-operator --create-namespace \
+#     -f charts/group-sync-operator-helm/environments/ldap-plain-values.yaml
 #
 # Switching to LDAPS afterwards is three steps, then dropping this file:
 #
 #   setup-local-ldap-testing/15-bootstrap-cert-manager-ca.sh apply
 #   oc delete groups -l group-sync-operator.redhat-cop.io/sync-provider
-#   helm upgrade group-sync . -n group-sync-operator --reset-values
+#   helm upgrade group-sync charts/group-sync-operator-helm -n group-sync-operator --reset-values
 #
 # The group deletion is not optional. The operator compares openshift.io/ldap.url on each Group
 # against host:port and refuses to adopt a mismatch, so groups synced at :389 are orphaned at :636.

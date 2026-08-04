@@ -574,7 +574,7 @@ The following tables list the configurable parameters and their default values.
 | groupSync.schedule | Sync schedule (cron format) | "*/30 * * * *" |
 | groupSync.providerName | LDAP provider name | ldap |
 | groupSync.insecure | `false` verifies the chain. A CA is required for `ldaps://` either way | false |
-| groupSync.url | LDAP server URL. Leave empty to derive it from the OAuth CR | ldaps://openldap-service.ldap-testing.svc.cluster.local:636 |
+| groupSync.url | LDAP server URL. **Empty by default** — supply it per cluster, or leave it out and it is derived from the OAuth CR at install time (not available to `helm template`) | `""` |
 
 ### Multi-Tenant GroupSync Configuration
 
@@ -723,7 +723,7 @@ helm get values group-sync -n group-sync-operator
 helm get values group-sync -n group-sync-operator --all
 
 # Discard the remembered values and take the chart defaults
-helm upgrade group-sync . -n group-sync-operator --reset-values
+helm upgrade group-sync ./charts/group-sync-operator-helm -n group-sync-operator --reset-values
 ```
 
 `--reset-values` discards **all** previously supplied values, so pass any you still want in the same
