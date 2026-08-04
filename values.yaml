@@ -70,6 +70,15 @@ groupSync:
   # openshift.io/ldap.url on each Group against host:port and refuses to adopt a mismatch
   # ("annotation did not match sync host"). Re-annotating the groups is enough — they do not need
   # deleting.
+  #
+  # Leave it EMPTY to derive it from the cluster OAuth CR's LDAP identity provider: the scheme, host
+  # and port are taken and the basedn/query dropped, since those describe authentication rather than
+  # group sync. An explicit value always wins, so this cannot silently repoint an existing install.
+  #
+  # Empty only works during helm install/upgrade — lookup cannot read a cluster from helm template,
+  # --dry-run, or an offline GitOps render, and the render fails there instead of emitting no url.
+  # Note also that an empty value set with --set PERSISTS into later upgrades, so a cluster that
+  # later loses its LDAP identity provider will fail to upgrade until you pass --reset-values.
   url: "ldaps://openldap-service.ldap-testing.svc.cluster.local:636"
   # false, so the operator verifies the chain. A CA is required for ldaps:// either way: insecure
   # relaxes checks the operator makes itself, it cannot make a handshake trust an unknown root.

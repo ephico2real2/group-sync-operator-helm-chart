@@ -603,6 +603,63 @@ When upgrading the chart, note that:
 helm upgrade group-sync group-sync-operator/group-sync-operator-helm -n group-sync-operator
 ```
 
+### `helm upgrade` keeps your old values — new chart defaults will NOT apply
+
+This catches people out, so it is worth being explicit. `helm upgrade` reuses the **user-supplied
+values from the previous revision**. Anything you once passed with `-f` or `--set` keeps applying on
+every later upgrade, even when the chart's own default for that key has changed.
+
+Two ways this bites in practice:
+
+- **A stale `groupSync.ca`.** If an earlier install pointed it at `openshift-config`, that persists
+  after the chart default moves to the local `ca-config-map-copy`. The operator carries on attempting
+  a cross-namespace read and, where that is denied, reconciles forever on `ConfigMap ... not found`.
+- **A stale empty `groupSync.url`.** Setting it empty enables discovery from the OAuth CR. That empty
+  value persists, so if the cluster's LDAP identity provider is later removed there is nothing left to
+  derive from and the upgrade fails with `groupSync.url is empty and no LDAP url could be derived`.
+
+Check what the release is actually carrying, then clear it if needed:
+
+```bash
+# What you supplied (chart defaults are NOT shown here)
+helm get values group-sync -n group-sync-operator
+
+# Everything after the merge — what the templates really saw
+helm get values group-sync -n group-sync-operator --all
+
+# Discard the remembered values and take the chart defaults
+helm upgrade group-sync . -n group-sync-operator --reset-values
+```
+
+`--reset-values` discards **all** previously supplied values, so pass any you still want in the same
+command. Use `--reuse-values` for the opposite behaviour, and note that mixing `--reuse-values` with
+`--set` only merges the keys you name.
+
+### Upgrading over a release installed before the test resources were un-hooked
+
+The test ServiceAccount, RBAC and scripts ConfigMap used to be Helm **hooks**, and are now ordinary
+release resources. Hook-created objects carry no `meta.helm.sh/release-*` annotations, so Helm cannot
+adopt them and the first upgrade fails:
+
+```
+Error: UPGRADE FAILED: Unable to continue with update: ServiceAccount "group-sync-test-sa" in
+namespace "group-sync-operator" exists and cannot be imported into the current release:
+invalid ownership metadata; annotation validation error: missing key "meta.helm.sh/release-name"
+```
+
+Delete the leftovers once — they hold no state, and the upgrade recreates them as managed resources:
+
+```bash
+oc delete sa group-sync-test-sa -n group-sync-operator
+oc delete configmap group-sync-test-scripts -n group-sync-operator
+oc delete role group-sync-test-ca-role -n group-sync-operator
+oc delete rolebinding group-sync-test-ca-binding -n group-sync-operator
+oc delete clusterrole group-sync-test-role
+oc delete clusterrolebinding group-sync-test-binding
+```
+
+Then upgrade as normal. This is a one-time step; later upgrades are unaffected.
+
 ## Troubleshooting
 
 1. Verify the operator deployment:
