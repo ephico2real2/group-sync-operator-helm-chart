@@ -4,6 +4,21 @@ on:
   push:
     branches:
       - main
+    # Only when the chart itself changes. A README or setup-script edit does not warrant a release run.
+    #
+    # chart-releaser also skips a version it has already published (skip_existing), so this is about not
+    # running at all rather than about correctness — but it keeps the Actions history readable and means
+    # a green run genuinely corresponds to a chart change.
+    #
+    # Anything NOT matched here still gets validated: ci.yaml has its own push-to-main trigger with no
+    # path filter. The cost is that a push touching charts/ runs the checks twice — once standalone, once
+    # as the gate below. They are offline and take seconds, and the alternative is a coverage gap.
+    paths:
+      - 'charts/**'
+
+  # So a release can be forced without an empty commit — e.g. after bumping only Chart.yaml's version,
+  # or to retry a run that failed on something transient.
+  workflow_dispatch:
 
 jobs:
   # The same checks that run on every PR, called rather than duplicated. Without this, a direct push to
