@@ -62,17 +62,33 @@ groupSync:
     # Namespace where the Secret is located
     namespace: group-sync-operator
 
-  # ldaps:// on 636. Plain ldap:// on 389 sends the bind password across the network in the clear, and
-  # it leaves every CA path above inert — needsCa is false for ldap:// with insecure true, so no
-  # caSecret is emitted and caCopy never runs.
+  # EMPTY on purpose: set it in the per-cluster values file, or leave it out and let it be derived
+  # from the cluster OAuth CR's first LDAP identity provider. Only scheme://host:port is taken — the
+  # basedn and query in an OAuth LDAP url describe authentication, not group sync. An explicit value
+  # always wins, so this cannot silently repoint an existing install.
   #
-  # Changing the host or port here after groups exist needs care: the operator compares
+  # CAUTION — deriving needs a LIVE cluster. It uses `lookup`, which works for helm install and
+  # upgrade but returns nothing for `helm template`, `--dry-run`, and offline GitOps renders such as
+  # ArgoCD. The render FAILS there rather than emitting a GroupSync with no url, so set this
+  # explicitly if you use any of them.
+  #
+  # Changing the host or port after groups exist needs care either way: the operator compares
   # openshift.io/ldap.url on each Group against host:port and refuses to adopt a mismatch
-  # ("annotation did not match sync host"). Re-annotating the groups is enough — they do not need
-  # deleting.
-  url: "ldaps://openldap-service.ldap-testing.svc.cluster.local:636"
-  # false, so the operator verifies the chain. A CA is required for ldaps:// either way: insecure
-  # relaxes checks the operator makes itself, it cannot make a handshake trust an unknown root.
+  # ("annotation did not match sync host"). Deleting the operator-managed groups is enough — the next
+  # sync recreates them:
+  #   oc delete groups -l group-sync-operator.redhat-cop.io/sync-provider
+  #
+  # The local test directory value, for reference:
+  #   url: "ldaps://openldap-service.ldap-testing.svc.cluster.local:636"
+  url: ""
+
+  # false, so the operator verifies the chain, and a CA is therefore required. Note that a CA is
+  # required for any ldaps:// url regardless of this flag: insecure relaxes checks the operator makes
+  # itself, it cannot make a TLS handshake trust an unknown root.
+  #
+  # Setting this true AND leaving url empty is the one combination to avoid: needsCa is evaluated on
+  # the url as written, so an empty url with insecure true emits no CA — and if the derived url turns
+  # out to be ldaps://, the operator will have no root to verify against.
   insecure: false
 
   # RFC2307 schema configuration
@@ -114,6 +130,42 @@ groupSync:
     # Error tolerance settings
     tolerateMemberNotFoundErrors: true
     tolerateMemberOutOfScopeErrors: true
+
+# -------------------- Trusted CA injection --------------------
+# THIRD way to give the operator a CA, alongside the copy and a ConfigMap you supply. All three end at
+# the same place: whatever groupSync.ca names. See CA_CERTIFICATE_FLOW.md.
+#
+#   1. copy      oauthSecretExtraction.caCopy.enabled=true  — the Job copies sourceCa to destinationCa
+#   2. injected  trustedCA.injected.enabled=true            — OpenShift fills an empty ConfigMap
+#   3. existing  both of the above false                     — point groupSync.ca at your own ConfigMap
+#
+# Creates an EMPTY ConfigMap labelled config.openshift.io/inject-trusted-cabundle: "true", which
+# OpenShift's network operator fills with the system trust store merged with
+# proxy/cluster.spec.trustedCA. Nothing to maintain and no copy step.
+#
+# THE LIMIT, and it decides whether this is any use to you: the bundle carries only CAs the CLUSTER
+# already trusts. An LDAP server signed by a corporate CA that is in proxy/cluster.spec.trustedCA works
+# with no further setup. One signed by anything else — a lab signer, a local cert-manager root — does
+# NOT, because an empty proxy.spec.trustedCA yields nothing but public roots. Check before enabling:
+#
+#   oc get proxy cluster -o jsonpath='{.spec.trustedCA.name}{"\n"}'
+#
+# When enabled, set caCopy.enabled=false and point groupSync.ca at it — the key is ca-bundle.crt, fixed
+# by the injector, not ca.crt:
+#
+#   groupSync:
+#     ca:
+#       kind: ConfigMap
+#       name: ldap-trusted-ca
+#       namespace: group-sync-operator
+#       key: ca-bundle.crt
+trustedCA:
+  injected:
+    # Off by default: on a cluster with an empty proxy.spec.trustedCA it produces a bundle that cannot
+    # verify anything the public roots do not already cover.
+    enabled: false
+    # The ConfigMap the chart creates, empty, in groupSync.namespace.
+    name: ldap-trusted-ca
 
 # -------------------- Custom (multi-tenant) GroupSync CRs --------------------
 # Generate ONE additional GroupSync CR per team/tenant. Full guide:
@@ -200,7 +252,16 @@ oauthSecretExtraction:
 
   # Source secret configuration (OAuth LDAP secret)
   sourceSecret:
-    name: ldap-secret
+    # EMPTY on purpose: read from the same LDAP identity provider as bindDN above, so the DN and the
+    # password always belong together. Resolved at RUNTIME by the Job, so it is safe under
+    # `helm template` too. When empty, RBAC grants the read through a Role in the namespace below
+    # rather than a pinned resourceNames rule, since the name is not known at render time.
+    #
+    # The local test directory value, for reference:
+    #   name: ldap-secret
+    name: ""
+    # Fixed by the OpenShift API: oauth.spec.identityProviders[].ldap.bindPassword is a name-only
+    # reference in openshift-config, with the password under the bindPassword key.
     namespace: openshift-config
     passwordKey: bindPassword
 
@@ -247,7 +308,13 @@ oauthSecretExtraction:
       key: ca.crt
 
   # LDAP bind DN for the GroupSync secret
-  bindDN: "cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com"
+  # EMPTY on purpose: read from the cluster OAuth CR's first LDAP identity provider by the extraction
+  # Job. Unlike groupSync.url this is resolved at RUNTIME, so it is safe to leave empty under
+  # `helm template` and an offline GitOps render — the Job reads the CR when it runs.
+  #
+  # The local test directory value, for reference:
+  #   bindDN: "cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com"
+  bindDN: ""
 
   # Job configuration
   waitTimeout: 300  # seconds to wait for source secret

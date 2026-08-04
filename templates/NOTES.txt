@@ -101,7 +101,17 @@ If you encounter issues:
 4. Check operator events:
    $ oc get events -n {{ .Values.groupSync.namespace }}
 
-5. For additional help, see the documentation:
+5. If a value you changed seems to have no effect, or an upgrade fails over a value you are no
+   longer passing: helm upgrade REUSES the user-supplied values from the previous revision, so
+   anything once given with -f or --set keeps applying even after the chart default changes.
+
+   $ helm get values {{ .Release.Name }} -n {{ .Release.Namespace }}          # what you supplied
+   $ helm get values {{ .Release.Name }} -n {{ .Release.Namespace }} --all    # after the merge
+   $ helm upgrade {{ .Release.Name }} . -n {{ .Release.Namespace }} --reset-values
+
+   --reset-values discards ALL remembered values, so re-pass any you still want.
+
+6. For additional help, see the documentation:
    https://github.com/redhat-cop/group-sync-operator
 
 NEXT STEPS:

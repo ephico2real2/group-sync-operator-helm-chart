@@ -132,7 +132,24 @@ The chart deploys these main components:
 
 ## Detailed CA Certificate Setup
 
-The GroupSync Operator requires a CA certificate to establish secure LDAPS connections. This section guides you through the process of setting up and configuring your CA certificate.
+> **📄 Full reference: [CA_CERTIFICATE_FLOW.md](CA_CERTIFICATE_FLOW.md)** — which ConfigMap is which,
+> when a CA is required, rotation, verification and troubleshooting.
+
+**There are two CA ConfigMaps and this section describes only the first.** The one you create below is
+the **source**, in `openshift-config`. The operator does **not** read it. The chart's extraction Job
+copies it to `ca-config-map-copy` in the operator's own namespace, and that copy is what `groupSync.ca`
+names and what the operator loads.
+
+```
+openshift-config/ca-config-map  ──copy──▶  group-sync-operator/ca-config-map-copy  ──▶  operator
+   (you create this)                            (the Job creates this)
+```
+
+The copy exists because reading `openshift-config` from the operator's namespace needs cross-namespace
+ConfigMap read, which some clusters grant and others deny — and where it is denied the only symptom is
+the operator reconciling forever on `ConfigMap ... not found`. Skip creating the source entirely if the
+cluster already has an OAuth LDAP identity provider: it already has the ConfigMap, and the chart
+discovers its name from the OAuth CR.
 
 ### Obtaining the CA Certificate
 
@@ -148,27 +165,48 @@ openssl s_client -connect ldap.example.com:636 -showcerts </dev/null 2>/dev/null
   openssl x509 -outform PEM > ldap-ca.crt
 ```
 
-### Creating the ConfigMap
-
-Once you have the CA certificate, create a ConfigMap in the appropriate namespace:
+### Creating the ConfigMap (the source)
 
 ```bash
-# Create the ConfigMap in the openshift-config namespace
+# The SOURCE, in openshift-config. The key must be ca.crt.
 oc create configmap ca-config-map \
   --from-file=ca.crt=./ldap-ca.crt \
   -n openshift-config
 ```
 
-### Verifying the CA Certificate
-
-Verify that your CA certificate works correctly by testing the LDAPS connection:
+Nothing further is needed: the extraction Job discovers this ConfigMap, preflights it, and copies it
+into the operator's namespace on every install and upgrade. To confirm the copy landed:
 
 ```bash
-# Test LDAPS connection using the CA certificate
+oc get configmap ca-config-map-copy -n group-sync-operator \
+  -o jsonpath='{.metadata.annotations.group-sync\.redhat-cop\.io/source-hash}{"\n"}'
+```
+
+### Verifying the CA Certificate
+
+Two different questions. This checks the **source** file, from wherever you are:
+
+```bash
 openssl s_client -connect ldap.example.com:636 -CAfile ldap-ca.crt
 ```
 
-If the connection is successful, you'll see "Verify return code: 0 (ok)" in the output.
+`Verify return code: 0 (ok)` means the CA signed the server's certificate.
+
+But the question that matters is whether **the CA the operator loads** verifies the endpoint **from
+inside the cluster** — a SAN mismatch only surfaces there, because it depends on the name the operator
+connects to. That is what `helm test` checks:
+
+```bash
+helm test group-sync -n group-sync-operator --logs
+```
+
+```
+✅ CA read: 1 certificate(s)
+✅ chain verifies against group-sync-operator/ca-config-map-copy, hostname matches ldap.example.com
+```
+
+See [CA_CERTIFICATE_FLOW.md](CA_CERTIFICATE_FLOW.md#verifying) for checking the source and copy are in
+sync, and for the common failures.
 
 ## LDAP Configuration Guide
 
@@ -361,11 +399,19 @@ The chart includes optional test pods that can validate your installation and LD
 # In your values.yaml file
 test:
   enabled: true
-  openldapClientImage:
-    repository: "your-registry/openldap-client"
-    tag: "1.0"
+  # ose-cli, pinned. The tests need oc to read the CA and the sync status, and curl to verify the
+  # LDAPS chain. NOT openssl — it is absent from current ose-cli builds and present in some older
+  # ones, so a floating tag made the same chart pass on one cluster and fail on another.
+  ldapClientImage:
+    repository: "registry.redhat.io/openshift4/ose-cli"
+    tag: "v4.14"
     pullPolicy: IfNotPresent
+  # Seconds the sync check waits for a first successful sync before failing.
+  syncWaitSeconds: 180
 ```
+
+The tests are **Pods**, not Jobs, so `helm test --logs` works — it looks up a pod named after the
+hook itself, and a Job's pods are `<job>-<suffix>`.
 
 To run the tests after enabling them:
 
@@ -525,10 +571,10 @@ The following tables list the configurable parameters and their default values.
 |-----------|-------------|---------|
 | groupSync.name | Name of the primary GroupSync resource | ldap-groupsync |
 | groupSync.namespace | Target namespace | group-sync-operator |
-| groupSync.schedule | Sync schedule (cron format) — fast-track testing default | "*/2* ** *" |
+| groupSync.schedule | Sync schedule (cron format) | "*/30 * * * *" |
 | groupSync.providerName | LDAP provider name | ldap |
-| groupSync.insecure | Use plain LDAP (true) or LDAPS with CA (false) | true |
-| groupSync.url | LDAP server URL | ldap://openldap-service.ldap-testing.svc.cluster.local:389 |
+| groupSync.insecure | `false` verifies the chain. A CA is required for `ldaps://` either way | false |
+| groupSync.url | LDAP server URL. Leave empty to derive it from the OAuth CR | ldaps://openldap-service.ldap-testing.svc.cluster.local:636 |
 
 ### Multi-Tenant GroupSync Configuration
 
@@ -546,11 +592,57 @@ See [Multi-Tenant GroupSync](#multi-tenant-groupsync-customgroupsyncs) for usage
 
 ### CA Certificate Configuration
 
+A CA is required whenever the url is `ldaps://` — **even with `insecure: true`**. Implicit TLS
+completes the handshake before any LDAP traffic, so the client must already trust the CA; `insecure`
+only relaxes checks the operator makes itself. It is also required with `insecure: false` over plain
+`ldap://`.
+
+`groupSync.ca` names a **copy in the operator's own namespace**, not the source in `openshift-config`.
+Reading it in place needs cross-namespace ConfigMap read that the operator has on some clusters and
+not others, and where it is denied the only symptom is the operator reconciling forever on
+`ConfigMap ... not found, caSecret must be specified when insecure=false` — naming neither the
+namespace nor the permission. The extraction job makes the copy.
+
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| groupSync.ca.name | ConfigMap name containing CA cert | ca-config-map |
-| groupSync.ca.key | Key in ConfigMap for CA cert | ca.crt |
-| groupSync.ca.namespace | Namespace of CA ConfigMap | openshift-config |
+| groupSync.ca.field | `caSecret` or `ca`. Validation checks `caSecret` even though the CRD calls it deprecated | caSecret |
+| groupSync.ca.kind | ConfigMap or Secret | ConfigMap |
+| groupSync.ca.name | Must match `caCopy.destinationCa.name` | ca-config-map-copy |
+| groupSync.ca.key | Key holding the PEM | ca.crt |
+| groupSync.ca.namespace | The operator's namespace, not openshift-config | group-sync-operator |
+
+### CA Copy Configuration
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| oauthSecretExtraction.caCopy.enabled | Copy the CA into the operator's namespace. Only runs when a CA is needed | true |
+| oauthSecretExtraction.caCopy.discoverFromOAuth | Read the source ConfigMap **name** from the cluster OAuth CR rather than trusting the value below | true |
+| oauthSecretExtraction.caCopy.sourceCa.name | Source ConfigMap — the one the OAuth LDAP identity provider uses | ca-config-map |
+| oauthSecretExtraction.caCopy.sourceCa.namespace | Fixed by the OpenShift API | openshift-config |
+| oauthSecretExtraction.caCopy.sourceCa.key | Fixed by the OpenShift API | ca.crt |
+| oauthSecretExtraction.caCopy.destinationCa.kind | ConfigMap or Secret | ConfigMap |
+| oauthSecretExtraction.caCopy.destinationCa.name | Named `-copy` because the job overwrites it on every install and upgrade | ca-config-map-copy |
+| oauthSecretExtraction.caCopy.destinationCa.namespace | Defaults to `groupSync.namespace` | group-sync-operator |
+
+The copy carries `group-sync.redhat-cop.io/source-hash`, and that hash is also stamped on the
+extraction job's pod template — so a changed source CA changes the pod spec and the copy is remade on
+the next upgrade. It is computed with `lookup`, which reads the live cluster, so `helm template` and
+offline GitOps renders show `unavailable` and the runtime stamp is the reliable record.
+
+### Values discovered from the OAuth CR when left empty
+
+The cluster's OAuth LDAP identity provider already describes a directory that works, so these need
+not be repeated. An explicit value always wins.
+
+| Left empty | Taken from | Notes |
+|---|---|---|
+| `groupSync.url` | `identityProviders[LDAP].ldap.url` | Only `scheme://host:port`; the basedn and query describe authentication, not group sync. Resolved at template time, so `helm install`/`upgrade` only |
+| `oauthSecretExtraction.bindDN` | `.ldap.bindDN` | Resolved by the job at runtime, so it works under an offline GitOps render |
+| `oauthSecretExtraction.sourceSecret.name` | `.ldap.bindPassword.name` | Same, and taken from the **same** provider as the bindDN so the pair always belongs together |
+
+The **first** LDAP provider wins, and the job logs which one it used. Note that a bare
+`identityProviders[0]` would be the first provider of any type — commonly HTPasswd — so the type
+filter matters.
 
 ### Subscription Configuration
 
@@ -566,10 +658,13 @@ See [Multi-Tenant GroupSync](#multi-tenant-groupsync-customgroupsyncs) for usage
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| test.enabled | Enable test pods | false |
-| test.openldapClientImage.repository | OpenLDAP client image repository | your-registry/openldap-client |
-| test.openldapClientImage.tag | OpenLDAP client image tag | 1.0 |
-| test.openldapClientImage.pullPolicy | Image pull policy | IfNotPresent |
+| test.enabled | Enable test pods | true |
+| test.ldapClientImage.repository | Image for the connection test — needs `oc` and `curl` | registry.redhat.io/openshift4/ose-cli |
+| test.ldapClientImage.tag | Pinned, not `latest`: builds differ in what they ship | v4.14 |
+| test.ldapClientImage.pullPolicy | Image pull policy | IfNotPresent |
+| test.operatorHealthImage.repository | Image for the operator health test | registry.redhat.io/openshift4/ose-cli |
+| test.operatorHealthImage.tag | Pinned for the same reason | v4.14 |
+| test.syncWaitSeconds | Seconds to wait for a first successful sync before failing | 180 |
 
 ## Custom Values
 
@@ -602,6 +697,63 @@ When upgrading the chart, note that:
 ```bash
 helm upgrade group-sync group-sync-operator/group-sync-operator-helm -n group-sync-operator
 ```
+
+### `helm upgrade` keeps your old values — new chart defaults will NOT apply
+
+This catches people out, so it is worth being explicit. `helm upgrade` reuses the **user-supplied
+values from the previous revision**. Anything you once passed with `-f` or `--set` keeps applying on
+every later upgrade, even when the chart's own default for that key has changed.
+
+Two ways this bites in practice:
+
+- **A stale `groupSync.ca`.** If an earlier install pointed it at `openshift-config`, that persists
+  after the chart default moves to the local `ca-config-map-copy`. The operator carries on attempting
+  a cross-namespace read and, where that is denied, reconciles forever on `ConfigMap ... not found`.
+- **A stale empty `groupSync.url`.** Setting it empty enables discovery from the OAuth CR. That empty
+  value persists, so if the cluster's LDAP identity provider is later removed there is nothing left to
+  derive from and the upgrade fails with `groupSync.url is empty and no LDAP url could be derived`.
+
+Check what the release is actually carrying, then clear it if needed:
+
+```bash
+# What you supplied (chart defaults are NOT shown here)
+helm get values group-sync -n group-sync-operator
+
+# Everything after the merge — what the templates really saw
+helm get values group-sync -n group-sync-operator --all
+
+# Discard the remembered values and take the chart defaults
+helm upgrade group-sync . -n group-sync-operator --reset-values
+```
+
+`--reset-values` discards **all** previously supplied values, so pass any you still want in the same
+command. Use `--reuse-values` for the opposite behaviour, and note that mixing `--reuse-values` with
+`--set` only merges the keys you name.
+
+### Upgrading over a release installed before the test resources were un-hooked
+
+The test ServiceAccount, RBAC and scripts ConfigMap used to be Helm **hooks**, and are now ordinary
+release resources. Hook-created objects carry no `meta.helm.sh/release-*` annotations, so Helm cannot
+adopt them and the first upgrade fails:
+
+```
+Error: UPGRADE FAILED: Unable to continue with update: ServiceAccount "group-sync-test-sa" in
+namespace "group-sync-operator" exists and cannot be imported into the current release:
+invalid ownership metadata; annotation validation error: missing key "meta.helm.sh/release-name"
+```
+
+Delete the leftovers once — they hold no state, and the upgrade recreates them as managed resources:
+
+```bash
+oc delete sa group-sync-test-sa -n group-sync-operator
+oc delete configmap group-sync-test-scripts -n group-sync-operator
+oc delete role group-sync-test-ca-role -n group-sync-operator
+oc delete rolebinding group-sync-test-ca-binding -n group-sync-operator
+oc delete clusterrole group-sync-test-role
+oc delete clusterrolebinding group-sync-test-binding
+```
+
+Then upgrade as normal. This is a one-time step; later upgrades are unaffected.
 
 ## Troubleshooting
 

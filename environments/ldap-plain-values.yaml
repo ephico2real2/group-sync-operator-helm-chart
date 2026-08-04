@@ -1,0 +1,48 @@
+# Plain LDAP on 389, for a cluster with no cert-manager.
+#
+# The chart defaults to LDAPS, which needs the PKI that
+# setup-local-ldap-testing/15-bootstrap-cert-manager-ca.sh creates. This file is the way in without
+# it: the directory serves 389 regardless, and no CA is involved anywhere.
+#
+#   helm install group-sync . -n group-sync-operator --create-namespace \
+#     -f environments/ldap-plain-values.yaml
+#
+# Switching to LDAPS afterwards is three steps, then dropping this file:
+#
+#   setup-local-ldap-testing/15-bootstrap-cert-manager-ca.sh apply
+#   oc delete groups -l group-sync-operator.redhat-cop.io/sync-provider
+#   helm upgrade group-sync . -n group-sync-operator --reset-values
+#
+# The group deletion is not optional. The operator compares openshift.io/ldap.url on each Group
+# against host:port and refuses to adopt a mismatch, so groups synced at :389 are orphaned at :636.
+# The next sync recreates them, and the label selector leaves hand-made groups alone.
+#
+# --reset-values matters too: helm upgrade otherwise reuses this file's values from the previous
+# revision and you stay on plain LDAP without being told.
+
+groupSync:
+  # insecure true with ldap:// makes needsCa false, so no caSecret is emitted, the CA preflight is
+  # skipped and caCopy never runs. Nothing in the chart touches a certificate on this path.
+  #
+  # The bind password crosses the network in the clear. Acceptable for a local test directory, not
+  # for anything else.
+  url: "ldap://openldap-service.ldap-testing.svc.cluster.local:389"
+  insecure: true
+
+  # Unused while insecure is true, but left pointing at the copy so switching to LDAPS needs only
+  # url and insecure to change.
+  ca:
+    field: caSecret
+    kind: ConfigMap
+    name: ca-config-map-copy
+    namespace: group-sync-operator
+    key: ca.crt
+
+# The base values leave url, bindDN and sourceSecret.name EMPTY so each cluster supplies them or has
+# them derived from its OAuth CR. The local test directory is not in any OAuth CR, so they are given
+# here explicitly — without them the render fails on url and the extraction Job fails on the bind
+# credentials.
+oauthSecretExtraction:
+  bindDN: "cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com"
+  sourceSecret:
+    name: ldap-secret

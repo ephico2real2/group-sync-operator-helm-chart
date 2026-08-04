@@ -1,0 +1,43 @@
+# CRC / local test directory, over LDAPS.
+#
+# A per-cluster values file. The base values.yaml leaves url, bindDN and sourceSecret.name EMPTY so
+# each cluster either supplies them or has them derived from its own OAuth CR. The local directory
+# appears in no OAuth CR, so all three are given here — nothing else needs overriding, because the CA
+# copy, the discovery toggles and insecure: false all come from the base.
+#
+# Prerequisites, in this order. The LDAP server mounts the certificate the PKI issues, so the PKI must
+# exist first:
+#
+#   setup-local-ldap-testing/10-setup-oauth-secrets.sh
+#   setup-local-ldap-testing/15-bootstrap-cert-manager-ca.sh apply
+#   setup-local-ldap-testing/30-manage-ldap-server.sh deploy     # 2-4 min: dhparam generation
+#   setup-local-ldap-testing/20-import-ldap-data.sh
+#
+# Then:
+#
+#   helm install group-sync . -n group-sync-operator --create-namespace -f crc-values.yaml
+#   helm test group-sync -n group-sync-operator --logs
+#   setup-local-ldap-testing/15-bootstrap-cert-manager-ca.sh verify
+#
+# For plain LDAP on 389 instead — no cert-manager needed — use
+# environments/ldap-plain-values.yaml. See CA_CERTIFICATE_FLOW.md for how the CA source and copy
+# relate.
+
+groupSync:
+  # Must match a SAN on the serving certificate. The bootstrap script issues for both
+  # <svc>.<ns>.svc and <svc>.<ns>.svc.cluster.local, so either form works.
+  #
+  # Changing the host or port after groups exist orphans them: the operator compares
+  # openshift.io/ldap.url on each Group against host:port and refuses to adopt a mismatch. Delete the
+  # operator-managed groups and the next sync recreates them:
+  #   oc delete groups -l group-sync-operator.redhat-cop.io/sync-provider
+  url: "ldaps://openldap-service.ldap-testing.svc.cluster.local:636"
+
+oauthSecretExtraction:
+  # The service account created by 20-import-ldap-data.sh, with read access to the Groups and People
+  # OUs. Given explicitly because there is no OAuth LDAP identity provider to read it from.
+  bindDN: "cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com"
+  sourceSecret:
+    # Created by 10-setup-oauth-secrets.sh in openshift-config, holding the password under the
+    # bindPassword key.
+    name: ldap-secret

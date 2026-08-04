@@ -9,11 +9,15 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "1"
 rules:
-# Access to secrets in openshift-config namespace (source OAuth secret)
+{{- if .Values.oauthSecretExtraction.sourceSecret.name }}
+# The source OAuth secret, by name. Omitted when the name is unset: the Job discovers it from the
+# OAuth CR, and resourceNames cannot pin a name that is not known at render time — the Role in that
+# namespace grants the read instead.
 - apiGroups: [""]
   resources: ["secrets"]
   verbs: ["get", "list"]
   resourceNames: ["{{ .Values.oauthSecretExtraction.sourceSecret.name }}"]
+{{- end }}
 # Access to secrets in group-sync-operator namespace (target secret)
 - apiGroups: [""]
   resources: ["secrets"]
@@ -49,7 +53,7 @@ rules:
 - apiGroups: [""]
   resources: [{{ if eq (.Values.oauthSecretExtraction.caCopy.destinationCa.kind | default "ConfigMap") "Secret" }}"secrets"{{ else }}"configmaps"{{ end }}]
   verbs: ["create"]
-{{- if .Values.oauthSecretExtraction.caCopy.discoverFromOAuth }}
+{{- if or .Values.oauthSecretExtraction.caCopy.discoverFromOAuth (not .Values.oauthSecretExtraction.bindDN) (not .Values.oauthSecretExtraction.sourceSecret.name) }}
 # Discovery reads the ConfigMap name off the cluster OAuth CR. Cluster-scoped, so it must live in
 # a ClusterRole, and pinned to the one object named "cluster".
 - apiGroups: ["config.openshift.io"]
@@ -60,11 +64,13 @@ rules:
 {{- end }}
 {{- end }}
 {{- end }}
-{{- if and .Values.oauthSecretExtraction.enabled .Values.oauthSecretExtraction.caCopy.enabled (include "group-sync-operator-helm.needsCa" .Values.groupSync) }}
+{{- $caRead := and .Values.oauthSecretExtraction.caCopy.enabled (include "group-sync-operator-helm.needsCa" .Values.groupSync) }}
+{{- $secretRead := not .Values.oauthSecretExtraction.sourceSecret.name }}
+{{- if and .Values.oauthSecretExtraction.enabled (or $caRead $secretRead) }}
 ---
-# A Role, not more ClusterRole rules. The source name is not known until the Job reads the OAuth
-# CR, and an unpinned rule in a ClusterRole would grant it in EVERY namespace. Scoped here to the
-# one namespace that holds it.
+# A Role, not more ClusterRole rules. These names are not known until the Job reads the OAuth CR,
+# and an unpinned rule in a ClusterRole would grant them in EVERY namespace. Scoped here to the one
+# namespace that holds them.
 #
 # get alone is not enough: listing is how the Job reports the available keys when the expected one
 # is missing, and RBAC does not honour resourceNames for list.
@@ -79,9 +85,18 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "1"
 rules:
+{{- if $caRead }}
 - apiGroups: [""]
   resources: ["configmaps"]
   verbs: ["get", "list"]
+{{- end }}
+{{- if $secretRead }}
+# sourceSecret.name is unset, so the Job discovers it and the ClusterRole's pinned rule cannot
+# cover a name that is not known at render time.
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list"]
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

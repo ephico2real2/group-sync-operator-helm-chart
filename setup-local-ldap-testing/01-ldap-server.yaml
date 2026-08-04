@@ -78,9 +78,9 @@ spec:
         runAsUser: 0
         runAsGroup: 0
         fsGroup: 0
-      # Installs the service-ca serving certificate so LDAPS presents a certificate whose SAN is the
-      # Service DNS name. Without it osixia self-signs for the POD name, and any client verifying the
-      # hostname fails with:
+      # Installs the cert-manager serving certificate so LDAPS presents a certificate whose SAN is
+      # the Service DNS name. Without it osixia self-signs for the POD name, and any client verifying
+      # the hostname fails with:
       #   x509: certificate is valid for openldap-server-<hash>, not openldap-service...svc.cluster.local
       #
       # Copied into the emptyDir rather than mounted over the certs directory, because osixia writes
@@ -93,17 +93,24 @@ spec:
         - -c
         - |
           set -euo pipefail
-          install -m 0644 /tls/tls.crt        /certs/ldap.crt
-          install -m 0644 /tls/tls.key        /certs/ldap.key
-          install -m 0644 /ca/service-ca.crt  /certs/ca.crt
-          ls -l /certs
+          if [ -s /tls/tls.crt ] && [ -s /tls/tls.key ]; then
+            install -m 0644 /tls/tls.crt  /certs/ldap.crt
+            install -m 0644 /tls/tls.key  /certs/ldap.key
+            install -m 0644 /ca/ca.crt    /certs/ca.crt
+            echo "cert-manager certificate installed — LDAPS on 636 is verifiable"
+            ls -l /certs
+          else
+            # No PKI yet. osixia self-signs for the POD name, which no verifying client accepts, so
+            # use ldap:// on 389 until 15-bootstrap-cert-manager-ca.sh has run.
+            echo "no cert-manager certificate present — osixia will self-sign; use ldap:// on 389"
+          fi
         volumeMounts:
         - name: ldap-certs
           mountPath: /certs
         - name: serving-cert
           mountPath: /tls
           readOnly: true
-        - name: service-ca
+        - name: ca-bundle
           mountPath: /ca
           readOnly: true
       containers:
@@ -139,6 +146,16 @@ spec:
           limits:
             memory: "512Mi"
             cpu: "500m"
+        # Liveness kills the container at 60s (30 + 3x10), but osixia regenerates dhparam.pem on every
+        # start because ldap-certs is an emptyDir, and 2048-bit DH generation takes variable time. When
+        # it ran long the container was killed, restarted, regenerated from scratch and killed again —
+        # a permanent CrashLoopBackOff that looked like a TLS fault. startupProbe holds liveness off
+        # until slapd is actually listening.
+        startupProbe:
+          tcpSocket:
+            port: 389
+          periodSeconds: 10
+          failureThreshold: 60
         livenessProbe:
           tcpSocket:
             port: 389
@@ -162,28 +179,25 @@ spec:
       # Writable: osixia generates dhparam.pem here at startup.
       - name: ldap-certs
         emptyDir: {}
-      # Issued by service-ca because the Service carries
-      # service.beta.openshift.io/serving-cert-secret-name.
+      # Issued by cert-manager — see setup-local-ldap-testing/15-bootstrap-cert-manager-ca.sh, which
+      # MUST run before this manifest. The secret does not exist until it does, and the pod stays in
+      # ContainerCreating until the secret appears.
       - name: serving-cert
         secret:
-          secretName: openldap-serving-cert
-      # Filled by service-ca because the ConfigMap carries
-      # service.beta.openshift.io/inject-cabundle. Same signer, so the certificate verifies.
-      - name: service-ca
-        configMap:
-          name: openldap-service-ca
+          secretName: openldap-certmanager-tls
+          # optional, so this manifest stands alone. Without cert-manager the server still starts and
+          # serves plain ldap:// on 389; run 15-bootstrap-cert-manager-ca.sh to get verifiable LDAPS.
+          optional: true
+      # The same secret: cert-manager puts the issuing CA in its ca.crt key, so the server can offer
+      # the chain without a second source. Nothing OpenShift-specific is involved.
+      - name: ca-bundle
+        secret:
+          secretName: openldap-certmanager-tls
+          optional: true
+          items:
+            - key: ca.crt
+              path: ca.crt
 
----
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: openldap-service-ca
-  namespace: ldap-testing
-  # Ships EMPTY on purpose: service-ca writes service-ca.crt into it. That key is the
-  # service-serving-signer, which is also what signs the serving certificate below, so a client
-  # trusting it verifies the LDAPS endpoint.
-  annotations:
-    service.beta.openshift.io/inject-cabundle: "true"
 ---
 apiVersion: v1
 kind: Service
@@ -192,11 +206,6 @@ metadata:
   namespace: ldap-testing
   labels:
     app: openldap-server
-  annotations:
-    # service-ca issues a certificate into this Secret with SANs openldap-service.ldap-testing.svc
-    # and openldap-service.ldap-testing.svc.cluster.local, and rotates it. The initContainer above
-    # installs it as osixia's ldap.crt/ldap.key.
-    service.beta.openshift.io/serving-cert-secret-name: openldap-serving-cert
 spec:
   selector:
     app: openldap-server

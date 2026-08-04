@@ -130,6 +130,7 @@ if [ "$SCHEME" = "ldaps" ]; then
 else
   section "Test 3 — TLS"
   info "plain ldap:// — nothing to verify. Credentials cross the network in the clear."
+  TLS_VERIFIED=no
 fi
 
 # ---- Test 4: the operator actually synced -----------------------------------------------------
@@ -182,7 +183,12 @@ info "${COUNT} group(s) present"
 echo
 echo "============================================================"
 if [ "$FAILED" -eq 0 ]; then
-  echo "🎉 All checks passed — the endpoint is reachable, trusted, and the operator synced."
+  if [ "${TLS_VERIFIED:-yes}" = "no" ]; then
+    echo "🎉 All checks passed — the endpoint is reachable and the operator synced."
+    echo "   NOT verified: transport security. This is plain ldap://, so nothing was encrypted."
+  else
+    echo "🎉 All checks passed — the endpoint is reachable, trusted, and the operator synced."
+  fi
   exit 0
 fi
 echo "❌ ${FAILED} check(s) failed. Details above."
