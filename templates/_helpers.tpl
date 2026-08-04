@@ -56,6 +56,15 @@ CR (custom-groupsync.yaml). The caller passes a config dict shaped exactly like
 .Values.groupSync (schedule, providerName, url, insecure, ca, credentialsSecret,
 rfc2307). Keeping one copy here means the two templates can never drift apart.
 */}}
+{{/*
+True when the provider needs CA material: an ldaps:// URL always does, and insecure=false does even
+over plain ldap://. insecure only relaxes verification the operator performs itself; it cannot make
+a TLS handshake trust an unknown root.
+*/}}
+{{- define "group-sync-operator-helm.needsCa" -}}
+{{- if or (hasPrefix "ldaps://" (.url | default "")) (not .insecure) -}}true{{- end -}}
+{{- end }}
+
 {{- define "group-sync-operator-helm.groupsyncSpec" -}}
 spec:
   schedule: {{ .schedule | quote }}
@@ -65,9 +74,12 @@ spec:
         url: {{ .url | quote }}
         insecure: {{ .insecure | default false }}
         prune: true
-        {{- if not .insecure }}
+        {{- if include "group-sync-operator-helm.needsCa" . }}
+        # `ca`, not the deprecated `caSecret`. kind Secret because the CA is copied out of
+        # openshift-config into this namespace — the operator cannot read the original there.
+        # Emitted for ldaps:// even when insecure is true: the handshake still needs the root.
         ca:
-          kind: ConfigMap
+          kind: {{ .ca.kind | default "Secret" }}
           name: {{ .ca.name }}
           key: {{ .ca.key }}
           namespace: {{ .ca.namespace }}

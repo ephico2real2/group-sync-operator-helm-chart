@@ -34,13 +34,17 @@ groupSync:
   # Name of the LDAP provider in the GroupSync configuration
   providerName: ldap
 
-  # CA Certificate configuration
+  # CA for LDAPS. Required whenever the url is ldaps://, even with insecure true — insecure relaxes
+  # verification the operator does itself, it does not make a handshake trust an unknown root.
+  #
+  # kind is ConfigMap|Secret and namespace is resolved by the operator, whose ServiceAccount can read
+  # openshift-config, so the cluster's existing OAuth CA can be referenced in place. The ConfigMap
+  # must exist: a missing one leaves the operator reconciling forever with
+  # "ConfigMap ... not found, caSecret must be specified when insecure=false".
   ca:
-    # Name of the ConfigMap containing the CA certificate
-    name: ca-config-map-test
-    # Key within the ConfigMap that contains the certificate
+    kind: ConfigMap
+    name: ca-config-map
     key: ca.crt
-    # Namespace where the ConfigMap is located
     namespace: openshift-config
 
   # LDAP authentication credentials configuration
@@ -188,6 +192,21 @@ oauthSecretExtraction:
   targetSecret:
     name: ldap-group-sync
     namespace: group-sync-operator
+
+  # Optional fallback: copy the CA into a Secret in groupSync.namespace instead of referencing it in
+  # place. Off, because the operator's ServiceAccount can read openshift-config directly.
+  #
+  # Turn it on where the operator is denied the source namespace, then set groupSync.ca to
+  # kind Secret, name = targetSecret.name, namespace = groupSync.namespace.
+  caCopy:
+    enabled: false
+    sourceConfigMap:
+      name: ca-config-map
+      namespace: openshift-config
+      key: ca.crt
+    targetSecret:
+      name: ldap-ca
+      key: ca.crt
 
   # LDAP bind DN for the GroupSync secret
   bindDN: "cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com"
