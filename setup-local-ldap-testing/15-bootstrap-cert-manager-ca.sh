@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Bootstrap an enterprise-shaped PKI for the test LDAP directory using cert-manager.
 #
-# Produces the same shape a real cluster has — a root CA in a ConfigMap, and a serving
-# certificate issued from it by a named CA — instead of the service-ca shortcut. That makes the
-# chart's CA path exercise the code an enterprise deployment actually hits.
+# Produces the same shape a real cluster has: a root CA in a ConfigMap, and a serving certificate
+# issued from it by a named CA. Nothing here is OpenShift-specific — no service-ca, no
+# serving-cert-secret-name, no inject-cabundle — so it works on any cluster running cert-manager.
 #
 # The chain:
 #
@@ -30,11 +30,12 @@
 # trust-manager is deliberately not used. The Bundle CRD is present on this cluster but no
 # trust-manager controller runs, so a Bundle would never reconcile.
 #
-#   ./15-bootstrap-cert-manager-ca.sh apply         create the PKI
-#   ./15-bootstrap-cert-manager-ca.sh switch-ldap   point the LDAP server at it
-#   ./15-bootstrap-cert-manager-ca.sh verify        prove the chain and the SANs
-#   ./15-bootstrap-cert-manager-ca.sh revert-ldap   back to service-ca
-#   ./15-bootstrap-cert-manager-ca.sh delete        remove the PKI
+# RUN apply BEFORE deploying the LDAP server. 01-ldap-server.yaml mounts the leaf secret this creates,
+# so the pod sits in ContainerCreating until it exists.
+#
+#   ./15-bootstrap-cert-manager-ca.sh apply    create the PKI and the serving certificate
+#   ./15-bootstrap-cert-manager-ca.sh verify   prove the chain and the SANs from inside the cluster
+#   ./15-bootstrap-cert-manager-ca.sh delete   remove the PKI
 
 set -euo pipefail
 
@@ -305,59 +306,10 @@ YAML
   ${OPERATOR_NS}/${COPY_NAME}, which is what the operator loads. A changed CA here moves the
   caSourceHash, so the next helm upgrade remakes the copy.
 
-  Next: ./15-bootstrap-cert-manager-ca.sh switch-ldap
+  Next: oc apply -f setup-local-ldap-testing/01-ldap-server.yaml   # mounts ${LEAF_SECRET}
         helm upgrade group-sync . -n ${OPERATOR_NS}
         ./15-bootstrap-cert-manager-ca.sh verify
 VALUES
-}
-
-cmd_switch_ldap() {
-  oc get secret "$LEAF_SECRET" -n "$LDAP_NS" >/dev/null 2>&1 \
-    || die "secret ${LDAP_NS}/${LEAF_SECRET} not found — run apply first"
-
-  step "pointing openldap-server at the cert-manager certificate"
-  # Both volumes become the one cert-manager secret, so the install-certs initContainer needs no
-  # change: it reads /tls/tls.crt, /tls/tls.key and /ca/service-ca.crt, and the items mapping
-  # below presents ca.crt under that last name.
-  local vols
-  vols=$(oc get deploy openldap-server -n "$LDAP_NS" -o json | python3 -c "
-import sys,json
-out=[]
-for v in json.load(sys.stdin)['spec']['template']['spec']['volumes']:
-    if v['name']=='serving-cert':
-        v={'name':'serving-cert','secret':{'secretName':'${LEAF_SECRET}','defaultMode':420}}
-    elif v['name']=='service-ca':
-        v={'name':'service-ca','secret':{'secretName':'${LEAF_SECRET}','defaultMode':420,
-             'items':[{'key':'ca.crt','path':'service-ca.crt'}]}}
-    out.append(v)
-print(json.dumps(out))")
-
-  oc patch deployment openldap-server -n "$LDAP_NS" --type=json \
-     -p "[{\"op\":\"replace\",\"path\":\"/spec/template/spec/volumes\",\"value\":${vols}}]" >/dev/null
-  log "volumes serving-cert and service-ca now both read ${LEAF_SECRET}"
-
-  oc rollout status deploy/openldap-server -n "$LDAP_NS" --timeout=300s 2>&1 | tail -1 | sed 's/^/  /'
-  cmd_verify
-}
-
-cmd_revert_ldap() {
-  step "pointing openldap-server back at service-ca"
-  local vols
-  vols=$(oc get deploy openldap-server -n "$LDAP_NS" -o json | python3 -c "
-import sys,json
-out=[]
-for v in json.load(sys.stdin)['spec']['template']['spec']['volumes']:
-    if v['name']=='serving-cert':
-        v={'name':'serving-cert','secret':{'secretName':'openldap-serving-cert','defaultMode':420}}
-    elif v['name']=='service-ca':
-        v={'name':'service-ca','configMap':{'name':'openldap-service-ca','defaultMode':420}}
-    out.append(v)
-print(json.dumps(out))")
-
-  oc patch deployment openldap-server -n "$LDAP_NS" --type=json \
-     -p "[{\"op\":\"replace\",\"path\":\"/spec/template/spec/volumes\",\"value\":${vols}}]" >/dev/null
-  oc rollout status deploy/openldap-server -n "$LDAP_NS" --timeout=300s 2>&1 | tail -1 | sed 's/^/  /'
-  log "reverted — groupSync.ca must point back at openshift-service-ca.crt"
 }
 
 cmd_verify() {
@@ -433,10 +385,8 @@ cmd_delete() {
 }
 
 case "${1:-apply}" in
-  apply)       cmd_apply ;;
-  switch-ldap) cmd_switch_ldap ;;
-  revert-ldap) cmd_revert_ldap ;;
-  verify)      cmd_verify ;;
-  delete)      cmd_delete ;;
-  *) die "unknown command '${1}'. Use: apply | switch-ldap | verify | revert-ldap | delete" ;;
+  apply)  cmd_apply ;;
+  verify) cmd_verify ;;
+  delete) cmd_delete ;;
+  *) die "unknown command '${1}'. Use: apply | verify | delete" ;;
 esac
