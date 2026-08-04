@@ -46,15 +46,18 @@ This setup uses **intentional separation** between production and local testing 
 | `02-phpldapadmin.yaml` | Optional web GUI for LDAP management |
 | `03-ldap-bootstrap-job.yaml` | Alternative K8s Job-based data import |
 
-### 🚀 Execution Scripts (Ordered by Priority)
+### 🚀 Execution Scripts (run in numeric order)
 
 | File | Description |
 |------|-------------|
-| `10-setup-oauth-secrets.sh` | **STEP 1**: Creates source OAuth secrets and CA certificates |
-| `20-import-ldap-data.sh` | **STEP 2**: Imports comprehensive RBAC groups and test users |
-| `30-manage-ldap-server.sh` | **ONGOING**: Complete LDAP server lifecycle management |
-| `90-verify-all-resources.sh` | **STEP 3**: Verifies all resources and configuration |
-| `99-cleanup-everything.sh` | **FINAL**: Complete test environment cleanup |
+| `10-setup-oauth-secrets.sh` | Creates the source OAuth secret and a demo CA |
+| `15-bootstrap-cert-manager-ca.sh` | **LDAPS only**: builds the cert-manager PKI and the serving certificate. Must run BEFORE the server manifest |
+| `20-import-ldap-data.sh` | Imports the RBAC groups and test users |
+| `30-manage-ldap-server.sh` | Server lifecycle: deploy, test, restart, logs |
+| `50-simulate-ldap-operations.sh` | Adds/removes members to exercise sync |
+| `60-force-groupsync.sh` | Forces a GroupSync now instead of waiting for its schedule |
+| `90-verify-all-resources.sh` | Verifies all resources and configuration |
+| `99-cleanup-everything.sh` | Complete test environment cleanup |
 
 ### 📊 Data Files
 
@@ -68,42 +71,80 @@ This setup uses **intentional separation** between production and local testing 
 | `kubectl-import-commands.md` | Manual import command documentation |
 | `README.md` | This comprehensive documentation |
 
-## 🚀 Quick Start (New Organized Workflow)
+## 🚀 Quick Start
 
-### Step 1: Setup Prerequisites
+**Pick a path first.** The difference is only whether the directory serves verifiable TLS:
 
-```bash
-# Creates source OAuth secrets and CA certificates
-./10-setup-oauth-secrets.sh
-```
+| | Needs cert-manager | LDAP URL | What it exercises |
+|---|---|---|---|
+| **A — plain LDAP** | no | `ldap://…:389` | Sync only. The bind password crosses the network in the clear |
+| **B — LDAPS** | yes | `ldaps://…:636` | Sync plus the whole CA path: preflight, copy, chain and SAN verification |
 
-### Step 2: Deploy LDAP Server
+The chart **defaults to B**. Path A needs `-f environments/ldap-plain-values.yaml`.
 
-```bash
-# Deploy the OpenLDAP server
-./30-manage-ldap-server.sh deploy
-```
+One manifest serves both: the cert-manager secret is mounted `optional: true`, so the server starts
+whether or not the PKI exists. On path A the initContainer logs
+`no cert-manager certificate present — osixia will self-sign; use ldap:// on 389`.
 
-### Step 3: Import LDAP Data
-
-```bash
-# Import comprehensive RBAC groups and users
-./20-import-ldap-data.sh
-```
-
-### Step 4: Verify Setup
+### Path A — plain LDAP, no cert-manager
 
 ```bash
-# Verify all resources are configured correctly
+./10-setup-oauth-secrets.sh                 # source OAuth secret + demo CA
+./30-manage-ldap-server.sh deploy           # first start takes 2-4 min, see note below
+./20-import-ldap-data.sh                    # RBAC groups and users
 ./90-verify-all-resources.sh
+
+helm install group-sync .. -n group-sync-operator --create-namespace \
+  -f ../environments/ldap-plain-values.yaml
+helm test group-sync -n group-sync-operator --logs
 ```
 
-### Step 5: Test Connectivity
+### Path B — LDAPS with cert-manager
+
+Same, with the PKI created **before** the server, because the server mounts the certificate it issues:
 
 ```bash
-# Test LDAP connectivity and queries
-./30-manage-ldap-server.sh test
+./10-setup-oauth-secrets.sh
+./15-bootstrap-cert-manager-ca.sh apply     # ClusterIssuers, root CA, serving cert, ca-config-map
+./30-manage-ldap-server.sh deploy
+./20-import-ldap-data.sh
+./90-verify-all-resources.sh
+
+helm install group-sync .. -n group-sync-operator --create-namespace   # chart defaults are LDAPS
+helm test group-sync -n group-sync-operator --logs
+./15-bootstrap-cert-manager-ca.sh verify    # proves the chain and SAN from inside the cluster
 ```
+
+`apply` is idempotent, so re-running it is safe. cert-manager must already be installed:
+
+```bash
+oc get crd clusterissuers.cert-manager.io    # present?
+oc get packagemanifests | grep cert-manager  # if not, install the operator
+```
+
+### ⏱️ The first start takes 2-4 minutes — this is normal
+
+osixia regenerates `dhparam.pem` on every start because the certs directory is an `emptyDir`, and
+2048-bit DH generation is slow and variable. A `startupProbe` holds liveness off until `slapd`
+listens; without it the container was killed at 60s and CrashLoopBackOff'd with only
+`slapd failed with status 1` to show for it. If the pod sits at `0/1 Running`, it is working — watch
+with `oc logs -f <pod> -n ldap-testing -c openldap` and you will see the progress dots.
+
+### Switching A → B afterwards
+
+```bash
+./15-bootstrap-cert-manager-ca.sh apply
+oc delete groups -l group-sync-operator.redhat-cop.io/sync-provider
+helm upgrade group-sync .. -n group-sync-operator --reset-values
+```
+
+Both extra steps are load-bearing:
+
+- **Deleting the groups** — the operator compares `openshift.io/ldap.url` on each Group against
+  `host:port` and refuses to adopt a mismatch, so groups synced at `:389` are orphaned at `:636`. The
+  next sync recreates them, and the label selector leaves hand-made groups alone.
+- **`--reset-values`** — `helm upgrade` otherwise reuses the values file from the previous revision and
+  silently keeps you on plain LDAP.
 
 ## Manual LDAP Structure Import (If Bootstrap Fails)
 

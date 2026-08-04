@@ -361,11 +361,19 @@ The chart includes optional test pods that can validate your installation and LD
 # In your values.yaml file
 test:
   enabled: true
-  openldapClientImage:
-    repository: "your-registry/openldap-client"
-    tag: "1.0"
+  # ose-cli, pinned. The tests need oc to read the CA and the sync status, and curl to verify the
+  # LDAPS chain. NOT openssl — it is absent from current ose-cli builds and present in some older
+  # ones, so a floating tag made the same chart pass on one cluster and fail on another.
+  ldapClientImage:
+    repository: "registry.redhat.io/openshift4/ose-cli"
+    tag: "v4.14"
     pullPolicy: IfNotPresent
+  # Seconds the sync check waits for a first successful sync before failing.
+  syncWaitSeconds: 180
 ```
+
+The tests are **Pods**, not Jobs, so `helm test --logs` works — it looks up a pod named after the
+hook itself, and a Job's pods are `<job>-<suffix>`.
 
 To run the tests after enabling them:
 
@@ -525,10 +533,10 @@ The following tables list the configurable parameters and their default values.
 |-----------|-------------|---------|
 | groupSync.name | Name of the primary GroupSync resource | ldap-groupsync |
 | groupSync.namespace | Target namespace | group-sync-operator |
-| groupSync.schedule | Sync schedule (cron format) — fast-track testing default | "*/2* ** *" |
+| groupSync.schedule | Sync schedule (cron format) | "*/30 * * * *" |
 | groupSync.providerName | LDAP provider name | ldap |
-| groupSync.insecure | Use plain LDAP (true) or LDAPS with CA (false) | true |
-| groupSync.url | LDAP server URL | ldap://openldap-service.ldap-testing.svc.cluster.local:389 |
+| groupSync.insecure | `false` verifies the chain. A CA is required for `ldaps://` either way | false |
+| groupSync.url | LDAP server URL. Leave empty to derive it from the OAuth CR | ldaps://openldap-service.ldap-testing.svc.cluster.local:636 |
 
 ### Multi-Tenant GroupSync Configuration
 
@@ -546,11 +554,57 @@ See [Multi-Tenant GroupSync](#multi-tenant-groupsync-customgroupsyncs) for usage
 
 ### CA Certificate Configuration
 
+A CA is required whenever the url is `ldaps://` — **even with `insecure: true`**. Implicit TLS
+completes the handshake before any LDAP traffic, so the client must already trust the CA; `insecure`
+only relaxes checks the operator makes itself. It is also required with `insecure: false` over plain
+`ldap://`.
+
+`groupSync.ca` names a **copy in the operator's own namespace**, not the source in `openshift-config`.
+Reading it in place needs cross-namespace ConfigMap read that the operator has on some clusters and
+not others, and where it is denied the only symptom is the operator reconciling forever on
+`ConfigMap ... not found, caSecret must be specified when insecure=false` — naming neither the
+namespace nor the permission. The extraction job makes the copy.
+
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| groupSync.ca.name | ConfigMap name containing CA cert | ca-config-map |
-| groupSync.ca.key | Key in ConfigMap for CA cert | ca.crt |
-| groupSync.ca.namespace | Namespace of CA ConfigMap | openshift-config |
+| groupSync.ca.field | `caSecret` or `ca`. Validation checks `caSecret` even though the CRD calls it deprecated | caSecret |
+| groupSync.ca.kind | ConfigMap or Secret | ConfigMap |
+| groupSync.ca.name | Must match `caCopy.destinationCa.name` | ca-config-map-copy |
+| groupSync.ca.key | Key holding the PEM | ca.crt |
+| groupSync.ca.namespace | The operator's namespace, not openshift-config | group-sync-operator |
+
+### CA Copy Configuration
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| oauthSecretExtraction.caCopy.enabled | Copy the CA into the operator's namespace. Only runs when a CA is needed | true |
+| oauthSecretExtraction.caCopy.discoverFromOAuth | Read the source ConfigMap **name** from the cluster OAuth CR rather than trusting the value below | true |
+| oauthSecretExtraction.caCopy.sourceCa.name | Source ConfigMap — the one the OAuth LDAP identity provider uses | ca-config-map |
+| oauthSecretExtraction.caCopy.sourceCa.namespace | Fixed by the OpenShift API | openshift-config |
+| oauthSecretExtraction.caCopy.sourceCa.key | Fixed by the OpenShift API | ca.crt |
+| oauthSecretExtraction.caCopy.destinationCa.kind | ConfigMap or Secret | ConfigMap |
+| oauthSecretExtraction.caCopy.destinationCa.name | Named `-copy` because the job overwrites it on every install and upgrade | ca-config-map-copy |
+| oauthSecretExtraction.caCopy.destinationCa.namespace | Defaults to `groupSync.namespace` | group-sync-operator |
+
+The copy carries `group-sync.redhat-cop.io/source-hash`, and that hash is also stamped on the
+extraction job's pod template — so a changed source CA changes the pod spec and the copy is remade on
+the next upgrade. It is computed with `lookup`, which reads the live cluster, so `helm template` and
+offline GitOps renders show `unavailable` and the runtime stamp is the reliable record.
+
+### Values discovered from the OAuth CR when left empty
+
+The cluster's OAuth LDAP identity provider already describes a directory that works, so these need
+not be repeated. An explicit value always wins.
+
+| Left empty | Taken from | Notes |
+|---|---|---|
+| `groupSync.url` | `identityProviders[LDAP].ldap.url` | Only `scheme://host:port`; the basedn and query describe authentication, not group sync. Resolved at template time, so `helm install`/`upgrade` only |
+| `oauthSecretExtraction.bindDN` | `.ldap.bindDN` | Resolved by the job at runtime, so it works under an offline GitOps render |
+| `oauthSecretExtraction.sourceSecret.name` | `.ldap.bindPassword.name` | Same, and taken from the **same** provider as the bindDN so the pair always belongs together |
+
+The **first** LDAP provider wins, and the job logs which one it used. Note that a bare
+`identityProviders[0]` would be the first provider of any type — commonly HTPasswd — so the type
+filter matters.
 
 ### Subscription Configuration
 
@@ -566,10 +620,13 @@ See [Multi-Tenant GroupSync](#multi-tenant-groupsync-customgroupsyncs) for usage
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| test.enabled | Enable test pods | false |
-| test.openldapClientImage.repository | OpenLDAP client image repository | your-registry/openldap-client |
-| test.openldapClientImage.tag | OpenLDAP client image tag | 1.0 |
-| test.openldapClientImage.pullPolicy | Image pull policy | IfNotPresent |
+| test.enabled | Enable test pods | true |
+| test.ldapClientImage.repository | Image for the connection test — needs `oc` and `curl` | registry.redhat.io/openshift4/ose-cli |
+| test.ldapClientImage.tag | Pinned, not `latest`: builds differ in what they ship | v4.14 |
+| test.ldapClientImage.pullPolicy | Image pull policy | IfNotPresent |
+| test.operatorHealthImage.repository | Image for the operator health test | registry.redhat.io/openshift4/ose-cli |
+| test.operatorHealthImage.tag | Pinned for the same reason | v4.14 |
+| test.syncWaitSeconds | Seconds to wait for a first successful sync before failing | 180 |
 
 ## Custom Values
 
