@@ -328,24 +328,27 @@ test:
   # Enable or disable the test pods
   enabled: true
 
-  # OpenShift CLI image configuration for operator health testing
+  # OpenShift CLI image configuration for operator health testing.
+  # Pinned for the same reason as ldapClientImage below: ose-cli:latest floats between builds with
+  # and without openssl, so a floating tag makes the same chart behave differently per cluster.
   operatorHealthImage:
-    # Image repository
     repository: "registry.redhat.io/openshift4/ose-cli"
-    # Image tag
-    tag: "latest"
-    # Image pull policy
+    tag: "v4.14"
     pullPolicy: IfNotPresent
 
   # LDAP client image configuration for LDAP connection testing
   # Seconds Test 4 waits for a GroupSync to report a first successful sync.
   syncWaitSeconds: 180
 
-  # ose-cli, not the operator image: the connection test needs openssl to verify the LDAPS chain
-  # and oc to read the CA and the sync status. The operator image has neither, so every check
-  # degraded to "informational" and the suite passed without testing anything.
+  # ose-cli, not the operator image: the connection test needs oc to read the CA and the sync status
+  # and curl to verify the LDAPS chain. The operator image has neither, so every check degraded to
+  # "informational" and the suite passed without testing anything.
+  #
+  # PINNED, not latest. ose-cli:latest floats: one build ships openssl and a newer one does not, so a
+  # floating tag made the same chart pass on one cluster and fail on another with "openssl missing".
+  # v4.14 is verified to carry oc and curl, which is all the tests use.
   ldapClientImage:
     repository: "registry.redhat.io/openshift4/ose-cli"
-    tag: "latest"
+    tag: "v4.14"
     # Image pull policy
     pullPolicy: IfNotPresent

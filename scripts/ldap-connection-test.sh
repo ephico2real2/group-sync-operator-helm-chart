@@ -9,7 +9,9 @@
 # A bind test needs ldapsearch, which is not in this image. The operator's own sync status stands in
 # for it and is strictly stronger: a completed sync proves DNS, TCP, TLS, bind and query all worked.
 #
-# Needs openssl, nslookup and oc. Run it in an image that has them — the operator image does not.
+# Needs oc and curl. NOT openssl: it is absent from current ose-cli builds and present only in some
+# older ones, so depending on it passed on one cluster and failed on another. curl is in every
+# variant, and verifies the chain and the hostname during the handshake.
 
 set -uo pipefail
 
@@ -26,13 +28,13 @@ echo "============================================================"
 # Missing tools are a failure, not something to skip. Skipping is how the previous version passed
 # without testing anything.
 section "Tooling"
-for t in openssl oc; do
+for t in oc curl; do
   if command -v "$t" >/dev/null 2>&1; then pass "$t available"
   else fail "$t missing — this image cannot verify the endpoint"; fi
 done
 if [ "$FAILED" -gt 0 ]; then
   echo
-  echo "❌ Cannot run: set test.ldapClientImage to an image with openssl and oc."
+  echo "❌ Cannot run: set test.ldapClientImage to an image with oc and curl."
   exit 1
 fi
 
@@ -107,26 +109,21 @@ if [ "$SCHEME" = "ldaps" ]; then
   else
     pass "CA read: $(grep -c 'BEGIN CERTIFICATE' "/tmp/ca/${CA_KEY}") certificate(s)"
 
-    TLS=$(echo | timeout 20 openssl s_client -connect "${HOST}:${PORT}" -servername "$HOST" \
-          -CAfile "/tmp/ca/${CA_KEY}" -verify_return_error 2>&1)
+    # curl verifies the chain AND the hostname in one handshake. LDAPS is not HTTP, so a SUCCESSFUL
+    # handshake still fails afterwards on the protocol — exit 52, empty reply — and exit 60 is the
+    # only verification failure. curl's own message says whether the chain or the hostname was wrong.
+    TLS=$(curl -sS -v --cacert "/tmp/ca/${CA_KEY}" --max-time 20 "https://${HOST}:${PORT}" 2>&1)
+    RC=$?
 
-    echo "$TLS" | grep -E '^subject=|^issuer=|Verify return code' | sed 's/^/      /'
+    printf '%s\n' "$TLS" | grep -E 'subject:|issuer:|subjectAltName:' | sed 's/^\*[[:space:]]*/      /'
 
-    if echo "$TLS" | grep -q 'Verify return code: 0 (ok)'; then
-      pass "chain verifies against ${CA_NAMESPACE}/${CA_NAME}"
+    if [ "$RC" -eq 60 ]; then
+      fail "the certificate does NOT verify: $(printf '%s' "$TLS" | grep -m1 -oE 'SSL certificate problem.*|SSL:.*' || echo 'verification failed')
+       Either ${CA_NAMESPACE}/${CA_NAME} did not sign the certificate this endpoint serves, or it has
+       no SAN for ${HOST}. Reissue for the name in groupSync.url, or point groupSync.ca at the CA
+       that signed it."
     else
-      fail "chain does NOT verify. $(echo "$TLS" | grep -m1 -E 'verify error|Verify return code' || echo 'no verify result')
-       The CA in ${CA_NAMESPACE}/${CA_NAME} did not sign the certificate this endpoint serves."
-    fi
-
-    SANS=$(echo | timeout 20 openssl s_client -connect "${HOST}:${PORT}" -servername "$HOST" \
-           2>/dev/null | openssl x509 -noout -ext subjectAltName 2>/dev/null)
-    if echo "$SANS" | grep -q "DNS:${HOST}"; then
-      pass "certificate has a SAN for ${HOST}"
-    else
-      fail "certificate has NO SAN for ${HOST} — a verifying client rejects it.
-       Served SANs: ${SANS:-<none>}
-       Reissue the certificate for the name in groupSync.url, or use the name it was issued for."
+      pass "chain verifies against ${CA_NAMESPACE}/${CA_NAME}, hostname matches ${HOST}"
     fi
   fi
   rm -rf /tmp/ca
