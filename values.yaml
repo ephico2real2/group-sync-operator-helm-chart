@@ -129,8 +129,24 @@ subscription:
   channel: alpha
   # Comma-separated list of namespaces for the operator to watch
   watchNamespaces: group-sync-operator,openshift-config
-  # Installation approval strategy (Automatic or Manual)
-  installPlanApproval: Automatic
+  # Installation approval strategy (Automatic or Manual).
+  #
+  # MANUAL BY DEFAULT, and that is a deliberate choice with a cost. Manual is the upgrade gate:
+  # OLM stages a new CSV and waits, instead of moving the operator under you the moment the
+  # catalog publishes one. Automatic means an operator upgrade lands unannounced, on the
+  # catalog's schedule rather than yours.
+  #
+  # The cost is that Manual also blocks the FIRST install — OLM stages an unapproved InstallPlan
+  # and waits for a human. `installPlanApprover` below resolves that by approving the plan for
+  # THIS subscription only, so an unattended install still works while a later upgrade still
+  # waits for you.
+  #
+  # IF YOU SET installPlanApprover.enabled=false WITH Manual, expect the install to fail: nobody
+  # approves the plan, so the operator never installs, and the operatorWait Job times out and
+  # fails the release rather than reporting success over a cluster with no operator. That is the
+  # correct outcome, but it is a failure, so approve by hand within operatorWait.waitSeconds if
+  # you deliberately want that shape.
+  installPlanApproval: Manual
   # Source catalog for the operator
   source: community-operators
   # Namespace where the catalog source is located

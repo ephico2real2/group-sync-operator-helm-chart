@@ -142,8 +142,31 @@ spec:
                 log "attempt ${i}/${ATTEMPTS}: no installPlanRef yet"
                 sleep "$INTERVAL"
               done
-              [ -n "$PLAN" ] || fail "subscription ${SUBSCRIPTION} never referenced an InstallPlan.
-                Inspect: oc describe subscription ${SUBSCRIPTION} -n ${NAMESPACE}
+              # FALLBACK, taken from the in-house sample: find a staged plan directly.
+              # status.installPlanRef is the normal source, but it can lag or be cleared while a
+              # plan sits in RequiresApproval — and a plan nobody approves is exactly the state
+              # this Job exists to clear. Scanning by phase covers that without loosening the
+              # ownership check below, which still has to pass.
+              if [ -z "$PLAN" ]; then
+                log "no installPlanRef; scanning for a staged plan that names ${SUBSCRIPTION}"
+                for phase in RequiresApproval InstallReady; do
+                  for cand in $(oc get installplan -n "$NAMESPACE" --ignore-not-found=true \
+                       -o jsonpath="{range .items[?(@.status.phase=='${phase}')]}{.metadata.name}{' '}{end}" \
+                      2>/dev/null); do
+                    names="$(plan_field "$cand" '.spec.clusterServiceVersionNames[*]')"
+                    case "$names" in
+                      *"${SUBSCRIPTION}"*) PLAN="$cand"
+                        log "found ${PLAN} in phase ${phase} for ${names}"; break ;;
+                    esac
+                  done
+                  [ -n "$PLAN" ] && break
+                done
+              fi
+
+              [ -n "$PLAN" ] || fail "subscription ${SUBSCRIPTION} never referenced an InstallPlan, and
+                no staged plan names it. Inspect:
+                  oc describe subscription ${SUBSCRIPTION} -n ${NAMESPACE}
+                  oc get installplan -n ${NAMESPACE} -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,APPROVED:.spec.approved,CSV:.spec.clusterServiceVersionNames[*]
                 A missing catalog source or an unresolvable channel presents exactly like this."
 
               # ---- Approve, but only if it is OURS ---------------------------------------
@@ -180,6 +203,13 @@ spec:
               done
               [ "$PHASE" = "Complete" ] || fail "${PLAN} is phase '${PHASE:-<none>}'.
                 Inspect: oc describe installplan ${PLAN} -n ${NAMESPACE}"
+
+              # Final table, from the in-house sample. Cheap, and it is the first thing anyone
+              # asks for when a later plan misbehaves — including plans this Job did not touch.
+              log "InstallPlans in ${NAMESPACE}:"
+              oc get installplan -n "$NAMESPACE" --ignore-not-found=true \
+                 -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,APPROVED:.spec.approved,CSV:.spec.clusterServiceVersionNames[*] \
+                2>&1 | sed 's/^/  /'
 
               log "done — the operator's InstallPlan is approved and complete"
           resources: {{- toYaml .Values.installPlanApprover.resources | nindent 12 }}
