@@ -9,11 +9,15 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "1"
 rules:
-# Access to secrets in openshift-config namespace (source OAuth secret)
+{{- if .Values.oauthSecretExtraction.sourceSecret.name }}
+# The source OAuth secret, by name. Omitted when the name is unset: the Job discovers it from the
+# OAuth CR, and resourceNames cannot pin a name that is not known at render time — the Role in that
+# namespace grants the read instead.
 - apiGroups: [""]
   resources: ["secrets"]
   verbs: ["get", "list"]
   resourceNames: ["{{ .Values.oauthSecretExtraction.sourceSecret.name }}"]
+{{- end }}
 # Access to secrets in group-sync-operator namespace (target secret)
 - apiGroups: [""]
   resources: ["secrets"]
@@ -49,7 +53,7 @@ rules:
 - apiGroups: [""]
   resources: [{{ if eq (.Values.oauthSecretExtraction.caCopy.destinationCa.kind | default "ConfigMap") "Secret" }}"secrets"{{ else }}"configmaps"{{ end }}]
   verbs: ["create"]
-{{- if or .Values.oauthSecretExtraction.caCopy.discoverFromOAuth (not .Values.oauthSecretExtraction.bindDN) }}
+{{- if or .Values.oauthSecretExtraction.caCopy.discoverFromOAuth (not .Values.oauthSecretExtraction.bindDN) (not .Values.oauthSecretExtraction.sourceSecret.name) }}
 # Discovery reads the ConfigMap name off the cluster OAuth CR. Cluster-scoped, so it must live in
 # a ClusterRole, and pinned to the one object named "cluster".
 - apiGroups: ["config.openshift.io"]
