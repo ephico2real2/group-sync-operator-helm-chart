@@ -11,18 +11,21 @@
 #     -> Certificate/ldap-enterprise-root-ca  isCA, in the cert-manager namespace
 #          -> ClusterIssuer/ldap-enterprise-ca            the CA that signs leaves
 #               -> Certificate/openldap-serving-cert-cm   CN + both Service DNS SANs
-#          -> ConfigMap <CA_CONFIGMAP_NAME> key ca.crt    what groupSync.ca points at
+#          -> ConfigMap openshift-config/<CA_CONFIGMAP_NAME>  the enterprise CA source
+#
+# This script stops at that ConfigMap. It writes the enterprise CA where an OpenShift LDAP identity
+# provider reads it, and the chart takes over: oauthSecretExtraction.caCopy copies it to
+# <COPY_NAME> in the operator's namespace, which is what groupSync.ca loads. So the full path is
+#
+#   cert-manager -> openshift-config/ca-config-map -> group-sync-operator/ca-config-map-copy
+#
+# and no override values file is needed — that is the chart default. Rotating the CA here changes
+# the chart's caSourceHash, so the next helm upgrade remakes the copy.
 #
 # The root Certificate MUST live in the cert-manager namespace: a ClusterIssuer of kind `ca`
 # resolves its secretName in the cluster resource namespace, which this cluster sets with
 # --cluster-resource-namespace=$(POD_NAMESPACE) — the namespace cert-manager itself runs in.
 # A root issued anywhere else leaves the ClusterIssuer permanently NotReady.
-#
-# The CA ConfigMap is created in TWO namespaces on purpose. openshift-config is the enterprise
-# convention and where an OAuth LDAP identity provider would read it, but the operator can only
-# read it there if its ServiceAccount has cross-namespace ConfigMap read. The copy in the
-# operator's own namespace always works. Point groupSync.ca.namespace at whichever you want to
-# exercise.
 #
 # trust-manager is deliberately not used. The Bundle CRD is present on this cluster but no
 # trust-manager controller runs, so a Bundle would never reconcile.
@@ -53,7 +56,16 @@ LEAF_SECRET="openldap-certmanager-tls"
 # shape. A pre-existing one is replaced only when its certificate has already expired, and only
 # after a backup — see the guard in cmd_apply.
 CA_CONFIGMAP_NAME="${CA_CONFIGMAP_NAME:-ca-config-map}"
-CA_CONFIGMAP_NAMESPACES="${CA_CONFIGMAP_NAMESPACES:-openshift-config ${OPERATOR_NS}}"
+
+# openshift-config ONLY. This script's job is to produce the enterprise CA source — the same
+# ConfigMap an OpenShift LDAP identity provider reads — and the chart's oauthSecretExtraction.caCopy
+# copies it to ca-config-map-copy in the operator's namespace. Writing it here as well would leave two
+# CAs in that namespace with nothing saying which one groupSync.ca uses.
+CA_CONFIGMAP_NAMESPACES="${CA_CONFIGMAP_NAMESPACES:-openshift-config}"
+
+# Where the chart puts the copy. Only read, never written, by this script — verify checks the CA the
+# operator actually loads rather than the source it was made from.
+COPY_NAME="${COPY_NAME:-ca-config-map-copy}"
 BACKUP_DIR="${BACKUP_DIR:-./.ca-configmap-backup}"
 
 SAN_SHORT="${LDAP_SVC}.${LDAP_NS}.svc"
@@ -111,7 +123,7 @@ configmap_owner() {
 # Replacing a live CA breaks every client trusting it, so an unowned ConfigMap is replaced only
 # when its certificate has already expired — and its contents are saved first either way.
 guard_existing_configmap() {
-  local ns="$1" name="$2" owner
+  local ns="$1" name="$2" incoming="${3:-}" owner
   oc get configmap "$name" -n "$ns" >/dev/null 2>&1 || return 0
 
   owner="$(configmap_owner "$name" "$ns")"
@@ -125,6 +137,14 @@ guard_existing_configmap() {
   local pem="${BACKUP_DIR}/${ns}-${name}.ca.crt"
   oc extract "configmap/${name}" -n "$ns" --keys=ca.crt --to="$BACKUP_DIR" --confirm >/dev/null 2>&1 || true
   [ -s "${BACKUP_DIR}/ca.crt" ] && mv "${BACKUP_DIR}/ca.crt" "$pem"
+
+  # Identical contents replace nothing, so apply stays idempotent. Without this, anything that
+  # rewrites the ConfigMap and drops the ownership label — a plain oc apply, a GitOps sync — turns
+  # every later apply into a hard failure over a CA this script already put there.
+  if [ -n "$incoming" ] && [ -s "$pem" ] && cmp -s "$pem" "$incoming"; then
+    log "existing ${ns}/${name} already holds this exact CA — leaving it"
+    return 0
+  fi
 
   if [ -s "$pem" ] && openssl x509 -in "$pem" -noout -checkend 0 >/dev/null 2>&1; then
     local subj enddate
@@ -256,7 +276,7 @@ YAML
       log "skipping ${ns} — namespace does not exist"
       continue
     fi
-    guard_existing_configmap "$ns" "$CA_CONFIGMAP_NAME"
+    guard_existing_configmap "$ns" "$CA_CONFIGMAP_NAME" "${tmp}/ca.crt"
     oc create configmap "$CA_CONFIGMAP_NAME" -n "$ns" \
        --from-file=ca.crt="${tmp}/ca.crt" --dry-run=client -o yaml \
       | oc label --local -f - -o yaml "$OWNED" \
@@ -272,12 +292,18 @@ YAML
     ca:
       field: caSecret
       kind: ConfigMap
-      name: ${CA_CONFIGMAP_NAME}
+      name: ${COPY_NAME}
       namespace: ${OPERATOR_NS}
       key: ca.crt
 
-  Use namespace openshift-config instead to exercise the cross-namespace read.
+  That is already the chart default, so no override file is needed. The enterprise CA now lives at
+  openshift-config/${CA_CONFIGMAP_NAME}; the chart's oauthSecretExtraction.caCopy reads it and writes
+  ${OPERATOR_NS}/${COPY_NAME}, which is what the operator loads. A changed CA here moves the
+  caSourceHash, so the next helm upgrade remakes the copy.
+
   Next: ./15-bootstrap-cert-manager-ca.sh switch-ldap
+        helm upgrade group-sync . -n ${OPERATOR_NS}
+        ./15-bootstrap-cert-manager-ca.sh verify
 VALUES
 }
 
@@ -332,8 +358,23 @@ print(json.dumps(out))")
 
 cmd_verify() {
   step "certificate the LDAPS endpoint actually presents"
-  oc get configmap "$CA_CONFIGMAP_NAME" -n "$OPERATOR_NS" >/dev/null 2>&1 \
-    || die "ConfigMap ${OPERATOR_NS}/${CA_CONFIGMAP_NAME} not found — run apply"
+
+  # Verifies against the COPY the operator loads, not the source this script wrote. Checking the
+  # source would pass while the copy was stale, which is the one failure worth catching here.
+  local ca_cm="$COPY_NAME"
+  if ! oc get configmap "$ca_cm" -n "$OPERATOR_NS" >/dev/null 2>&1; then
+    oc get configmap "$CA_CONFIGMAP_NAME" -n "$CA_CONFIGMAP_NAMESPACES" >/dev/null 2>&1 \
+      || die "neither ${OPERATOR_NS}/${COPY_NAME} nor ${CA_CONFIGMAP_NAMESPACES}/${CA_CONFIGMAP_NAME} exists — run apply"
+    die "${OPERATOR_NS}/${COPY_NAME} does not exist yet, so the operator has no CA to load.
+  The chart's extraction job creates it from ${CA_CONFIGMAP_NAMESPACES}/${CA_CONFIGMAP_NAME}:
+    helm upgrade group-sync . -n ${OPERATOR_NS}"
+  fi
+
+  # A stale copy verifies against nothing useful, so the recorded source hash is surfaced.
+  local stamped
+  stamped=$(oc get configmap "$ca_cm" -n "$OPERATOR_NS" \
+            -o jsonpath='{.metadata.annotations.group-sync\.redhat-cop\.io/source-hash}' 2>/dev/null)
+  log "verifying against ${OPERATOR_NS}/${ca_cm}${stamped:+ (source-hash ${stamped})}"
 
   # Run inside the cluster and against the Service DNS name: that is the only way the SAN check
   # means anything. -verify_return_error makes a bad chain a non-zero exit rather than a warning.
@@ -352,7 +393,7 @@ print(json.dumps({'spec':{
     'volumeMounts':[{'name':'ca','mountPath':'/ca','readOnly':True}],
     'securityContext':{'allowPrivilegeEscalation':False,'capabilities':{'drop':['ALL']}}}],
   'securityContext':{'runAsNonRoot':True,'seccompProfile':{'type':'RuntimeDefault'}},
-  'volumes':[{'name':'ca','configMap':{'name':'${CA_CONFIGMAP_NAME}'}}]}}))")
+  'volumes':[{'name':'ca','configMap':{'name':'${ca_cm}'}}]}}))")
 
   # Asserted on the success string, not on an exit code. oc run's status is masked by the pipe, and
   # a chain that fails to verify still produces output — so a missing "Verify return code: 0" is the
@@ -364,7 +405,7 @@ print(json.dumps({'spec':{
   printf '%s\n' "$out" | sed 's/^/  /'
 
   printf '%s' "$out" | grep -q 'Verify return code: 0 (ok)' \
-    || die "the LDAPS endpoint did not verify against ${CA_CONFIGMAP_NAME}.
+    || die "the LDAPS endpoint did not verify against ${OPERATOR_NS}/${ca_cm}.
   Either the endpoint is not serving the cert-manager certificate (run switch-ldap), or the CA in
   the ConfigMap is not the one that signed it (run apply)."
 
