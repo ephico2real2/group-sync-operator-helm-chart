@@ -6,9 +6,9 @@ metadata:
   name: {{ .Release.Name }}-test-sa
   namespace: {{ .Values.groupSync.namespace }}
   annotations:
-    "helm.sh/hook": test
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
-    "helm.sh/hook-weight": "0"
+    # Not a helm test hook. helm test --logs fetches pod logs for every test hook and fails
+    # with 'unable to get pod logs ...: pods "..." not found' on any hook that is not a Pod.
+    # As an ordinary release resource this also exists before the test Jobs run.
   labels:
     {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
 ---
@@ -17,9 +17,9 @@ kind: ClusterRole
 metadata:
   name: {{ .Release.Name }}-test-role
   annotations:
-    "helm.sh/hook": test
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
-    "helm.sh/hook-weight": "0"
+    # Not a helm test hook. helm test --logs fetches pod logs for every test hook and fails
+    # with 'unable to get pod logs ...: pods "..." not found' on any hook that is not a Pod.
+    # As an ordinary release resource this also exists before the test Jobs run.
   labels:
     {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
 rules:
@@ -48,16 +48,16 @@ metadata:
   name: {{ .Release.Name }}-test-ca-role
   namespace: {{ .Values.groupSync.ca.namespace }}
   annotations:
-    "helm.sh/hook": test
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
-    "helm.sh/hook-weight": "0"
+    # Not a helm test hook. helm test --logs fetches pod logs for every test hook and fails
+    # with 'unable to get pod logs ...: pods "..." not found' on any hook that is not a Pod.
+    # As an ordinary release resource this also exists before the test Jobs run.
   labels:
     {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
 rules:
 # Follows groupSync.ca.kind: the CA can be a Secret copied into this namespace or a ConfigMap
 # referenced directly, and granting the wrong one leaves the test unable to read it.
 - apiGroups: [""]
-  resources: [{{ if eq (.Values.groupSync.ca.kind | default "Secret") "Secret" }}"secrets"{{ else }}"configmaps"{{ end }}]
+  resources: [{{ if eq (.Values.groupSync.ca.kind | default "ConfigMap") "Secret" }}"secrets"{{ else }}"configmaps"{{ end }}]
   verbs: ["get", "list"]
   resourceNames: ["{{ .Values.groupSync.ca.name }}"]
 ---
@@ -67,9 +67,9 @@ metadata:
   name: {{ .Release.Name }}-test-ca-binding
   namespace: {{ .Values.groupSync.ca.namespace }}
   annotations:
-    "helm.sh/hook": test
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
-    "helm.sh/hook-weight": "0"
+    # Not a helm test hook. helm test --logs fetches pod logs for every test hook and fails
+    # with 'unable to get pod logs ...: pods "..." not found' on any hook that is not a Pod.
+    # As an ordinary release resource this also exists before the test Jobs run.
   labels:
     {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
 subjects:
@@ -86,9 +86,9 @@ kind: ClusterRoleBinding
 metadata:
   name: {{ .Release.Name }}-test-binding
   annotations:
-    "helm.sh/hook": test
-    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
-    "helm.sh/hook-weight": "0"
+    # Not a helm test hook. helm test --logs fetches pod logs for every test hook and fails
+    # with 'unable to get pod logs ...: pods "..." not found' on any hook that is not a Pod.
+    # As an ordinary release resource this also exists before the test Jobs run.
   labels:
     {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
 subjects:

@@ -1,93 +1,90 @@
 {{- if .Values.test.enabled }}
-apiVersion: batch/v1
-kind: Job
+apiVersion: v1
+kind: Pod
 metadata:
   name: "{{ .Release.Name }}-test-operator-health"
   namespace: {{ .Values.groupSync.namespace }}
   annotations:
     "helm.sh/hook": test
+    # A Pod, not a Job. helm test --logs looks up a pod named after the hook itself, and a
+    # Job's pods are <job>-<suffix> — so a Job hook always fails with
+    # 'unable to get pod logs ...: pods "..." not found' and helm test exits 1.
+    # A Pod also means no retry, which is right for a test: a retried failure hides flakiness.
     "helm.sh/hook-delete-policy": before-hook-creation
     "helm.sh/hook-weight": "10"
   labels:
     {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
     test-type: "operator-health"
 spec:
-  backoffLimit: 2
-  template:
-    metadata:
-      labels:
-        {{- include "group-sync-operator-helm.labels" . | nindent 8 }}
-        test-type: "operator-health"
-    spec:
-      serviceAccountName: {{ .Release.Name }}-test-sa
-      containers:
-        - name: operator-health-test
-          image: {{ .Values.test.operatorHealthImage.repository }}:{{ .Values.test.operatorHealthImage.tag }}
-          imagePullPolicy: {{ .Values.test.operatorHealthImage.pullPolicy }}
-          command:
-            - /bin/bash
-            - -c
-            - |
-              /scripts/operator-health-test.sh
-          env:
-            - name: RELEASE_NAME
-              value: "{{ .Release.Name }}"
-            - name: GROUPSYNC_NAMESPACE
-              value: "{{ .Values.groupSync.namespace }}"
-            - name: GROUPSYNC_NAME
-              value: "{{ .Values.groupSync.name }}"
-            - name: GROUPSYNC_URL
-              value: "{{ .Values.groupSync.url }}"
-            - name: GROUPSYNC_INSECURE
-              value: "{{ .Values.groupSync.insecure }}"
-            - name: GROUPSYNC_SCHEDULE
-              value: "{{ .Values.groupSync.schedule }}"
-            - name: GROUPS_BASE_DN
-              value: "{{ .Values.groupSync.rfc2307.groupsQuery.baseDN }}"
-            - name: USERS_BASE_DN
-              value: "{{ .Values.groupSync.rfc2307.usersQuery.baseDN }}"
-            - name: GROUPS_FILTER
-              value: "{{ .Values.groupSync.rfc2307.groupsQuery.filter }}"
-            - name: CREDENTIALS_SECRET_NAME
-              value: "{{ .Values.groupSync.credentialsSecret.name }}"
-            - name: CREDENTIALS_SECRET_NAMESPACE
-              value: "{{ .Values.groupSync.credentialsSecret.namespace }}"
-            - name: CA_NAME
-              value: "{{ .Values.groupSync.ca.name }}"
-            - name: CA_NAMESPACE
-              value: "{{ .Values.groupSync.ca.namespace }}"
-            - name: CA_KEY
-              value: "{{ .Values.groupSync.ca.key }}"
-            - name: OAUTH_ENABLED
-              value: "{{ .Values.oauthSecretExtraction.enabled }}"
-          volumeMounts:
-            - name: scripts
-              mountPath: /scripts
-              readOnly: true
-          resources:
-            requests:
-              cpu: 100m
-              memory: 128Mi
-            limits:
-              cpu: 300m
-              memory: 256Mi
-          securityContext:
-            allowPrivilegeEscalation: false
-            capabilities:
-              drop:
-              - ALL
-            runAsNonRoot: true
-            seccompProfile:
-              type: RuntimeDefault
-      volumes:
+  serviceAccountName: {{ .Release.Name }}-test-sa
+  containers:
+    - name: operator-health-test
+      image: {{ .Values.test.operatorHealthImage.repository }}:{{ .Values.test.operatorHealthImage.tag }}
+      imagePullPolicy: {{ .Values.test.operatorHealthImage.pullPolicy }}
+      command:
+        - /bin/bash
+        - -c
+        - |
+          /scripts/operator-health-test.sh
+      env:
+        - name: RELEASE_NAME
+          value: "{{ .Release.Name }}"
+        - name: GROUPSYNC_NAMESPACE
+          value: "{{ .Values.groupSync.namespace }}"
+        - name: GROUPSYNC_NAME
+          value: "{{ .Values.groupSync.name }}"
+        - name: GROUPSYNC_URL
+          value: "{{ .Values.groupSync.url }}"
+        - name: GROUPSYNC_INSECURE
+          value: "{{ .Values.groupSync.insecure }}"
+        - name: GROUPSYNC_SCHEDULE
+          value: "{{ .Values.groupSync.schedule }}"
+        - name: GROUPS_BASE_DN
+          value: "{{ .Values.groupSync.rfc2307.groupsQuery.baseDN }}"
+        - name: USERS_BASE_DN
+          value: "{{ .Values.groupSync.rfc2307.usersQuery.baseDN }}"
+        - name: GROUPS_FILTER
+          value: "{{ .Values.groupSync.rfc2307.groupsQuery.filter }}"
+        - name: CREDENTIALS_SECRET_NAME
+          value: "{{ .Values.groupSync.credentialsSecret.name }}"
+        - name: CREDENTIALS_SECRET_NAMESPACE
+          value: "{{ .Values.groupSync.credentialsSecret.namespace }}"
+        - name: CA_NAME
+          value: "{{ .Values.groupSync.ca.name }}"
+        - name: CA_NAMESPACE
+          value: "{{ .Values.groupSync.ca.namespace }}"
+        - name: CA_KEY
+          value: "{{ .Values.groupSync.ca.key }}"
+        - name: OAUTH_ENABLED
+          value: "{{ .Values.oauthSecretExtraction.enabled }}"
+      volumeMounts:
         - name: scripts
-          configMap:
-            name: {{ .Release.Name }}-test-scripts
-            defaultMode: 0755
-      restartPolicy: Never
+          mountPath: /scripts
+          readOnly: true
+      resources:
+        requests:
+          cpu: 100m
+          memory: 128Mi
+        limits:
+          cpu: 300m
+          memory: 256Mi
       securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop:
+          - ALL
         runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
+  volumes:
+    - name: scripts
+      configMap:
+        name: {{ .Release.Name }}-test-scripts
+        defaultMode: 0755
+  restartPolicy: Never
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile:
+      type: RuntimeDefault
 {{- end }}
 

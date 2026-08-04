@@ -1,0 +1,76 @@
+# LDAPS against a cert-manager-issued certificate, trusted via a root CA in a ConfigMap.
+#
+# The enterprise shape: a named CA signs the LDAP server's certificate, and the root lands in
+# ca-config-map — the same ConfigMap an OpenShift LDAP identity provider reads. Nothing here is
+# specific to service-ca, so it exercises the code path a real deployment hits.
+#
+# Bootstrap the PKI first, which creates the ConfigMap this file names:
+#
+#   setup-local-ldap-testing/15-bootstrap-cert-manager-ca.sh apply
+#   setup-local-ldap-testing/15-bootstrap-cert-manager-ca.sh switch-ldap
+#
+#   helm upgrade --install group-sync . -n group-sync-operator --create-namespace \
+#     -f environments/ldaps-certmanager-values.yaml
+
+groupSync:
+  enabled: true
+  name: ldap-groupsync
+  namespace: group-sync-operator
+  schedule: "*/30 * * * *"
+  providerName: ldap
+
+  # Must match a SAN on the server certificate. The bootstrap script issues for both
+  # <svc>.<ns>.svc and <svc>.<ns>.svc.cluster.local, so either form works.
+  url: "ldaps://openldap-service.ldap-testing.svc.cluster.local:636"
+  # The CA is required either way: an ldaps:// url needs the root regardless of this flag,
+  # because insecure only relaxes checks the operator makes itself, not the TLS handshake.
+  insecure: false
+
+  ca:
+    # caSecret, not ca. Operator validation checks caSecret and fails every reconcile with
+    # "caSecret must be specified when insecure=false" when only ca is set.
+    field: caSecret
+    kind: ConfigMap
+    # The copy the extraction job writes into this namespace, not the source in
+    # openshift-config. Cross-namespace ConfigMap read is granted on some clusters and
+    # denied on others, and where denied the operator just loops on "ConfigMap not found".
+    name: ca-config-map-copy
+    namespace: group-sync-operator
+    key: ca.crt
+
+  credentialsSecret:
+    name: ldap-group-sync
+    namespace: group-sync-operator
+
+  rfc2307:
+    usersQuery:
+      baseDN: "dc=ephico2real,dc=com"
+      derefAliases: "never"
+      pageSize: 0
+      scope: "sub"
+      timeout: 0
+    groupsQuery:
+      baseDN: "ou=Groups,dc=ephico2real,dc=com"
+      filter: "(&(objectClass=groupOfNames)(cn=app-ocp-rbac-*))"
+      derefAliases: "never"
+      pageSize: 0
+      scope: "sub"
+      timeout: 0
+    groupNameAttributes:
+      - cn
+    groupUIDAttribute: dn
+    groupMembershipAttributes:
+      - member
+    userNameAttributes:
+      - uid
+    userUIDAttribute: dn
+    tolerateMemberNotFoundErrors: true
+    tolerateMemberOutOfScopeErrors: true
+
+customGroupSyncs:
+  enabled: true
+  items:
+    - name: bda-rbac-groupsync
+      enabled: true
+      groupCn: "bda-rbac-*"
+      schedule: "0 * * * *"

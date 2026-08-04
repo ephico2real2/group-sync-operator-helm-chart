@@ -121,3 +121,25 @@ spec:
           tolerateMemberNotFoundErrors: true
           tolerateMemberOutOfScopeErrors: true
 {{- end -}}
+
+{{/*
+Hash of the source CA's contents. Drives recreation of the copy: a changed source produces a
+different hash, which changes the extraction Job's pod spec, so the Job re-runs and re-copies.
+
+lookup reads the LIVE cluster, so this is populated during helm install/upgrade only. helm template
+and --dry-run (and therefore an offline GitOps render) get an empty map and "unavailable" — Helm
+cannot read a cluster it is not talking to. The Job stamps the same value on the copy, so what was
+actually read is recorded on the object either way.
+
+Hashes the configured sourceCa. When discoverFromOAuth finds a different name the Job logs it and
+copies that one, but this trigger still follows the configured name.
+*/}}
+{{- define "group-sync-operator-helm.caSourceHash" -}}
+{{- $c := .Values.oauthSecretExtraction.caCopy -}}
+{{- $cm := lookup "v1" "ConfigMap" $c.sourceCa.namespace $c.sourceCa.name -}}
+{{- if and $cm $cm.data -}}
+{{- toYaml $cm.data | sha256sum | trunc 16 -}}
+{{- else -}}
+unavailable
+{{- end -}}
+{{- end }}
