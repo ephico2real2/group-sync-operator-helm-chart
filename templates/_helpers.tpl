@@ -75,13 +75,16 @@ spec:
         insecure: {{ .insecure | default false }}
         prune: true
         {{- if include "group-sync-operator-helm.needsCa" . }}
-        # `ca`, not the deprecated `caSecret`. kind Secret because the CA is copied out of
-        # openshift-config into this namespace — the operator cannot read the original there.
-        # Emitted for ldaps:// even when insecure is true: the handshake still needs the root.
-        ca:
-          kind: {{ .ca.kind | default "Secret" }}
+        # Emitted for ldaps:// even when insecure is true — the handshake still needs the root.
+        #
+        # Field name comes from groupSync.ca.field. The CRD carries both `ca` and `caSecret` and
+        # marks caSecret deprecated, but operator validation checks caSecret: with only `ca` set it
+        # fails every reconcile with "caSecret must be specified when insecure=false". Both accept
+        # kind ConfigMap|Secret and resolve namespace, so the body is identical either way.
+        {{ .ca.field | default "caSecret" }}:
+          kind: {{ .ca.kind | default "ConfigMap" }}
           name: {{ .ca.name }}
-          key: {{ .ca.key }}
+          key: {{ .ca.key | default "ca.crt" }}
           namespace: {{ .ca.namespace }}
         {{- end }}
         credentialsSecret:

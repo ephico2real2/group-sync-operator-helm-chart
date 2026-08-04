@@ -1,0 +1,68 @@
+# Real-cluster shape: LDAPS with a CA, rather than the plain-LDAP default.
+#
+# Mirrors an enterprise deployment — ldaps:// on 636, verification on, and the CA referenced from the
+# ConfigMap the cluster's OAuth LDAP provider already uses. Use it to exercise the CA path before
+# rolling out:
+#
+#   helm install group-sync . -n group-sync-operator --create-namespace \
+#     -f environments/ldaps-values.yaml
+
+groupSync:
+  enabled: true
+  name: ldap-groupsync
+  namespace: group-sync-operator
+  schedule: "*/30 * * * *"
+  providerName: ldap
+
+  url: "ldaps://openldap-service.ldap-testing.svc.cluster.local:636"
+  # Verification on. Note the CA is required either way: an ldaps:// url needs the root regardless of
+  # this flag, because insecure only relaxes checks the operator makes itself.
+  insecure: false
+
+  ca:
+    # caSecret, not ca. Operator validation checks caSecret and fails every reconcile with
+    # "caSecret must be specified when insecure=false" when only ca is set.
+    field: caSecret
+    # A ConfigMap in another namespace: the operator resolves namespace and its ServiceAccount can
+    # read openshift-config, so the cluster's existing OAuth CA is reused rather than copied.
+    kind: ConfigMap
+    name: ca-config-map
+    namespace: openshift-config
+    key: ca.crt
+
+  credentialsSecret:
+    name: ldap-group-sync
+    namespace: group-sync-operator
+
+  rfc2307:
+    usersQuery:
+      baseDN: "dc=ephico2real,dc=com"
+      derefAliases: "never"
+      pageSize: 0
+      scope: "sub"
+      timeout: 0
+    groupsQuery:
+      baseDN: "ou=Groups,dc=ephico2real,dc=com"
+      filter: "(&(objectClass=groupOfNames)(cn=app-ocp-rbac-*))"
+      derefAliases: "never"
+      pageSize: 0
+      scope: "sub"
+      timeout: 0
+    groupNameAttributes:
+      - cn
+    groupUIDAttribute: dn
+    groupMembershipAttributes:
+      - member
+    userNameAttributes:
+      - uid
+    userUIDAttribute: dn
+    tolerateMemberNotFoundErrors: true
+    tolerateMemberOutOfScopeErrors: true
+
+customGroupSyncs:
+  enabled: true
+  items:
+    - name: bda-rbac-groupsync
+      enabled: true
+      groupCn: "bda-rbac-*"
+      schedule: "0 * * * *"

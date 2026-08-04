@@ -42,6 +42,13 @@ groupSync:
   # must exist: a missing one leaves the operator reconciling forever with
   # "ConfigMap ... not found, caSecret must be specified when insecure=false".
   ca:
+    # caSecret or ca. The CRD has both and calls caSecret deprecated, but operator validation checks
+    # caSecret — with only `ca` set it fails every reconcile with "caSecret must be specified when
+    # insecure=false" even though the referenced resource exists. Switch to ca on a version that
+    # honours it.
+    field: caSecret
+    # ConfigMap or Secret. namespace is resolved by the operator, whose ServiceAccount can read
+    # openshift-config, so the cluster's existing OAuth CA can be referenced in place.
     kind: ConfigMap
     name: ca-config-map
     key: ca.crt
