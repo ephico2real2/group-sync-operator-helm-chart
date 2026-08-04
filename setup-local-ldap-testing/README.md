@@ -48,7 +48,7 @@ it carries that name. Edit the source and run `helm upgrade`.
 | File | Description |
 |------|-------------|
 | `10-setup-oauth-secrets.sh` | Creates the source OAuth secret and a demo CA |
-| `15-bootstrap-cert-manager-ca.sh` | **LDAPS only**: builds the cert-manager PKI and the serving certificate. Must run BEFORE the server manifest |
+| `15-bootstrap-cert-manager-ca.sh` | **LDAPS only**: `apply` builds the cert-manager PKI and serving certificate — must run BEFORE the server manifest. `verify` proves the chain from inside the cluster. `trust-cluster` publishes the root to `proxy/cluster.spec.trustedCA` for the injected path |
 | `20-import-ldap-data.sh` | Imports the RBAC groups and test users |
 | `30-manage-ldap-server.sh` | Server lifecycle: deploy, test, restart, logs |
 | `50-simulate-ldap-operations.sh` | Adds/removes members to exercise sync |
@@ -72,10 +72,11 @@ it carries that name. Edit the source and run `helm upgrade`.
 
 **Pick a path first.** The difference is only whether the directory serves verifiable TLS:
 
-| | Needs cert-manager | LDAP URL | What it exercises |
-|---|---|---|---|
-| **A — plain LDAP** | no | `ldap://…:389` | Sync only. The bind password crosses the network in the clear |
-| **B — LDAPS** | yes | `ldaps://…:636` | Sync plus the whole CA path: preflight, copy, chain and SAN verification |
+| | Needs cert-manager | LDAP URL | How the operator gets its CA | What it exercises |
+|---|---|---|---|---|
+| **A — plain LDAP** | no | `ldap://…:389` | none needed | Sync only. The bind password crosses the network in the clear |
+| **B — LDAPS, copied** | yes | `ldaps://…:636` | the Job copies it from `openshift-config` | Sync plus preflight, copy, chain and SAN verification. **The chart default** |
+| **C — LDAPS, injected** | yes | `ldaps://…:636` | OpenShift fills an empty labelled ConfigMap | The same, via `proxy/cluster.spec.trustedCA` — how most enterprises are already set up |
 
 The chart **defaults to B**, but either path needs a values file, because the base `values.yaml`
 leaves `groupSync.url`, `oauthSecretExtraction.bindDN` and `sourceSecret.name` **empty** on purpose —
@@ -85,12 +86,13 @@ appears in no OAuth CR, so it supplies them:
 | Path | Values file |
 |---|---|
 | A — plain LDAP | `-f ../environments/ldap-plain-values.yaml` |
-| B — LDAPS | `-f ../crc-values.yaml` |
+| B — LDAPS, CA copied | `-f ../crc-values.yaml` |
+| C — LDAPS, CA injected | `-f ../crc-injected-values.yaml` |
 
 Without one, the render fails with `groupSync.url is empty and no LDAP url could be derived`.
 
-One manifest serves both: the cert-manager secret is mounted `optional: true`, so the server starts
-whether or not the PKI exists. On path A the initContainer logs
+One manifest serves all three: the cert-manager secret is mounted `optional: true`, so the server
+starts whether or not the PKI exists. On path A the initContainer logs
 `no cert-manager certificate present — osixia will self-sign; use ldap:// on 389`.
 
 ### Path A — plain LDAP, no cert-manager
@@ -129,6 +131,42 @@ helm test group-sync -n group-sync-operator --logs
 oc get crd clusterissuers.cert-manager.io    # present?
 oc get packagemanifests | grep cert-manager  # if not, install the operator
 ```
+
+### Path C — LDAPS with the CA injected by OpenShift
+
+Same as B, plus publishing the root to the cluster trust bundle. This is the shape most enterprises
+already have — the corporate root sits in `proxy/cluster.spec.trustedCA` and every namespace gets it by
+label — so it is worth exercising even though the chart defaults to the copy.
+
+```bash
+./10-setup-oauth-secrets.sh
+./15-bootstrap-cert-manager-ca.sh apply
+./15-bootstrap-cert-manager-ca.sh trust-cluster    # <-- the only extra step
+./30-manage-ldap-server.sh deploy
+./20-import-ldap-data.sh
+
+helm install group-sync .. -n group-sync-operator --create-namespace \
+  -f ../crc-injected-values.yaml
+helm test group-sync -n group-sync-operator --logs
+```
+
+`trust-cluster` publishes the root to `openshift-config/ldap-enterprise-ca-bundle` under the key
+`ca-bundle.crt` — which is what `proxy.spec.trustedCA` requires, not `ca.crt` — points the proxy at it,
+and waits for the validator to merge it. It backs up `proxy/cluster` first and **refuses** to replace a
+`trustedCA` the cluster already has, since that is the corporate bundle every workload depends on.
+
+On a real enterprise cluster you skip `trust-cluster` entirely: the root is already there.
+
+**Expect a MachineConfig rollout.** The merge itself is API-level and completes in seconds, but the
+trust bundle also belongs on the nodes, so the Machine Config Operator then rolls the pool. Measured on
+single-node CRC: new `rendered-master-*` and `rendered-worker-*` written, pool `Updating` for ~105s,
+never `Degraded`, and the node's `Ready` condition transitioned — so plan for a brief disruption. On a
+multi-node cluster MCO works through the pool one node at a time, cordoning and draining. Not a change
+to make casually on a busy cluster.
+
+The bundle went from 148 to 149 certificates, with the local root present.
+
+Undo with `./15-bootstrap-cert-manager-ca.sh untrust-cluster`.
 
 ### ⏱️ The first start takes 2-4 minutes — this is normal
 

@@ -1,0 +1,52 @@
+# CRC / local test directory over LDAPS, trusting the CA through OpenShift's trusted-CA injection
+# instead of copying it.
+#
+# This mirrors how most enterprises are already set up: the corporate root sits in
+# proxy/cluster.spec.trustedCA, a validator merges it with the system trust store into
+# openshift-config-managed/trusted-ca-bundle, and every ConfigMap labelled
+# config.openshift.io/inject-trusted-cabundle receives the result. Nothing to copy per namespace, and
+# rotation is the cluster's problem rather than the chart's.
+#
+# The chart default is still the COPY (crc-values.yaml). This file is the injection variant.
+#
+# Prerequisites — the local root is not in any cluster's trust bundle, so it has to be put there:
+#
+#   setup-local-ldap-testing/15-bootstrap-cert-manager-ca.sh apply
+#   setup-local-ldap-testing/15-bootstrap-cert-manager-ca.sh trust-cluster
+#   setup-local-ldap-testing/30-manage-ldap-server.sh deploy
+#   setup-local-ldap-testing/20-import-ldap-data.sh
+#
+#   helm install group-sync . -n group-sync-operator --create-namespace -f crc-injected-values.yaml
+#   helm test group-sync -n group-sync-operator --logs
+#
+# On a real enterprise cluster, skip trust-cluster: the root is already in the proxy. Confirm with
+#   oc get proxy cluster -o jsonpath='{.spec.trustedCA.name}{"\n"}'
+# and if it is non-empty, this file works as-is against your own LDAP server url.
+#
+# Undo with: 15-bootstrap-cert-manager-ca.sh untrust-cluster
+
+groupSync:
+  url: "ldaps://openldap-service.ldap-testing.svc.cluster.local:636"
+
+  ca:
+    field: caSecret
+    kind: ConfigMap
+    # The ConfigMap the chart creates empty and OpenShift fills. Measured on CRC after
+    # trust-cluster: 149 certificates — 148 public roots plus the local one.
+    name: ldap-trusted-ca
+    namespace: group-sync-operator
+    # ca-bundle.crt, NOT ca.crt. The injector fixes this key name.
+    key: ca-bundle.crt
+
+oauthSecretExtraction:
+  bindDN: "cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com"
+  sourceSecret:
+    name: ldap-secret
+  caCopy:
+    # Nothing to copy: OpenShift populates the destination directly.
+    enabled: false
+
+trustedCA:
+  injected:
+    enabled: true
+    name: ldap-trusted-ca

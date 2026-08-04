@@ -33,9 +33,12 @@
 # RUN apply BEFORE deploying the LDAP server. 01-ldap-server.yaml mounts the leaf secret this creates,
 # so the pod sits in ContainerCreating until it exists.
 #
-#   ./15-bootstrap-cert-manager-ca.sh apply    create the PKI and the serving certificate
-#   ./15-bootstrap-cert-manager-ca.sh verify   prove the chain and the SANs from inside the cluster
-#   ./15-bootstrap-cert-manager-ca.sh delete   remove the PKI
+#   ./15-bootstrap-cert-manager-ca.sh apply            create the PKI and the serving certificate
+#   ./15-bootstrap-cert-manager-ca.sh verify           prove the chain and SANs from inside the cluster
+#   ./15-bootstrap-cert-manager-ca.sh trust-cluster    publish the root to proxy/cluster.spec.trustedCA,
+#                                                      so trustedCA.injected can carry it
+#   ./15-bootstrap-cert-manager-ca.sh untrust-cluster  undo that
+#   ./15-bootstrap-cert-manager-ca.sh delete           remove the PKI
 
 set -euo pipefail
 
@@ -67,6 +70,10 @@ CA_CONFIGMAP_NAMESPACES="${CA_CONFIGMAP_NAMESPACES:-openshift-config}"
 # Where the chart puts the copy. Only read, never written, by this script — verify checks the CA the
 # operator actually loads rather than the source it was made from.
 COPY_NAME="${COPY_NAME:-ca-config-map-copy}"
+
+# Referenced by proxy/cluster.spec.trustedCA, which requires the key ca-bundle.crt. Separate from
+# CA_CONFIGMAP_NAME because that one uses ca.crt.
+TRUST_BUNDLE_CM="${TRUST_BUNDLE_CM:-ldap-enterprise-ca-bundle}"
 # Anchored to this script's directory, not the caller's. As ./.ca-configmap-backup it followed the
 # working directory, so running the script from the repo root dropped cluster material outside the one
 # path .gitignore covers.
@@ -312,6 +319,101 @@ YAML
 VALUES
 }
 
+# Publishes the root to the cluster-wide trust bundle, so trustedCA.injected can carry it.
+#
+# This is what an enterprise cluster normally already has: the corporate root sits in
+# proxy/cluster.spec.trustedCA, a validator merges it with the system store into
+# openshift-config-managed/trusted-ca-bundle, and every ConfigMap labelled
+# config.openshift.io/inject-trusted-cabundle gets the result. Nothing to copy per namespace.
+#
+# proxy.spec.trustedCA requires the key ca-bundle.crt, NOT ca.crt, so the root is republished under
+# that name rather than reusing the ConfigMap apply created.
+#
+# COSTS A MACHINECONFIG ROLLOUT. The merge itself is API-level and takes seconds, but the trust bundle
+# also belongs on the nodes, so MCO then rolls the pool. Measured on single-node CRC: new rendered
+# MachineConfigs, pool Updating for ~105s, never Degraded, and the node's Ready condition transitioned.
+# On a multi-node cluster MCO cordons and drains one node at a time. The MCP state is printed at the end
+# so the roll is visible rather than a surprise.
+cmd_trust_cluster() {
+  local tmp; tmp="$(mktemp -d)"; trap 'rm -rf "$tmp"' RETURN
+
+  oc extract "secret/${ROOT_SECRET}" -n "$CM_NS" --keys=ca.crt --to="$tmp" --confirm >/dev/null 2>&1 || true
+  [ -s "${tmp}/ca.crt" ] || die "root CA not found in ${CM_NS}/${ROOT_SECRET} — run apply first"
+
+  step "publishing the root to openshift-config/${TRUST_BUNDLE_CM}"
+  oc create configmap "$TRUST_BUNDLE_CM" -n openshift-config \
+     --from-file=ca-bundle.crt="${tmp}/ca.crt" --dry-run=client -o yaml \
+    | oc label --local -f - -o yaml "$OWNED" \
+    | oc apply -f - >/dev/null
+  log "key ca-bundle.crt, as proxy.spec.trustedCA requires"
+
+  local current
+  current=$(oc get proxy cluster -o jsonpath='{.spec.trustedCA.name}' 2>/dev/null)
+  if [ -n "$current" ] && [ "$current" != "$TRUST_BUNDLE_CM" ]; then
+    die "proxy/cluster already trusts ConfigMap '${current}'.
+  Refusing to replace it — that is the cluster's corporate trust bundle and every workload depends on
+  it. Add this root to that bundle instead, or on a throwaway cluster:
+    oc patch proxy cluster --type=merge -p '{\"spec\":{\"trustedCA\":{\"name\":\"${TRUST_BUNDLE_CM}\"}}}'"
+  fi
+
+  mkdir -p "$BACKUP_DIR"
+  oc get proxy cluster -o yaml > "${BACKUP_DIR}/proxy-cluster.yaml" 2>/dev/null \
+    && log "backed up proxy/cluster to ${BACKUP_DIR}/proxy-cluster.yaml"
+
+  step "pointing proxy/cluster.spec.trustedCA at it"
+  oc patch proxy cluster --type=merge \
+     -p "{\"spec\":{\"trustedCA\":{\"name\":\"${TRUST_BUNDLE_CM}\"}}}" 2>&1 | sed 's/^/  /'
+
+  step "waiting for the validator to merge it"
+  local subject want
+  want="LDAP Enterprise Root CA"
+  for _ in $(seq 1 24); do
+    rm -rf "${tmp}/merged" && mkdir -p "${tmp}/merged"
+    oc extract configmap/trusted-ca-bundle -n openshift-config-managed \
+       --keys=ca-bundle.crt --to="${tmp}/merged" --confirm >/dev/null 2>&1 || true
+    if [ -s "${tmp}/merged/ca-bundle.crt" ] && grep -q 'BEGIN CERTIFICATE' "${tmp}/merged/ca-bundle.crt"; then
+      subject=$(awk '/BEGIN CERT/{n++} {print > ("'"${tmp}"'/c" n ".pem")}' "${tmp}/merged/ca-bundle.crt" 2>/dev/null; \
+                for f in "${tmp}"/c*.pem; do openssl x509 -in "$f" -noout -subject 2>/dev/null; done | grep -c "$want" || true)
+      if [ "${subject:-0}" -gt 0 ]; then
+        log "merged: $(grep -c 'BEGIN CERTIFICATE' "${tmp}/merged/ca-bundle.crt") certificates, including ${want}"
+        break
+      fi
+    fi
+    sleep 5
+  done
+  [ "${subject:-0}" -gt 0 ] || die "the root did not appear in openshift-config-managed/trusted-ca-bundle.
+  Check: oc get proxy cluster -o yaml"
+
+  step "MachineConfigPool state"
+  oc get mcp master -o jsonpath='  updated={.status.conditions[?(@.type=="Updated")].status} updating={.status.conditions[?(@.type=="Updating")].status}{"\n"}' 2>/dev/null
+
+  cat <<NEXT
+
+  Every ConfigMap labelled config.openshift.io/inject-trusted-cabundle now receives this root, so
+  the chart can use trustedCA.injected instead of copying:
+
+    helm upgrade group-sync .. -n ${OPERATOR_NS} --reset-values -f ../crc-injected-values.yaml
+
+  To undo: ./15-bootstrap-cert-manager-ca.sh untrust-cluster
+NEXT
+}
+
+# Reverts trust-cluster. Only clears trustedCA if it still names OUR ConfigMap.
+cmd_untrust_cluster() {
+  local current
+  current=$(oc get proxy cluster -o jsonpath='{.spec.trustedCA.name}' 2>/dev/null)
+  if [ "$current" = "$TRUST_BUNDLE_CM" ]; then
+    step "clearing proxy/cluster.spec.trustedCA"
+    oc patch proxy cluster --type=merge -p '{"spec":{"trustedCA":{"name":""}}}' 2>&1 | sed 's/^/  /'
+  elif [ -n "$current" ]; then
+    log "proxy/cluster trusts '${current}', not ours — leaving it alone"
+  else
+    log "proxy/cluster.spec.trustedCA is already empty"
+  fi
+  oc delete configmap "$TRUST_BUNDLE_CM" -n openshift-config --ignore-not-found 2>&1 | sed 's/^/  /'
+  log "groupSync.ca must point back at the copy, or re-enable caCopy"
+}
+
 cmd_verify() {
   step "certificate the LDAPS endpoint actually presents"
 
@@ -385,8 +487,10 @@ cmd_delete() {
 }
 
 case "${1:-apply}" in
-  apply)  cmd_apply ;;
-  verify) cmd_verify ;;
-  delete) cmd_delete ;;
-  *) die "unknown command '${1}'. Use: apply | verify | delete" ;;
+  apply)           cmd_apply ;;
+  verify)          cmd_verify ;;
+  trust-cluster)   cmd_trust_cluster ;;
+  untrust-cluster) cmd_untrust_cluster ;;
+  delete)          cmd_delete ;;
+  *) die "unknown command '${1}'. Use: apply | verify | trust-cluster | untrust-cluster | delete" ;;
 esac

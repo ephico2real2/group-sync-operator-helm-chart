@@ -30,21 +30,71 @@ The chart creates an **empty** ConfigMap labelled `config.openshift.io/inject-tr
 trust store merged with `proxy/cluster.spec.trustedCA`. Measured on a stock cluster: **148 certificates,
 226KB**. Nothing to maintain, no copy step, and rotation is the cluster's problem rather than yours.
 
-**It carries only CAs the cluster already trusts.** So check before enabling:
+**It carries only CAs the cluster already trusts.** In most enterprises that is exactly where the
+corporate root already lives, which makes this the least-effort mode: nothing to copy, nothing to
+rotate, and it covers every namespace at once. Check what your cluster has:
 
 ```bash
 oc get proxy cluster -o jsonpath='{.spec.trustedCA.name}{"\n"}'
 ```
 
-- **Non-empty** — your corporate CA is in the bundle. An LDAP server signed by it verifies with no
-  further setup. This is the case injection exists for.
-- **Empty** — the bundle is public roots only. An internal LDAP server will fail with
-  `x509: certificate signed by unknown authority`, because no public root signed it. Use mode 1 or 3.
+- **Non-empty** — the corporate root is in the bundle. An LDAP server signed by it verifies with no
+  further setup. Enable injection and you are done.
+- **Empty** — the bundle is public roots only, so an internal LDAP server fails with
+  `x509: certificate signed by unknown authority`. Either publish the root to the proxy (below) or use
+  mode 1 or 3.
 
-That second case includes a local cert-manager PKI: a root created on your own cluster is not in
-Mozilla's CA list, so injection cannot verify it. Making it work would mean adding that root to
-`proxy/cluster.spec.trustedCA`, which the Machine Config Operator propagates into the node trust store
-via a new MachineConfig — **rebooting nodes**. Worth knowing before reaching for it in a lab.
+### Publishing a root to the cluster trust bundle
+
+Only needed on a cluster that does not already have one — a lab, or CRC. `proxy.spec.trustedCA`
+requires the key **`ca-bundle.crt`**, not `ca.crt`:
+
+```bash
+oc create configmap ldap-enterprise-ca-bundle -n openshift-config \
+  --from-file=ca-bundle.crt=/path/to/root.pem
+oc patch proxy cluster --type=merge \
+  -p '{"spec":{"trustedCA":{"name":"ldap-enterprise-ca-bundle"}}}'
+```
+
+For the local cert-manager PKI, the bootstrap script does both, with a backup and a guard that refuses
+to replace a `trustedCA` the cluster already has:
+
+```bash
+setup-local-ldap-testing/15-bootstrap-cert-manager-ca.sh trust-cluster
+setup-local-ldap-testing/15-bootstrap-cert-manager-ca.sh untrust-cluster   # to undo
+```
+
+### What it costs: expect a MachineConfig rollout
+
+Two things happen, on different timescales.
+
+**The merge is immediate and API-level.** `oc explain proxy.spec.trustedCA` describes it: a *proxy
+validator* reads `ca-bundle.crt`, merges it with the system trust store, and writes
+`openshift-config-managed/trusted-ca-bundle`. On CRC that completed in seconds, and every labelled
+ConfigMap had the new bundle right after.
+
+**Then the Machine Config Operator rolls the pool**, because the trust bundle also belongs on the
+nodes. Measured on single-node CRC:
+
+| | Observed |
+|---|---|
+| New MachineConfigs rendered | yes — new `rendered-master-*` and `rendered-worker-*` |
+| Pool `Updating` | ~105 seconds |
+| Node `Ready` condition | **transitioned** during the roll |
+| Pool `Degraded` | no |
+
+So there is a brief disruption. Whether it is a full reboot or a kubelet restart could not be
+distinguished without a before-and-after `bootID`, and the node kept reporting `Ready` at 15-second
+sampling — but its `Ready` `lastTransitionTime` moved, so something restarted. **Plan for a node roll**,
+and on a multi-node cluster expect MCO to work through the pool one node at a time, cordoning and
+draining as it goes. This is not a change to make casually on a busy cluster.
+
+None of this applies on a cluster that already has a `trustedCA` — that root is already in the bundle
+and no proxy change is needed, which is the normal enterprise case.
+
+Observed end to end on CRC once the roll finished: the merged bundle went from 148 to **149**
+certificates with the local root present, the chart's empty ConfigMap was filled with all 149, and the
+operator completed a sync over `ldaps://`.
 
 Set the key to `ca-bundle.crt`, not `ca.crt`:
 
