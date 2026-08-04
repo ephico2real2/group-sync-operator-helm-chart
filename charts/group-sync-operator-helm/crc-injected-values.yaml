@@ -16,7 +16,8 @@
 #   setup-local-ldap-testing/30-manage-ldap-server.sh deploy
 #   setup-local-ldap-testing/20-import-ldap-data.sh
 #
-#   helm install group-sync . -n group-sync-operator --create-namespace -f crc-injected-values.yaml
+#   helm install group-sync charts/group-sync-operator-helm -n group-sync-operator --create-namespace \
+#     -f charts/group-sync-operator-helm/crc-injected-values.yaml
 #   helm test group-sync -n group-sync-operator --logs
 #
 # On a real enterprise cluster, skip trust-cluster: the root is already in the proxy. Confirm with

@@ -85,9 +85,9 @@ appears in no OAuth CR, so it supplies them:
 
 | Path | Values file |
 |---|---|
-| A — plain LDAP | `-f ../environments/ldap-plain-values.yaml` |
-| B — LDAPS, CA copied | `-f ../crc-values.yaml` |
-| C — LDAPS, CA injected | `-f ../crc-injected-values.yaml` |
+| A — plain LDAP | `-f ../charts/group-sync-operator-helm/environments/ldap-plain-values.yaml` |
+| B — LDAPS, CA copied | `-f ../charts/group-sync-operator-helm/crc-values.yaml` |
+| C — LDAPS, CA injected | `-f ../charts/group-sync-operator-helm/crc-injected-values.yaml` |
 
 Without one, the render fails with `groupSync.url is empty and no LDAP url could be derived`.
 
@@ -103,8 +103,8 @@ starts whether or not the PKI exists. On path A the initContainer logs
 ./20-import-ldap-data.sh                    # RBAC groups and users
 ./90-verify-all-resources.sh
 
-helm install group-sync .. -n group-sync-operator --create-namespace \
-  -f ../environments/ldap-plain-values.yaml
+helm install group-sync ../charts/group-sync-operator-helm -n group-sync-operator --create-namespace \
+  -f ../charts/group-sync-operator-helm/environments/ldap-plain-values.yaml
 helm test group-sync -n group-sync-operator --logs
 ```
 
@@ -119,8 +119,8 @@ Same, with the PKI created **before** the server, because the server mounts the 
 ./20-import-ldap-data.sh
 ./90-verify-all-resources.sh
 
-helm install group-sync .. -n group-sync-operator --create-namespace \
-  -f ../crc-values.yaml
+helm install group-sync ../charts/group-sync-operator-helm -n group-sync-operator --create-namespace \
+  -f ../charts/group-sync-operator-helm/crc-values.yaml
 helm test group-sync -n group-sync-operator --logs
 ./15-bootstrap-cert-manager-ca.sh verify    # proves the chain and SAN from inside the cluster
 ```
@@ -145,8 +145,8 @@ label — so it is worth exercising even though the chart defaults to the copy.
 ./30-manage-ldap-server.sh deploy
 ./20-import-ldap-data.sh
 
-helm install group-sync .. -n group-sync-operator --create-namespace \
-  -f ../crc-injected-values.yaml
+helm install group-sync ../charts/group-sync-operator-helm -n group-sync-operator --create-namespace \
+  -f ../charts/group-sync-operator-helm/crc-injected-values.yaml
 helm test group-sync -n group-sync-operator --logs
 ```
 
@@ -181,7 +181,7 @@ with `oc logs -f <pod> -n ldap-testing -c openldap` and you will see the progres
 ```bash
 ./15-bootstrap-cert-manager-ca.sh apply
 oc delete groups -l group-sync-operator.redhat-cop.io/sync-provider
-helm upgrade group-sync .. -n group-sync-operator --reset-values -f ../crc-values.yaml
+helm upgrade group-sync ../charts/group-sync-operator-helm -n group-sync-operator --reset-values -f ../charts/group-sync-operator-helm/crc-values.yaml
 ```
 
 Both extra steps are load-bearing:
@@ -506,7 +506,7 @@ One naming pattern = one CR; patterns must not overlap. Full reference:
 
 ```bash
 # From the chart root:
-helm upgrade group-sync . -n default
+helm upgrade group-sync ../charts/group-sync-operator-helm -n default
 
 # The new CR exists alongside the primary one:
 oc get groupsync -n group-sync-operator
@@ -576,7 +576,7 @@ kubectl create secret generic ldap-group-sync \
 **With OAuth Secret Extraction (Recommended):**
 
 ```bash
-helm upgrade group-sync . -n group-sync-operator \
+helm upgrade group-sync ../charts/group-sync-operator-helm -n group-sync-operator \
   --set groupSync.url="ldap://openldap-service.ldap-testing.svc.cluster.local:389" \
   --set groupSync.insecure=true \
   --set oauthSecretExtraction.enabled=true \
@@ -588,7 +588,7 @@ helm upgrade group-sync . -n group-sync-operator \
 
 ```bash
 # First create the secret manually (see Step 2 above)
-helm upgrade group-sync . -n group-sync-operator \
+helm upgrade group-sync ../charts/group-sync-operator-helm -n group-sync-operator \
   --set groupSync.url="ldap://openldap-service.ldap-testing.svc.cluster.local:389" \
   --set groupSync.insecure=true \
   --set oauthSecretExtraction.enabled=false
@@ -717,7 +717,7 @@ Ensure you have:
 cd /Users/olasumbo/gitRepos/group-sync-chart
 
 # Step 1: Install operator only (without GroupSync CR)
-helm install group-sync . --set groupSync.enabled=false
+helm install group-sync ../charts/group-sync-operator-helm --set groupSync.enabled=false
 
 # Verify operator installation
 oc get csv -n group-sync-operator
@@ -727,7 +727,7 @@ oc get pods -n group-sync-operator
 # Then proceed to Step 2
 
 # Step 2: Enable GroupSync CR
-helm upgrade group-sync . --set groupSync.enabled=true
+helm upgrade group-sync ../charts/group-sync-operator-helm --set groupSync.enabled=true
 
 # Verify GroupSync CR creation
 oc get groupsync -n group-sync-operator
@@ -787,7 +787,7 @@ oc describe secret ldap-secret -n openshift-config
 
 ```bash
 # Deploy/upgrade the GroupSync chart with OAuth extraction enabled
-helm upgrade group-sync . \
+helm upgrade group-sync ../charts/group-sync-operator-helm \
   --set oauthSecretExtraction.enabled=true \
   --set oauthSecretExtraction.sourceSecret.name=ldap-secret \
   --set oauthSecretExtraction.sourceSecret.namespace=openshift-config

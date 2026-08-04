@@ -15,7 +15,8 @@
 #
 # Then:
 #
-#   helm install group-sync . -n group-sync-operator --create-namespace -f crc-values.yaml
+#   helm install group-sync charts/group-sync-operator-helm -n group-sync-operator --create-namespace \
+#     -f charts/group-sync-operator-helm/crc-values.yaml
 #   helm test group-sync -n group-sync-operator --logs
 #   setup-local-ldap-testing/15-bootstrap-cert-manager-ca.sh verify
 #

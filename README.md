@@ -723,7 +723,7 @@ helm get values group-sync -n group-sync-operator
 helm get values group-sync -n group-sync-operator --all
 
 # Discard the remembered values and take the chart defaults
-helm upgrade group-sync . -n group-sync-operator --reset-values
+helm upgrade group-sync ./charts/group-sync-operator-helm -n group-sync-operator --reset-values
 ```
 
 `--reset-values` discards **all** previously supplied values, so pass any you still want in the same

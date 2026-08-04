@@ -155,8 +155,8 @@ Run in order; each step must pass before the next.
 | # | Check | Command | Pass = |
 |---|---|---|---|
 | 1 | Primary CR unchanged | render with helper vs backup, diff the `ldap-groupsync` object | zero differences |
-| 2 | Chart is valid | `helm lint .` | 0 failed |
-| 3 | Renders cleanly | `helm template . -n group-sync-operator` | 3 GroupSync objects, valid YAML |
+| 2 | Chart is valid | `helm lint ../charts/group-sync-operator-helm` | 0 failed |
+| 3 | Renders cleanly | `helm template ../charts/group-sync-operator-helm -n group-sync-operator` | 3 GroupSync objects, valid YAML |
 | 4 | Filter is correct | inspect rendered `bda-rbac-groupsync` | `filter: "(&(objectClass=groupOfNames)(cn=bda-rbac-*))"` |
 | 5 | Live sync works | `helm upgrade` on CRC, then `oc get groups -l ...` | `bda-rbac-*` groups appear, labelled `bda-rbac-groupsync_ldap` |
 | 6 | No cross-claim | check operator logs | no *"Did Not Match"* warnings for `bda-rbac-*` |
