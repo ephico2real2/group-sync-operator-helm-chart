@@ -1,8 +1,13 @@
-# Real-cluster shape: LDAPS with a CA, rather than the plain-LDAP default.
+# LDAPS trusted through service-ca, with NO CA copy.
 #
-# Mirrors an enterprise deployment — ldaps:// on 636, verification on, and the CA referenced from the
-# ConfigMap the cluster's OAuth LDAP provider already uses. Use it to exercise the CA path before
-# rolling out:
+# The one shape that needs no copying: OpenShift injects openshift-service-ca.crt into every
+# namespace, so the operator already has the signer in its own namespace. That makes this the
+# simplest LDAPS configuration, and the one to reach for when the directory's certificate is issued
+# by service-ca — which is what setup-local-ldap-testing/01-ldap-server.yaml does via the Service
+# annotation.
+#
+# The base values instead copy the cluster's OAuth CA in, and ldaps-certmanager-values.yaml copies a
+# cert-manager root. All three verify a chain; only this one has nothing to copy.
 #
 #   helm install group-sync . -n group-sync-operator --create-namespace \
 #     -f environments/ldaps-values.yaml
@@ -31,12 +36,9 @@ groupSync:
     # its Service DNS name. Use ca-config-map in openshift-config instead when the LDAP server has
     # an enterprise certificate.
     kind: ConfigMap
-    # The copy the extraction job writes into this namespace, not the source in
-    # openshift-config. Cross-namespace ConfigMap read is granted on some clusters and
-    # denied on others, and where denied the operator just loops on "ConfigMap not found".
-    name: ca-config-map-copy
+    name: openshift-service-ca.crt
     namespace: group-sync-operator
-    key: ca.crt
+    key: service-ca.crt
 
   credentialsSecret:
     name: ldap-group-sync
@@ -74,3 +76,10 @@ customGroupSyncs:
       enabled: true
       groupCn: "bda-rbac-*"
       schedule: "0 * * * *"
+
+oauthSecretExtraction:
+  caCopy:
+    # Off, and that is the point of this file. openshift-service-ca.crt is already in every namespace,
+    # so there is nothing to copy — leaving it on would create a second, redundant ConfigMap that
+    # groupSync.ca does not reference, and the job would warn about exactly that.
+    enabled: false

@@ -48,8 +48,8 @@ groupSync:
     # insecure=false" even though the referenced resource exists. Switch to ca on a version that
     # honours it.
     field: caSecret
-    # Must match oauthSecretExtraction.caCopy.target. Point this at openshift-config only if you
-    # have confirmed the operator's ServiceAccount can read ConfigMaps there.
+    # Must match oauthSecretExtraction.caCopy.destinationCa. Point this at openshift-config only if
+    # you have confirmed the operator's ServiceAccount can read ConfigMaps there.
     kind: ConfigMap
     name: ca-config-map-copy
     key: ca.crt
@@ -62,10 +62,18 @@ groupSync:
     # Namespace where the Secret is located
     namespace: group-sync-operator
 
-  # LDAP server URL (ldap:// for insecure, ldaps:// for secure connections)
-  url: "ldap://openldap-service.ldap-testing.svc.cluster.local:389"
-  # Set to true for plain LDAP, false for LDAPS with certificates
-  insecure: true
+  # ldaps:// on 636. Plain ldap:// on 389 sends the bind password across the network in the clear, and
+  # it leaves every CA path above inert — needsCa is false for ldap:// with insecure true, so no
+  # caSecret is emitted and caCopy never runs.
+  #
+  # Changing the host or port here after groups exist needs care: the operator compares
+  # openshift.io/ldap.url on each Group against host:port and refuses to adopt a mismatch
+  # ("annotation did not match sync host"). Re-annotating the groups is enough — they do not need
+  # deleting.
+  url: "ldaps://openldap-service.ldap-testing.svc.cluster.local:636"
+  # false, so the operator verifies the chain. A CA is required for ldaps:// either way: insecure
+  # relaxes checks the operator makes itself, it cannot make a handshake trust an unknown root.
+  insecure: false
 
   # RFC2307 schema configuration
   rfc2307:
@@ -204,15 +212,16 @@ oauthSecretExtraction:
   # Copies the CA the cluster's OAuth LDAP identity provider already trusts into
   # groupSync.namespace, so the operator reads it from its own namespace.
   #
-  # On by default. Referencing openshift-config in place needs cross-namespace ConfigMap read,
-  # which the operator has on some clusters and not others, and where it is denied the only symptom
-  # is the operator reconciling forever on "ConfigMap ... not found". A local copy removes the
-  # dependency, so groupSync.ca should point at the target below.
+  # On by default, and only runs when a CA is actually needed — needsCa, meaning an ldaps:// url or
+  # insecure false. Referencing openshift-config in place needs cross-namespace ConfigMap read, which
+  # the operator has on some clusters and not others, and where it is denied the only symptom is the
+  # operator reconciling forever on "ConfigMap ... not found". A local copy removes the dependency, so
+  # groupSync.ca must point at destinationCa below.
   caCopy:
     enabled: true
 
     # Reads the ConfigMap name from the OAuth CR's LDAP identity provider rather than trusting
-    # sourceConfigMap.name, so a cluster that named it something else still works. Falls back to the
+    # sourceCa.name, so a cluster that named it something else still works. Falls back to the
     # configured name when the OAuth CR has no LDAP provider.
     #
     # Only the NAME is discovered: oauth.spec.identityProviders[].ldap.ca is a name-only reference,
