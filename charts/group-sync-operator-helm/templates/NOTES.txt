@@ -81,12 +81,18 @@ VERIFICATION STEPS:
 4. View synchronization logs:
    $ oc logs -n {{ .Values.groupSync.namespace }} deployment/group-sync-operator-controller-manager -c manager --tail=100
 
-5. Verify LDAP connectivity:
-   $ oc -n {{ .Values.groupSync.namespace }} exec deployment/group-sync-operator-controller-manager -c manager -- \
-     ldapsearch -H {{ .Values.groupSync.url }} \
-     -D $(oc get secret {{ .Values.groupSync.credentialsSecret.name }} -n {{ .Values.groupSync.namespace }} -o jsonpath="{.data.bindDN}" | base64 -d) \
-     -w $(oc get secret {{ .Values.groupSync.credentialsSecret.name }} -n {{ .Values.groupSync.namespace }} -o jsonpath="{.data.bindPassword}" | base64 -d) \
-     -b "{{ .Values.groupSync.rfc2307.groupsQuery.baseDN }}" -s sub "(objectClass=*)" -LLL
+5. Verify LDAP connectivity — use the test suite, which does exactly this and more:
+   $ helm test {{ .Release.Name }} -n {{ .Release.Namespace }} --logs
+
+   It resolves DNS, opens the port, verifies the TLS chain AND the hostname against the CA the CR
+   actually loads, and confirms the operator completed a sync. A hand-rolled ldapsearch cannot:
+   the operator image ships no shell utilities at all, the credentials Secret holds `username` and
+   `password` rather than `bindDN`/`bindPassword`, and with groupSync.url left empty the url is only
+   known after it is derived from the cluster's OAuth CR.
+
+   The url the CR is actually using, whether you set it or it was derived:
+   $ oc get groupsync {{ .Values.groupSync.name }} -n {{ .Values.groupSync.namespace }} \
+       -o jsonpath='{.spec.providers[0].ldap.url}{"\n"}'
 
 TROUBLESHOOTING:
 ==============

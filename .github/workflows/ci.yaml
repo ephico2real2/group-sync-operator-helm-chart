@@ -13,6 +13,148 @@ env:
   CHART: charts/group-sync-operator-helm
 
 jobs:
+  # Combinations, not just the shipped values files. Three real bugs reached main because CI rendered
+  # only the four values files and the no-values case, and every one of those rendered fine:
+  #
+  #   the oauths RBAC rule was nested under two gates, so it vanished in configurations the Job still
+  #   read the OAuth CR in; needsCa read the raw url, so an empty url with insecure:true emitted no CA
+  #   even though the derived url was ldaps://; and the test pods baked .Values.groupSync.url, so a
+  #   discovered url left them with an empty one and `helm test` could not pass at all.
+  #
+  # Each of those is a coherence property between two parts of the chart, which is what the assertions
+  # in ci/render-checks.py test — and a render is only meaningful against values that make the two
+  # parts disagree, hence the case list.
+  render-matrix:
+    name: Value combinations render coherently
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+      - run: pip install --quiet pyyaml
+
+      # Not a render. The url half of the bug above CANNOT be seen offline: the raw field and the
+      # resolved url are the same string whenever a url is set, and offline a url must be set for
+      # anything to render at all. So it is asserted on the template SOURCE — only the resolver may
+      # read the raw field. Verified to produce 7 hits on the tree that had the bug, 0 on main.
+      - name: Only the resolver may read the raw LDAP url
+        run: python3 ci/url-guard.py "$CHART"
+
+      - name: Render every combination and assert coherence
+        run: |
+          set -uo pipefail
+          CHECKS="oauth-rbac source-secret-rbac ca-coherence ca-copy-kind test-env-matches-cr
+                  no-cluster-wide-secret-read no-artifacts"
+          fails=0
+
+          # must_render <label> -- <helm args...>
+          must_render() {
+            label="$1"; shift 2
+            if ! helm template release "$CHART" "$@" > /tmp/r.yaml 2>/tmp/r.err; then
+              echo "::error::[$label] expected a successful render, got:"
+              tail -3 /tmp/r.err; fails=$((fails + 1)); return
+            fi
+            bad=0
+            for c in $CHECKS; do
+              if ! python3 ci/render-checks.py "$c" /tmp/r.yaml > /tmp/c.out 2>&1; then
+                echo "::error::[$label] $c"; sed 's/^/    /' /tmp/c.out
+                fails=$((fails + 1)); bad=$((bad + 1))
+              fi
+            done
+            # Only claim ok when nothing failed — otherwise the summary line contradicts the errors
+            # printed immediately above it, which is exactly how a red run gets skimmed as green.
+            if [ "$bad" -eq 0 ]; then echo "  ok  $label"; else echo "  FAIL $label ($bad check(s))"; fi
+          }
+
+          # must_fail <label> <expected-substring> -- <helm args...>
+          must_fail() {
+            label="$1"; want="$2"; shift 3
+            if helm template release "$CHART" "$@" > /tmp/r.yaml 2>/tmp/r.err; then
+              echo "::error::[$label] rendered, but it must be refused: $want"
+              fails=$((fails + 1)); return
+            fi
+            if ! grep -q "$want" /tmp/r.err; then
+              echo "::error::[$label] failed, but not for the documented reason. Wanted: $want"
+              tail -3 /tmp/r.err; fails=$((fails + 1)); return
+            fi
+            echo "  ok  $label  (refused as designed)"
+          }
+
+          URL=--set=groupSync.url=ldaps://ldap.example.com:636
+
+          # The three regression guards. Each of these combinations rendered "fine" while broken.
+          must_render "plain ldap, no CA copy, everything discovered" -- \
+            --set groupSync.url=ldap://ldap.example.com:389 --set groupSync.insecure=true \
+            --set oauthSecretExtraction.caCopy.enabled=false \
+            --set oauthSecretExtraction.bindDN= --set oauthSecretExtraction.sourceSecret.name=
+          must_render "ldaps with insecure=true still carries a CA" -- \
+            "$URL" --set groupSync.insecure=true
+          must_render "ca.key emptied — CR and test pods must agree" -- \
+            "$URL" --set groupSync.ca.key=
+          must_render "CA source in its own namespace" -- \
+            "$URL" --set oauthSecretExtraction.caCopy.sourceCa.namespace=corp-trust \
+            --set oauthSecretExtraction.sourceSecret.name=
+          must_render "no GroupSync CR at all" -- \
+            --set groupSync.enabled=false --set customGroupSyncs.enabled=false
+          must_render "a CA copy written and read as a Secret" -- \
+            "$URL" --set groupSync.ca.kind=Secret \
+            --set oauthSecretExtraction.caCopy.destinationCa.kind=Secret
+          must_render "a tenant with an explicit filter" -- \
+            "$URL" --set-json 'customGroupSyncs.items=[{"name":"t","enabled":true,"filter":"(cn=x)"}]'
+
+          # Incoherent inputs must be refused at render time, not silently mis-deployed.
+          must_fail "CA written as ConfigMap, read as Secret" "reads it as a Secret" -- \
+            "$URL" --set groupSync.ca.kind=Secret
+          must_fail "tenant with neither groupCn nor filter" "neither groupCn nor filter" -- \
+            "$URL" --set-json 'customGroupSyncs.items=[{"name":"t","enabled":true}]'
+          must_fail "empty url must fail closed, even with insecure=true" \
+            "no LDAP url could be derived" -- --set groupSync.insecure=true
+
+          # And the shipped values files, through the same assertions.
+          shopt -s nullglob
+          for f in "$CHART"/*-values.yaml "$CHART"/environments/*.yaml; do
+            grep -qE '^#\s*requires-cluster:\s*true' "$f" && continue
+            must_render "values file $(basename "$f")" -- -f "$f"
+          done
+
+          echo
+          if [ "$fails" -ne 0 ]; then echo "$fails assertion(s) failed"; exit 1; fi
+          echo "all combinations coherent"
+
+  # A chart change that does not bump the version publishes NOTHING, and the release run still goes
+  # green — chart-releaser skips a version it has already published. That has cost this repo two
+  # releases, one of them carrying a security fix. See docs/RELEASING.md.
+  version-bump:
+    name: Chart changes bump the chart version
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: A change under charts/ requires a new Chart.yaml version
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -uo pipefail
+          changed=$(git diff --name-only "$BASE" HEAD -- "$CHART" | grep -v '/Chart.yaml$' || true)
+          if [ -z "$changed" ]; then
+            echo "no chart content changed — nothing to publish, no bump needed"
+            exit 0
+          fi
+          echo "chart content changed:"; printf '  %s\n' $changed
+
+          was=$(git show "$BASE:$CHART/Chart.yaml" 2>/dev/null | awk '/^version:/{print $2; exit}')
+          now=$(awk '/^version:/{print $2; exit}' "$CHART/Chart.yaml")
+          echo "version: $was -> $now"
+
+          if [ "$was" = "$now" ]; then
+            echo "::error file=$CHART/Chart.yaml::chart content changed but version is still $now, so"
+            echo "::error file=$CHART/Chart.yaml::chart-releaser will skip the release and report success"
+            echo "::error file=$CHART/Chart.yaml::while publishing nothing. Bump it — see docs/RELEASING.md"
+            exit 1
+          fi
+          echo "version was bumped"
+
   chart:
     name: Chart renders and lints
     runs-on: ubuntu-latest
