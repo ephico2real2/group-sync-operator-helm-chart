@@ -122,3 +122,39 @@ uniqueMember: uid=jane.smith,ou=People,dc=ephico2real,dc=com
 uniqueMember: uid=alice.cooper,ou=People,dc=ephico2real,dc=com
 uniqueMember: uid=lateef.o,ou=People,dc=ephico2real,dc=com
 uniqueMember: cn=ocp-oauth-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com
+
+# ── Usable passwords for the human gate members ──────────────────────────────────────────────────
+# LAB ONLY. These are test-directory credentials in a repo that also carries admin123 and
+# bindpassword123 — nothing here is a real secret, and nothing here should ever be pointed at a real
+# directory.
+#
+# Why this is needed at all: ldap-structure-combined.ldif sets `userPassword: {SSHA}password123` for
+# john.doe, jane.smith, bob.wilson, alice.cooper and charlie.brown. That is not a hash — it is the
+# literal string `password123` behind an {SSHA} prefix, an 11-byte base64 body that decodes to nothing
+# usable — so slapd rejects EVERY bind for them, with nothing in the logs to say why. Three of those
+# five are gate members, so without this the gate would allow them and the login would still fail,
+# which is the most confusing possible combination to debug.
+#
+# Set as cleartext, exactly as lateef.o and the service accounts already are: slapd accepts it and it
+# stays greppable, which is what you want in a lab and never anywhere else.
+#
+# bob.wilson and charlie.brown are deliberately left alone. They are NOT in the gate group, so leaving
+# their passwords unusable would confuse a denial test — you could not tell a gate denial from a bad
+# credential. bob.wilson is the better denial subject precisely because he can bind to LDAP and is
+# still refused by OpenShift; give him one by hand when you want that test:
+#   ldappasswd -x -D "cn=admin,dc=ephico2real,dc=com" -w admin123 \
+#     -s 'GateTest123!' "uid=bob.wilson,ou=People,dc=ephico2real,dc=com"
+dn: uid=john.doe,ou=People,dc=ephico2real,dc=com
+changetype: modify
+replace: userPassword
+userPassword: Ldap123!
+
+dn: uid=jane.smith,ou=People,dc=ephico2real,dc=com
+changetype: modify
+replace: userPassword
+userPassword: Ldap123!
+
+dn: uid=alice.cooper,ou=People,dc=ephico2real,dc=com
+changetype: modify
+replace: userPassword
+userPassword: Ldap123!

@@ -100,7 +100,7 @@ like the only account left.
 |---|---|---|
 | `kubeadmin` | **developer** | `kubeadmin` + its password (`crc console --credentials`) |
 | `developer` | **developer** | `developer` + its password |
-| a directory user | **ldap-local** | `lateef.o` / `newuser123`, or `ocp-oauth-bind-serviceid` / `oauthbindpassword123` — see [which users can log in](#which-directory-users-can-actually-log-in) |
+| a directory user | **ldap-local** | `john.doe` / `Ldap123!` — full list under [Test logins](#test-logins) |
 
 Picking `ldap-local` and typing `kubeadmin` answers *invalid credentials*, because kubeadmin is not in the
 directory. That is the chooser working, not a deleted account.
@@ -122,29 +122,51 @@ form back, run `./40-setup-oauth-ldap-login.sh delete`.
 `ocp-oauth-bind-serviceid` is the identity provider's. Either can be rotated without taking the other
 down. The OAuth one is also a member of the gate group, so it doubles as a login identity.
 
-#### Which directory users can actually log in
+#### Test logins
 
-Not all of them, and the reason is in the imported data rather than in any config. Measured across
-`ou=People`:
+**Lab credentials.** These live in a repo that already carries `admin123` and `bindpassword123`. Nothing
+here is a real secret, and none of it should ever be pointed at a real directory.
 
-| users | stored password | can bind? |
+Every member of the gate group can log in. Pick **ldap-local** on the chooser, then:
+
+| username | password | set by |
 |---|---|---|
-| `lateef.o`, `dana.lee`, `sarah.jones` | cleartext `newuser123` (later LDIFs) | **yes** |
-| `ocp-oauth-bind-serviceid` | cleartext `oauthbindpassword123` | **yes** |
-| `john.doe`, `jane.smith`, `bob.wilson`, `alice.cooper`, `charlie.brown` | `{SSHA}password123` from `ldap-structure-combined.ldif` | **no** |
+| `john.doe` | `Ldap123!` | `ldap-oauth-login-gate.ldif` |
+| `jane.smith` | `Ldap123!` | `ldap-oauth-login-gate.ldif` |
+| `alice.cooper` | `Ldap123!` | `ldap-oauth-login-gate.ldif` |
+| `lateef.o` | `newuser123` | the earlier LDIFs |
+| `ocp-oauth-bind-serviceid` | `oauthbindpassword123` | `ldap-oauth-login-gate.ldif` |
 
-That last row is not a hash. It is the literal string `password123` behind an `{SSHA}` prefix — the
-base64 body is 11 bytes and decodes to nothing usable — so slapd rejects **every** bind for those five,
-with nothing in the logs to explain why. Give one a real password when you want a specific username:
+All five verified with a real `oc login`. **`bob.wilson` is the denial case** — give him a password and he
+is *still* refused, because he is not in the gate:
 
 ```bash
 oc exec -c openldap -n ldap-testing <pod> -- \
   ldappasswd -x -D "cn=admin,dc=ephico2real,dc=com" -w admin123 \
-  -s '<newpassword>' "uid=jane.smith,ou=People,dc=ephico2real,dc=com"
+  -s 'GateTest123!' "uid=bob.wilson,ou=People,dc=ephico2real,dc=com"
 ```
 
-Of the five gate members, **`lateef.o` / `newuser123`** works out of the box — no `ldappasswd` needed.
-`jane.smith` and `alice.cooper` are gate members whose passwords are unusable until you set one.
+He then binds to LDAP successfully and OpenShift still answers 401. That pair is what proves the gate does
+real work rather than passing everyone through.
+
+##### Why three of those passwords had to be set explicitly
+
+`ldap-structure-combined.ldif` gives `john.doe`, `jane.smith`, `bob.wilson`, `alice.cooper` and
+`charlie.brown` this:
+
+```
+userPassword: {SSHA}password123
+```
+
+That is **not a hash**. It is the literal string `password123` behind an `{SSHA}` prefix — an 11-byte
+base64 body that decodes to nothing usable — so slapd rejects *every* bind for those five, with nothing in
+the logs to say why. Three of them are gate members, which is the worst combination to debug: the gate
+admits them and the login still fails.
+
+`ldap-oauth-login-gate.ldif` therefore replaces the password for those three, as cleartext, exactly as
+`lateef.o` and the service accounts already are. `bob.wilson` and `charlie.brown` are left alone on
+purpose, so the denial test above stays meaningful — otherwise you could not tell a gate denial from a bad
+credential.
 
 #### Group-restricted login: absolute DNs, never a wildcard
 
