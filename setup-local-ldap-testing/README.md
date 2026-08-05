@@ -88,6 +88,36 @@ Two reasons to bother:
 ./40-setup-oauth-ldap-login.sh verify
 ```
 
+#### ⚠ After this, the console login page looks like kubeadmin is gone
+
+It isn't. A cluster with exactly **one** identity provider skips the provider chooser and goes straight to
+a username/password form. With two, the chooser appears — and it lists **providers, not users**. There is
+no `kubeadmin` button and there never was one: kubeadmin is a *user inside* the HTPasswd provider, which
+on this cluster is named `developer`. A provider name that reads like a username is what makes it look
+like the only account left.
+
+| to log in as | pick this provider | then type |
+|---|---|---|
+| `kubeadmin` | **developer** | `kubeadmin` + its password (`crc console --credentials`) |
+| `developer` | **developer** | `developer` + its password |
+| a directory user | **ldap-local** | e.g. `john.doe`, or `ocp-oauth-bind-serviceid` |
+
+Picking `ldap-local` and typing `kubeadmin` answers *invalid credentials*, because kubeadmin is not in the
+directory. That is the chooser working, not a deleted account.
+
+Start at the **console** route, not the oauth route — they are different objects:
+
+```bash
+oc get route -n openshift-console console        -o jsonpath='{.spec.host}{"\n"}'   # where you log in
+oc get route -n openshift-authentication oauth-openshift -o jsonpath='{.spec.host}{"\n"}'   # who authenticates you
+```
+
+There is no shortcut URL that pre-selects a provider: a bare `https://<oauth-route>/login/<idp>` answers
+**302 → /**, because it carries none of the authorize request's state. Open the console and click.
+
+The CLI is unaffected — `oc login -u kubeadmin -p <password>` never touches the chooser. To get the single
+form back, run `./40-setup-oauth-ldap-login.sh delete`.
+
 **Two service accounts, on purpose.** `ocp-ldap-bind-serviceid` is the group-sync operator's;
 `ocp-oauth-bind-serviceid` is the identity provider's. Either can be rotated without taking the other
 down. The OAuth one is also a member of the gate group, so it doubles as a login identity you can

@@ -544,6 +544,42 @@ print("PRESERVED " + (",".join(others) if others else "(none)"), file=sys.stderr
   oc patch oauth cluster --type=merge -p "$patch" 2>&1 | sed 's/^/  /'
   log "kubeadmin and the HTPasswd login are untouched: ${preserved} still configured"
 
+  # Said loudly because the console login LOOKS broken afterwards while nothing is wrong. OpenShift skips
+  # the provider chooser when there is exactly one identity provider, so a cluster that went straight to a
+  # username/password form now asks which provider first — and the chooser lists PROVIDERS, not users.
+  # kubeadmin is a USER inside the HTPasswd provider, so no button says "kubeadmin". Here that provider is
+  # usually named `developer`, which reads like a username and makes it look like the only account left.
+  # The CONSOLE route, deliberately — openshift-console/console, not openshift-authentication/
+  # oauth-openshift. They are different objects and it is easy to print one while meaning the other.
+  # There is no shortcut URL to offer: a bare https://<oauth-route>/login/<idp> answers 302 to /, because
+  # it carries none of the authorize request's state. Measured, not assumed. So the only instruction that
+  # works is "open the console and pick a provider".
+  local console first_idp
+  console=$(oc get route -n openshift-console console -o jsonpath='{.spec.host}' 2>/dev/null)
+  first_idp="${preserved%%,*}"
+  cat <<CHOOSER
+
+  ⚠  THE CONSOLE LOGIN PAGE CHANGES SHAPE. Nothing is broken when it does.
+
+  It now lists identity PROVIDERS, not users, because a cluster with exactly one provider skips the
+  chooser entirely and this one now has two. There is no "kubeadmin" button and there never was one:
+  kubeadmin is a USER INSIDE the HTPasswd provider, which on this cluster is named '${first_idp}' — a
+  provider name that reads like a username, which is what makes it look like the only account left.
+
+    log in as kubeadmin:   pick '${first_idp}', then type kubeadmin and its password
+    a directory user:      pick '${IDP_NAME}'
+${console:+
+    console:               https://${console}}
+
+  Picking '${IDP_NAME}' and typing kubeadmin answers "invalid credentials", because kubeadmin is not in the
+  directory. That is the chooser working, not a deleted account. The CLI never sees any of this:
+
+    oc login -u kubeadmin -p <password>
+    crc console --credentials          # prints the password on CRC
+
+  To go back to a single login form:  ./40-setup-oauth-ldap-login.sh delete
+CHOOSER
+
   step "waiting for the authentication operator to roll out"
   # Adding a provider rewrites the oauth-openshift config and restarts its pods, so the operator goes
   # Progressing=True and comes back. The patch alone only proves the API server accepted the SHAPE.
