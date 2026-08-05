@@ -146,7 +146,13 @@ guard_existing_configmap() {
   oc get configmap "$name" -n "$ns" -o yaml > "$backup"
   log "backed up existing ${ns}/${name} to ${backup}"
 
+  # Cleared BEFORE the extract, so that $pem existing afterwards PROVES this run read it out of the
+  # live ConfigMap. BACKUP_DIR persists between runs, and the extract only overwrites $pem when it
+  # succeeds — so without this a leftover file from an earlier run is read below as though it were the
+  # current cluster state, and the decision to replace a live CA gets made from a file on this laptop.
+  # Every branch after this point depends on that distinction.
   local pem="${BACKUP_DIR}/${ns}-${name}.ca.crt"
+  rm -f "$pem" "${BACKUP_DIR}/ca.crt"
   oc extract "configmap/${name}" -n "$ns" --keys=ca.crt --to="$BACKUP_DIR" --confirm >/dev/null 2>&1 || true
   [ -s "${BACKUP_DIR}/ca.crt" ] && mv "${BACKUP_DIR}/ca.crt" "$pem"
 
@@ -171,9 +177,33 @@ guard_existing_configmap() {
 
   if [ -s "$pem" ]; then
     log "existing ${ns}/${name} certificate is EXPIRED ($(openssl x509 -in "$pem" -noout -enddate 2>/dev/null | sed 's/notAfter=//')) — replacing it"
-  else
-    log "existing ${ns}/${name} has no usable ca.crt — replacing it"
+    return 0
   fi
+
+  # No readable ca.crt is NOT the same as empty. The caller overwrites this ConfigMap unconditionally
+  # once this function returns, so treating "cannot read it" as permission to replace clobbers whatever
+  # is actually in there — a corporate bundle stored under ca-bundle.crt, a multi-key trust ConfigMap,
+  # a binary blob. The one thing the expired-certificate branch above has, and this one does not, is
+  # evidence that replacing is safe.
+  #
+  # The full backup taken above means nothing is lost, but a lab script should not be the reason a
+  # cluster-wide trust object changes shape. Refuse and name what is in there instead.
+  local keys
+  keys=$(oc get configmap "$name" -n "$ns" -o go-template='{{range $k,$v := .data}}{{$k}} {{end}}' 2>/dev/null)
+  if [ "${FORCE_REPLACE_UNOWNED:-false}" = "true" ]; then
+    log "existing ${ns}/${name} has no readable ca.crt (keys: ${keys:-none}) — replacing it anyway"
+    log "  because FORCE_REPLACE_UNOWNED=true. Backup: ${backup}"
+    return 0
+  fi
+  die "ConfigMap ${ns}/${name} exists, was not created by this script, and has no readable ca.crt.
+  Its keys are: ${keys:-<none>}
+  Refusing to replace it, because there is no evidence that doing so is safe — a ConfigMap holding a
+  trust bundle under another key looks exactly like this one. A full backup is at
+    ${backup}
+  Pick one:
+    CA_CONFIGMAP_NAME=<free-name> ./15-bootstrap-cert-manager-ca.sh apply    write somewhere else
+    FORCE_REPLACE_UNOWNED=true    ./15-bootstrap-cert-manager-ca.sh apply    replace it deliberately
+    oc delete configmap ${name} -n ${ns}                                     remove it yourself first"
 }
 
 cmd_apply() {
