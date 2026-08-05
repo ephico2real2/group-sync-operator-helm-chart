@@ -1,12 +1,41 @@
 #!/bin/bash
-set -e
+# Health and configuration checks for the GroupSync operator, run as a `helm test` hook.
+#
+# Two severities, and the distinction is the whole point — it decides the exit code:
+#
+#   require    a precondition the operator cannot work without. Counted in ERRORS and FAILS the suite.
+#   report_*   an observation that may be transient, environmental, or a deliberate choice. Counted in
+#              WARNINGS and does NOT fail the suite.
+#
+# Every check used to be the second kind, and the script ended in an unconditional `exit 0`. Measured
+# against a live cluster by breaking one input at a time, 7 of 8 broken configurations still printed
+# "Health check completed successfully" and exited 0: a missing GroupSync CR, a missing credentials
+# secret, a missing CA ConfigMap, a wrong CA key, a non-LDAP url, an unresolvable host, and a closed
+# port. Only a missing namespace failed — and only because `set -e` aborted at Test 1, so no summary
+# and no ❌ was printed at all.
+#
+# `set -e` is therefore deliberately absent. A diagnostic script has to run every check and then decide:
+# under -e the first failing check aborted mid-run, skipping the remaining tests and the verdict. Its
+# sibling ldap-connection-test.sh is built the same way, for the same reason.
+set -o pipefail
+
 echo "🔧 Testing GroupSync Operator Installation, Configuration & Health..."
 echo "================================================================="
 
 ERRORS=0
 WARNINGS=0
 
-# Function to report test results (informational only, no failures)
+# A precondition the operator cannot work without. Fails the suite.
+require() {
+  if [ "${2:-1}" -eq 0 ]; then
+    echo "✅ $1"
+  else
+    echo "❌ $1"
+    ERRORS=$((ERRORS + 1))
+  fi
+}
+
+# An observation. Never fails the suite — see the header for which is which.
 report_result() {
   if [ $2 -eq 0 ]; then
     echo "✅ $1"
@@ -32,7 +61,7 @@ echo ""
 echo "📍 Test 1: Namespace Validation"
 echo "------------------------------"
 oc get namespace "$GROUPSYNC_NAMESPACE" &> /dev/null
-report_result "Namespace '$GROUPSYNC_NAMESPACE' exists" $?
+require "Namespace '$GROUPSYNC_NAMESPACE' exists" $?
 
 # Test 2: Check if operator is deployed and healthy
 echo ""
@@ -41,7 +70,7 @@ echo "--------------------------------------"
 if oc get deployment -n "$GROUPSYNC_NAMESPACE" | grep -q group-sync-operator; then
   # Check if deployment is ready
   oc get deployment -n "$GROUPSYNC_NAMESPACE" -l control-plane=group-sync-operator -o jsonpath='{.items[0].status.readyReplicas}' | grep -q "1"
-  report_result "Operator deployment is running and ready" $?
+  require "Operator deployment is running and ready" $?
   
   # Show operator pod details
   echo "   Operator pod details:"
@@ -54,9 +83,9 @@ if oc get deployment -n "$GROUPSYNC_NAMESPACE" | grep -q group-sync-operator; th
     TOTAL_PODS=$(echo "$OPERATOR_PODS" | wc -l)
     
     if [ "$READY_PODS" -eq "$TOTAL_PODS" ] && [ "$READY_PODS" -gt 0 ]; then
-      report_result "All operator pods are healthy: $READY_PODS/$TOTAL_PODS ready" 0
+      require "All operator pods are healthy: $READY_PODS/$TOTAL_PODS ready" 0
     else
-      report_result "Operator pods health check" 1
+      require "Operator pods are healthy ($READY_PODS/$TOTAL_PODS ready)" 1
     fi
     
     # Check pod events for issues
@@ -67,7 +96,7 @@ if oc get deployment -n "$GROUPSYNC_NAMESPACE" | grep -q group-sync-operator; th
     fi
   fi
 else
-  report_result "Operator deployment found" 1
+  require "Operator deployment found in $GROUPSYNC_NAMESPACE" 1
 fi
 
 # Test 3: Check if GroupSync CR exists and its status
@@ -75,8 +104,8 @@ echo ""
 echo "📍 Test 3: GroupSync Custom Resource Status"
 echo "------------------------------------------"
 if oc get groupsync "$GROUPSYNC_NAME" -n "$GROUPSYNC_NAMESPACE" &> /dev/null; then
-  report_result "GroupSync CR '$GROUPSYNC_NAME' exists" 0
-  
+  require "GroupSync CR '$GROUPSYNC_NAME' exists" 0
+
   # Check GroupSync configuration
   echo "   GroupSync configuration:"
   echo "   - URL: $GROUPSYNC_URL"
@@ -138,7 +167,7 @@ if oc get groupsync "$GROUPSYNC_NAME" -n "$GROUPSYNC_NAMESPACE" &> /dev/null; th
       echo "ℹ️  GroupSync status: $GROUPSYNC_STATUS (monitoring)"
     fi
 else
-  report_result "GroupSync CR '$GROUPSYNC_NAME' exists" 1
+  require "GroupSync CR '$GROUPSYNC_NAME' exists" 1
 fi
 
 # Test 4: Check LDAP credentials secret
@@ -146,33 +175,33 @@ echo ""
 echo "📍 Test 4: LDAP Credentials Secret"
 echo "---------------------------------"
 if oc get secret "$CREDENTIALS_SECRET_NAME" -n "$CREDENTIALS_SECRET_NAMESPACE" &> /dev/null; then
-  report_result "LDAP credentials secret exists" 0
+  require "LDAP credentials secret exists" 0
   
   # Validate secret has required keys (OAuth extraction uses 'username'/'password', manual uses 'bindDN'/'bindPassword')
   if oc get secret "$CREDENTIALS_SECRET_NAME" -n "$CREDENTIALS_SECRET_NAMESPACE" -o jsonpath='{.data.username}' | base64 -d &> /dev/null; then
     BIND_DN=$(oc get secret "$CREDENTIALS_SECRET_NAME" -n "$CREDENTIALS_SECRET_NAMESPACE" -o jsonpath='{.data.username}' | base64 -d)
-    report_result "Secret contains valid bind DN (OAuth format): $BIND_DN" 0
+    require "Secret contains valid bind DN (OAuth format): $BIND_DN" 0
     SECRET_FORMAT="OAuth extraction"
   elif oc get secret "$CREDENTIALS_SECRET_NAME" -n "$CREDENTIALS_SECRET_NAMESPACE" -o jsonpath='{.data.bindDN}' | base64 -d &> /dev/null; then
     BIND_DN=$(oc get secret "$CREDENTIALS_SECRET_NAME" -n "$CREDENTIALS_SECRET_NAMESPACE" -o jsonpath='{.data.bindDN}' | base64 -d)
-    report_result "Secret contains valid bind DN (manual format): $BIND_DN" 0
+    require "Secret contains valid bind DN (manual format): $BIND_DN" 0
     SECRET_FORMAT="Manual secret"
   else
-    report_result "Secret contains valid bind DN (username or bindDN)" 1
+    require "Secret contains valid bind DN (username or bindDN)" 1
     SECRET_FORMAT="Unknown"
   fi
   
   if oc get secret "$CREDENTIALS_SECRET_NAME" -n "$CREDENTIALS_SECRET_NAMESPACE" -o jsonpath='{.data.password}' | base64 -d &> /dev/null; then
     PASSWORD_LEN=$(oc get secret "$CREDENTIALS_SECRET_NAME" -n "$CREDENTIALS_SECRET_NAMESPACE" -o jsonpath='{.data.password}' | base64 -d | wc -c)
-    report_result "Secret contains password ($SECRET_FORMAT): ${PASSWORD_LEN} characters" 0
+    require "Secret contains password ($SECRET_FORMAT): ${PASSWORD_LEN} characters" 0
   elif oc get secret "$CREDENTIALS_SECRET_NAME" -n "$CREDENTIALS_SECRET_NAMESPACE" -o jsonpath='{.data.bindPassword}' | base64 -d &> /dev/null; then
     PASSWORD_LEN=$(oc get secret "$CREDENTIALS_SECRET_NAME" -n "$CREDENTIALS_SECRET_NAMESPACE" -o jsonpath='{.data.bindPassword}' | base64 -d | wc -c)
-    report_result "Secret contains password ($SECRET_FORMAT): ${PASSWORD_LEN} characters" 0
+    require "Secret contains password ($SECRET_FORMAT): ${PASSWORD_LEN} characters" 0
   else
-    report_result "Secret contains password (password or bindPassword)" 1
+    require "Secret contains password (password or bindPassword)" 1
   fi
 else
-  report_result "LDAP credentials secret exists" 1
+  require "LDAP credentials secret exists in ${CREDENTIALS_SECRET_NAMESPACE}" 1
 fi
 
 # Test 5: Check CA ConfigMap (only for secure connections)
@@ -184,16 +213,22 @@ if [ "$GROUPSYNC_INSECURE" = "true" ]; then
   report_result "CA certificate check (not required for insecure mode)" 0
 else
   if oc get configmap "$CA_NAME" -n "$CA_NAMESPACE" &> /dev/null; then
-    report_result "CA certificate ConfigMap exists" 0
-    
-    # Validate ConfigMap has the required key
-    if oc get configmap "$CA_NAME" -n "$CA_NAMESPACE" -o jsonpath="{.data.$CA_KEY}" | grep -q "BEGIN CERTIFICATE"; then
-      report_result "CA certificate contains valid certificate data" 0
+    require "CA certificate ConfigMap ${CA_NAMESPACE}/${CA_NAME} exists" 0
+
+    # Validate ConfigMap has the required key. jsonpath cannot address a key containing a dot — it reads
+    # it as a path separator — so an injected bundle's ca-bundle.crt returns empty here and this check
+    # would fail on a perfectly good ConfigMap. oc extract addresses the key literally.
+    rm -rf /tmp/health-ca && mkdir -p /tmp/health-ca
+    oc extract "configmap/${CA_NAME}" -n "$CA_NAMESPACE" --keys="$CA_KEY" \
+       --to=/tmp/health-ca --confirm &> /dev/null
+    if grep -q "BEGIN CERTIFICATE" "/tmp/health-ca/${CA_KEY}" 2>/dev/null; then
+      require "CA contains certificate data: $(grep -c 'BEGIN CERTIFICATE' "/tmp/health-ca/${CA_KEY}") certificate(s) under key ${CA_KEY}" 0
     else
-      report_result "CA certificate contains valid certificate data" 1
+      require "CA contains certificate data under key ${CA_KEY}" 1
     fi
+    rm -rf /tmp/health-ca
   else
-    report_result "CA certificate ConfigMap exists" 1
+    require "CA certificate ConfigMap ${CA_NAMESPACE}/${CA_NAME} exists" 1
   fi
 fi
 
@@ -204,6 +239,7 @@ echo "-------------------------------"
 
 # Extract URL components
 URL="$GROUPSYNC_URL"
+URL_PARSED=yes
 if [[ $URL == ldaps://* ]]; then
   PROTOCOL="ldaps"
   DEFAULT_PORT="636"
@@ -213,34 +249,41 @@ elif [[ $URL == ldap://* ]]; then
   DEFAULT_PORT="389"
   URL_WITHOUT_PROTOCOL="${URL#ldap://}"
 else
-  echo "   ❌ Invalid LDAP URL format: $URL"
-  ERRORS=$((ERRORS + 1))
-  URL_WITHOUT_PROTOCOL="$URL"
+  require "url is ldap:// or ldaps:// — got '$URL'" 1
+  URL_PARSED=no
 fi
 
-# Parse hostname and port
-if [[ $URL_WITHOUT_PROTOCOL == *:* ]]; then
-  HOSTNAME="${URL_WITHOUT_PROTOCOL%:*}"
-  PORT="${URL_WITHOUT_PROTOCOL#*:}"
+# The connectivity checks are skipped rather than run against a hostname parsed out of something that is
+# not a URL. Testing 'https' as a hostname reports two more failures that say nothing the line above did
+# not already say, and reading them costs whoever is debugging this real time.
+if [ "$URL_PARSED" = no ]; then
+  report_info "skipping DNS and TCP checks — there is no host to test until the url is a valid LDAP url"
 else
-  HOSTNAME="$URL_WITHOUT_PROTOCOL"
-  PORT="$DEFAULT_PORT"
-fi
+  # Parse hostname and port
+  if [[ $URL_WITHOUT_PROTOCOL == *:* ]]; then
+    HOSTNAME="${URL_WITHOUT_PROTOCOL%:*}"
+    PORT="${URL_WITHOUT_PROTOCOL#*:}"
+  else
+    HOSTNAME="$URL_WITHOUT_PROTOCOL"
+    PORT="$DEFAULT_PORT"
+  fi
 
-echo "   Testing connectivity to: $HOSTNAME:$PORT ($PROTOCOL)"
+  echo "   Testing connectivity to: $HOSTNAME:$PORT ($PROTOCOL)"
 
-# DNS resolution test
-if nslookup "$HOSTNAME" &> /dev/null; then
-  report_result "DNS resolution for $HOSTNAME" 0
-else
-  report_result "DNS resolution for $HOSTNAME" 1
-fi
+  # DNS resolution. getent first: nslookup is absent from some ose-cli variants, and a missing tool would
+  # otherwise be indistinguishable from a name that does not resolve.
+  if getent hosts "$HOSTNAME" &> /dev/null || nslookup "$HOSTNAME" &> /dev/null; then
+    require "DNS resolution for $HOSTNAME" 0
+  else
+    require "DNS resolution for $HOSTNAME" 1
+  fi
 
-# Port connectivity test (using timeout)
-if timeout 5 bash -c "</dev/tcp/$HOSTNAME/$PORT"; then
-  report_result "TCP connectivity to $HOSTNAME:$PORT" 0
-else
-  report_result "TCP connectivity to $HOSTNAME:$PORT" 1
+  # Port connectivity test (using timeout)
+  if timeout 5 bash -c "</dev/tcp/$HOSTNAME/$PORT" &> /dev/null; then
+    require "TCP connectivity to $HOSTNAME:$PORT" 0
+  else
+    require "TCP connectivity to $HOSTNAME:$PORT" 1
+  fi
 fi
 
 # Test 7: GroupSync Operator Internal Sync Status
@@ -405,7 +448,18 @@ echo ""
 echo "📊 GroupSync Operator Health Summary"
 echo "===================================="
 
-if [ $WARNINGS -eq 0 ]; then
+if [ "$ERRORS" -gt 0 ]; then
+  # Spelled out rather than ${WARNINGS:+...}, which fires on the string "0" because it is not empty.
+  if [ "$WARNINGS" -gt 0 ]; then
+    echo "❌ $ERRORS check(s) FAILED, plus $WARNINGS informational item(s)."
+  else
+    echo "❌ $ERRORS check(s) FAILED."
+  fi
+  echo ""
+  echo "📋 Summary: the operator cannot work in this configuration"
+  echo "   • Every ❌ above is a precondition the operator needs, not an observation"
+  echo "   • Fix those first; the informational items may resolve on their own once they are"
+elif [ "$WARNINGS" -eq 0 ]; then
   echo "🎉 Perfect! GroupSync operator is healthy and properly configured."
   echo ""
   echo "✅ System Status: All checks passed"
@@ -438,6 +492,12 @@ echo "4. 🔍 Detailed GroupSync status:"
 echo "   kubectl describe groupsync $GROUPSYNC_NAME -n $GROUPSYNC_NAMESPACE"
 
 echo ""
+# The exit code is the only part of this `helm test` hook that Helm itself reads, so it has to reflect
+# the verdict rather than the fact that the script reached the end.
+if [ "$ERRORS" -gt 0 ]; then
+  echo "❌ Health check FAILED: $ERRORS precondition(s) not met."
+  exit 1
+fi
 echo "✨ Health check completed successfully!"
 exit 0
 

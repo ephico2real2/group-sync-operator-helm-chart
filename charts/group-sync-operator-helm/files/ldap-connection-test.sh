@@ -109,21 +109,53 @@ if [ "$SCHEME" = "ldaps" ]; then
   else
     pass "CA read: $(grep -c 'BEGIN CERTIFICATE' "/tmp/ca/${CA_KEY}") certificate(s)"
 
-    # curl verifies the chain AND the hostname in one handshake. LDAPS is not HTTP, so a SUCCESSFUL
-    # handshake still fails afterwards on the protocol — exit 52, empty reply — and exit 60 is the
-    # only verification failure. curl's own message says whether the chain or the hostname was wrong.
-    TLS=$(curl -sS -v --cacert "/tmp/ca/${CA_KEY}" --max-time 20 "https://${HOST}:${PORT}" 2>&1)
+    # curl verifies the chain AND the hostname in one handshake, so a completed handshake is proof of
+    # both. LDAPS is not HTTP, so even a SUCCESSFUL handshake then fails on the protocol — exit 52,
+    # empty reply — which is why success cannot be read off the exit code.
+    #
+    # Success is therefore asserted POSITIVELY, from curl's own machine-readable counters, and never by
+    # negating one failure code. The previous check was `[ "$RC" -eq 60 ]`, which catches only ONE of
+    # the six ways this can fail. Measured against this endpoint on the pinned ose-cli:v4.14 image
+    # (curl 7.61.1 + OpenSSL 1.1.1k, which predates the 7.62 merge of exit 51 into 60):
+    #
+    #   case                             exit  verify_result  appconnect   -eq 60 said
+    #   correct CA (SUCCESS)              52         0         0.080235      pass  ok
+    #   valid CA that did not sign it     60        19         0.000000      fail  ok
+    #   hostname mismatch, no SAN         51         1         0.000000      PASS  wrong
+    #   unreadable / garbage CA file      77         1         0.000000      PASS  wrong
+    #   closed port                       28         0         0.000000      PASS  wrong
+    #   DNS failure                        6         0         0.000000      PASS  wrong
+    #   TLS against the plaintext 389     35         1         0.000000      PASS  wrong
+    #
+    # So the old check did catch a stale CA — the case it was written for — and reported
+    # "chain verifies ... hostname matches" for the five others, including a certificate with no SAN for
+    # the host and an endpoint that was not listening at all.
+    #
+    # Both counters are required. ssl_verify_result alone is 0 when no handshake happened at all (closed
+    # port, DNS failure), and time_appconnect alone does not say the peer verified. Together they are
+    # true only for the success row. Both are documented -w variables rather than English log text, so
+    # the check survives a wording change in a future image and fails CLOSED if the variables vanish.
+    TLS=$(curl -sS -v -o /dev/null --max-time 20 --cacert "/tmp/ca/${CA_KEY}" \
+          -w '\nGSD_TLS verify=%{ssl_verify_result} appconnect=%{time_appconnect}\n' \
+          "https://${HOST}:${PORT}" 2>&1)
     RC=$?
 
     printf '%s\n' "$TLS" | grep -E 'subject:|issuer:|subjectAltName:' | sed 's/^\*[[:space:]]*/      /'
 
-    if [ "$RC" -eq 60 ]; then
-      fail "the certificate does NOT verify: $(printf '%s' "$TLS" | grep -m1 -oE 'SSL certificate problem.*|SSL:.*' || echo 'verification failed')
-       Either ${CA_NAMESPACE}/${CA_NAME} did not sign the certificate this endpoint serves, or it has
-       no SAN for ${HOST}. Reissue for the name in groupSync.url, or point groupSync.ca at the CA
-       that signed it."
-    else
+    VERIFY=$(printf '%s' "$TLS" | sed -n 's/.*GSD_TLS verify=\([0-9]*\).*/\1/p' | tail -1)
+    APPCONNECT=$(printf '%s' "$TLS" | sed -n 's/.*appconnect=\([0-9.]*\).*/\1/p' | tail -1)
+
+    # Non-zero test without floating point: strip zeros and the separator, and any remaining character
+    # is a significant digit. 0.000000 -> empty; 0.080235 -> "8235"; missing -> empty, so fail closed.
+    if [ -n "$(printf '%s' "$APPCONNECT" | tr -d '0.')" ] && [ "$VERIFY" = "0" ]; then
       pass "chain verifies against ${CA_NAMESPACE}/${CA_NAME}, hostname matches ${HOST}"
+    else
+      fail "the TLS handshake did not complete with a verified certificate.
+       curl exit ${RC}, ssl_verify_result=${VERIFY:-<none>}, time_appconnect=${APPCONNECT:-<none>}
+       $(printf '%s' "$TLS" | grep -m1 -oE 'SSL certificate problem.*|SSL:.*|Could not resolve.*|Failed to connect.*|Connection refused.*|Operation timed out.*|error:.*' || echo 'curl emitted no diagnostic line')
+       Either ${CA_NAMESPACE}/${CA_NAME} did not sign the certificate this endpoint serves, it has no
+       SAN for ${HOST}, or nothing is serving TLS on ${HOST}:${PORT}. Reissue for the name in
+       groupSync.url, or point groupSync.ca at the CA that signed it."
     fi
   fi
   rm -rf /tmp/ca
