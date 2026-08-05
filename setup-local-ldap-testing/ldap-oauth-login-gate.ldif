@@ -1,0 +1,160 @@
+# OAuth login: a dedicated bind service account, and the group you must belong to to log in.
+#
+# Mirrors the production shape, where a TrustedApplications service account binds for the identity
+# provider and a single "gate" group decides who may authenticate at all — separately from the
+# app-ocp-rbac-* groups, which decide what you can DO once you are in.
+#
+# Apply with:  ./40-setup-oauth-ldap-login.sh bind-account
+# or by hand:  oc exec -c openldap -n ldap-testing <pod> -- \
+#                ldapmodify -c -x -D "cn=admin,dc=ephico2real,dc=com" -w admin123 -f <this file>
+#
+# ldapmodify, not ldapadd, and -c: the file is written to be re-runnable. The two `add` records fail
+# harmlessly with "Already exists (68)" on a second run and -c carries on, then the `modify` records
+# use `replace`, which reaches the same end state whether or not the values were already there.
+#
+# ── Why the gate group is groupOfUniqueNames and not groupOfNames ─────────────────────────────────
+#
+# An OpenShift LDAP identity provider performs ONE search, for the user, and the group restriction has
+# to be a condition on the USER entry. That means the user needs a memberOf attribute, which OpenLDAP
+# only maintains through the memberof overlay.
+#
+# This directory's overlay is already loaded and is configured — measured, not assumed — as:
+#
+#   olcOverlay={0}memberof,olcDatabase={1}mdb,cn=config
+#     olcMemberOfGroupOC:  groupOfUniqueNames
+#     olcMemberOfMemberAD: uniqueMember
+#     olcMemberOfMemberOfAD: memberOf
+#
+# The app-ocp-rbac-* groups are groupOfNames with `member`, so the overlay never matches them and no
+# user entry had ever had a memberOf. Creating THIS group as groupOfUniqueNames with `uniqueMember`
+# matches what the overlay already watches, so memberOf appears on these members the moment this file
+# is applied — no slapd reconfiguration, and nothing about the 41 existing RBAC groups changes.
+#
+# If you ever need to gate login on one of the app-ocp-rbac-* groups instead, the overlay has to be
+# repointed at groupOfNames/member, and because the overlay does not backfill you must then re-write
+# every group's member attribute for memberOf to appear. That is a bigger, riskier change; this file
+# deliberately avoids needing it.
+#
+# ── Why a wildcard group filter does not work ────────────────────────────────────────────────────
+#
+# Measured on this directory:
+#
+#   (cn=app-ocp-rbac-*)                       41 matches   cn is a string attribute, has SUBSTR
+#   (member=cn=john*,ou=People,...)            0 matches   member is DN-syntax, no SUBSTR rule
+#   (member=uid=john.doe,ou=People,...)       14 matches   absolute DN
+#
+# A substring assertion against a DN-syntax attribute returns success with zero rows — no error. So a
+# filter like (memberOf=cn=app-ocp-rbac-*,ou=Groups,...) silently denies everyone, which at a login
+# prompt is indistinguishable from the directory being down. Group names must be ABSOLUTE, which is
+# exactly what a real production config does. For several groups, OR them.
+#
+# Membership below is a deliberate SUBSET of the directory's users. A gate that everybody is inside
+# proves nothing, so half are left out to make the denial path testable too.
+
+# ── Bind service account for the identity provider ───────────────────────────────────────────────
+# Separate from cn=ocp-ldap-bind-serviceid, which the group-sync operator uses. Two consumers, two
+# credentials: either can be rotated or revoked without taking the other down.
+#
+# It is ALSO a member of the gate group below, so the same account both binds for the provider and
+# serves as a login identity you can test with — one whose password is stored in a form the server
+# accepts, which is not true of every user here. Measured across ou=People:
+#
+#   john.doe, jane.smith, bob.wilson,   userPassword: {SSHA}password123, from
+#   alice.cooper, charlie.brown         ldap-structure-combined.ldif. That is a literal string behind an
+#                                       {SSHA} prefix, not a hash: the base64 body is 11 bytes and
+#                                       decodes to nothing usable, so slapd rejects EVERY bind for them.
+#
+#   lateef.o, dana.lee, sarah.jones     cleartext `newuser123`, from the later LDIFs. These bind fine,
+#                                       and lateef.o is in the gate group below — so it is a working
+#                                       console login with no extra setup.
+#
+# Give one of the malformed ones a usable password when you want a specific username:
+#   ldappasswd -x -D "cn=admin,dc=ephico2real,dc=com" -w admin123 \
+#     -s '<newpassword>' "uid=jane.smith,ou=People,dc=ephico2real,dc=com"
+#
+# extensibleObject is what allows uid on an organizationalRole entry. The provider searches for the
+# login attribute (uid), so without it this account could not be found no matter what the filter said.
+dn: cn=ocp-oauth-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com
+changetype: add
+objectClass: simpleSecurityObject
+objectClass: organizationalRole
+objectClass: extensibleObject
+cn: ocp-oauth-bind-serviceid
+uid: ocp-oauth-bind-serviceid
+description: Bind account for the OpenShift OAuth LDAP identity provider, and a testable login identity
+userPassword: oauthbindpassword123
+
+# ── The login gate group ─────────────────────────────────────────────────────────────────────────
+# Same name as production. Being in this group is what makes you able to log in to OpenShift at all;
+# what you can do afterwards comes from the app-ocp-rbac-* groups the operator syncs.
+dn: cn=app-ssb-autobahnusers,ou=Groups,dc=ephico2real,dc=com
+changetype: add
+objectClass: groupOfUniqueNames
+cn: app-ssb-autobahnusers
+description: Gate group - membership is required to authenticate to OpenShift
+uniqueMember: uid=john.doe,ou=People,dc=ephico2real,dc=com
+uniqueMember: uid=jane.smith,ou=People,dc=ephico2real,dc=com
+uniqueMember: uid=alice.cooper,ou=People,dc=ephico2real,dc=com
+uniqueMember: uid=lateef.o,ou=People,dc=ephico2real,dc=com
+uniqueMember: cn=ocp-oauth-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com
+
+# ── Re-run safety ────────────────────────────────────────────────────────────────────────────────
+# `replace` reaches the intended state whether or not the adds above did anything, so an existing
+# directory converges instead of being left half-updated.
+dn: cn=ocp-oauth-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com
+changetype: modify
+replace: objectClass
+objectClass: simpleSecurityObject
+objectClass: organizationalRole
+objectClass: extensibleObject
+-
+replace: uid
+uid: ocp-oauth-bind-serviceid
+-
+replace: userPassword
+userPassword: oauthbindpassword123
+
+dn: cn=app-ssb-autobahnusers,ou=Groups,dc=ephico2real,dc=com
+changetype: modify
+replace: uniqueMember
+uniqueMember: uid=john.doe,ou=People,dc=ephico2real,dc=com
+uniqueMember: uid=jane.smith,ou=People,dc=ephico2real,dc=com
+uniqueMember: uid=alice.cooper,ou=People,dc=ephico2real,dc=com
+uniqueMember: uid=lateef.o,ou=People,dc=ephico2real,dc=com
+uniqueMember: cn=ocp-oauth-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com
+
+# ── Usable passwords for the human gate members ──────────────────────────────────────────────────
+# LAB ONLY. These are test-directory credentials in a repo that also carries admin123 and
+# bindpassword123 — nothing here is a real secret, and nothing here should ever be pointed at a real
+# directory.
+#
+# Why this is needed at all: ldap-structure-combined.ldif sets `userPassword: {SSHA}password123` for
+# john.doe, jane.smith, bob.wilson, alice.cooper and charlie.brown. That is not a hash — it is the
+# literal string `password123` behind an {SSHA} prefix, an 11-byte base64 body that decodes to nothing
+# usable — so slapd rejects EVERY bind for them, with nothing in the logs to say why. Three of those
+# five are gate members, so without this the gate would allow them and the login would still fail,
+# which is the most confusing possible combination to debug.
+#
+# Set as cleartext, exactly as lateef.o and the service accounts already are: slapd accepts it and it
+# stays greppable, which is what you want in a lab and never anywhere else.
+#
+# bob.wilson and charlie.brown are deliberately left alone. They are NOT in the gate group, so leaving
+# their passwords unusable would confuse a denial test — you could not tell a gate denial from a bad
+# credential. bob.wilson is the better denial subject precisely because he can bind to LDAP and is
+# still refused by OpenShift; give him one by hand when you want that test:
+#   ldappasswd -x -D "cn=admin,dc=ephico2real,dc=com" -w admin123 \
+#     -s 'GateTest123!' "uid=bob.wilson,ou=People,dc=ephico2real,dc=com"
+dn: uid=john.doe,ou=People,dc=ephico2real,dc=com
+changetype: modify
+replace: userPassword
+userPassword: Ldap123!
+
+dn: uid=jane.smith,ou=People,dc=ephico2real,dc=com
+changetype: modify
+replace: userPassword
+userPassword: Ldap123!
+
+dn: uid=alice.cooper,ou=People,dc=ephico2real,dc=com
+changetype: modify
+replace: userPassword
+userPassword: Ldap123!

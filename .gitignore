@@ -38,3 +38,10 @@ tmp/
 setup-local-ldap-testing/.ca-configmap-backup/
 # Also matched at any depth, since BACKUP_DIR can be overridden.
 .ca-configmap-backup/
+
+# Copies of oauth/cluster taken by 40-setup-oauth-ldap-login.sh before it adds an identity provider.
+# They contain the cluster's full identity provider configuration — every bindDN, every secret and CA
+# reference — which is exactly the shape of a real directory's integration and does not belong in a
+# published chart repo.
+setup-local-ldap-testing/.oauth-backup/
+.oauth-backup/

@@ -51,6 +51,7 @@ it carries that name. Edit the source and run `helm upgrade`.
 | `15-bootstrap-cert-manager-ca.sh` | **LDAPS only**: `apply` builds the cert-manager PKI and serving certificate — must run BEFORE the server manifest. `verify` proves the chain from inside the cluster. `trust-cluster` publishes the root to `proxy/cluster.spec.trustedCA` for the injected path |
 | `20-import-ldap-data.sh` | Imports the RBAC groups and test users |
 | `30-manage-ldap-server.sh` | Server lifecycle: deploy, test, restart, logs |
+| `40-setup-oauth-ldap-login.sh` | Adds the directory to `oauth/cluster` as an LDAP identity provider, so you can **log in** with it and not just sync groups from it. Auto-detects LDAPS vs plain LDAP. `bind-account` creates the bind service account and the login gate group; `apply` writes the provider; `verify` checks it. **Additive** — the existing HTPasswd/kubeadmin login is preserved |
 | `50-simulate-ldap-operations.sh` | Adds/removes members to exercise sync |
 | `60-force-groupsync.sh` | Forces a GroupSync now instead of waiting for its schedule |
 | `90-verify-all-resources.sh` | Verifies all resources and configuration |
@@ -64,9 +65,142 @@ it carries that name. Edit the source and run `helm upgrade`.
 | `ldap-bda-rbac-groups.ldif` | 12 Big-Data Analytics groups (`bda-rbac-*`) — demo for the custom GroupSync CR |
 | `ldap-rbac-groups-spar-trno.ldif` | 6 namespace RBAC groups for the `spar` / `trno` mnemonics — pairs with the BDA namespace demo |
 | `ldap-normalize-user-dns.ldif` | One-time migration: renames the 5 `cn=` users to `uid=` so all member DNs resolve |
-| `configure-acls.ldif` | Service account ACL permissions |
+| `ldap-oauth-login-gate.ldif` | The OAuth bind service account and `app-ssb-autobahnusers`, the group you must be in to log in. Re-runnable |
+| `configure-acls.ldif` | Service account ACL permissions — **two** accounts: one for group sync, one for OAuth login |
 | `kubectl-import-commands.md` | Manual import command documentation |
 | `README.md` | This comprehensive documentation |
+
+### 🔑 Logging in with the directory, not just syncing from it
+
+`40-setup-oauth-ldap-login.sh` adds the test directory to `oauth/cluster` as an LDAP identity provider.
+Two reasons to bother:
+
+1. It makes the lab match an enterprise, where the cluster authenticates against the same directory it
+   syncs groups from. Group sync alone never exercises that.
+2. It is the only way to reach the chart's **OAuth discovery** path. With `groupSync.url`,
+   `oauthSecretExtraction.bindDN` and `sourceSecret.name` left empty, the chart derives all three from
+   the first LDAP provider in the OAuth CR. With no such provider, that code is unreachable — which is
+   why `qa-values.yaml` could not be tested before.
+
+```bash
+./40-setup-oauth-ldap-login.sh bind-account   # bind service account, gate group, ACL, Secret
+./40-setup-oauth-ldap-login.sh apply          # add the provider (additive)
+./40-setup-oauth-ldap-login.sh verify
+```
+
+#### ⚠ After this, the console login page looks like kubeadmin is gone
+
+It isn't. A cluster with exactly **one** identity provider skips the provider chooser and goes straight to
+a username/password form. With two, the chooser appears — and it lists **providers, not users**. There is
+no `kubeadmin` button and there never was one: kubeadmin is a *user inside* the HTPasswd provider, which
+on this cluster is named `developer`. A provider name that reads like a username is what makes it look
+like the only account left.
+
+| to log in as | pick this provider | then type |
+|---|---|---|
+| `kubeadmin` | **developer** | `kubeadmin` + its password (`crc console --credentials`) |
+| `developer` | **developer** | `developer` + its password |
+| a directory user | **ldap-local** | `john.doe` / `Ldap123!` — full list under [Test logins](#test-logins) |
+
+Picking `ldap-local` and typing `kubeadmin` answers *invalid credentials*, because kubeadmin is not in the
+directory. That is the chooser working, not a deleted account.
+
+Start at the **console** route, not the oauth route — they are different objects:
+
+```bash
+oc get route -n openshift-console console        -o jsonpath='{.spec.host}{"\n"}'   # where you log in
+oc get route -n openshift-authentication oauth-openshift -o jsonpath='{.spec.host}{"\n"}'   # who authenticates you
+```
+
+There is no shortcut URL that pre-selects a provider: a bare `https://<oauth-route>/login/<idp>` answers
+**302 → /**, because it carries none of the authorize request's state. Open the console and click.
+
+The CLI is unaffected — `oc login -u kubeadmin -p <password>` never touches the chooser. To get the single
+form back, run `./40-setup-oauth-ldap-login.sh delete`.
+
+**Two service accounts, on purpose.** `ocp-ldap-bind-serviceid` is the group-sync operator's;
+`ocp-oauth-bind-serviceid` is the identity provider's. Either can be rotated without taking the other
+down. The OAuth one is also a member of the gate group, so it doubles as a login identity.
+
+#### Test logins
+
+**Lab credentials.** These live in a repo that already carries `admin123` and `bindpassword123`. Nothing
+here is a real secret, and none of it should ever be pointed at a real directory.
+
+Every member of the gate group can log in. Pick **ldap-local** on the chooser, then:
+
+| username | password | set by |
+|---|---|---|
+| `john.doe` | `Ldap123!` | `ldap-oauth-login-gate.ldif` |
+| `jane.smith` | `Ldap123!` | `ldap-oauth-login-gate.ldif` |
+| `alice.cooper` | `Ldap123!` | `ldap-oauth-login-gate.ldif` |
+| `lateef.o` | `newuser123` | the earlier LDIFs |
+| `ocp-oauth-bind-serviceid` | `oauthbindpassword123` | `ldap-oauth-login-gate.ldif` |
+
+All five verified with a real `oc login`. **`bob.wilson` is the denial case** — give him a password and he
+is *still* refused, because he is not in the gate:
+
+```bash
+oc exec -c openldap -n ldap-testing <pod> -- \
+  ldappasswd -x -D "cn=admin,dc=ephico2real,dc=com" -w admin123 \
+  -s 'GateTest123!' "uid=bob.wilson,ou=People,dc=ephico2real,dc=com"
+```
+
+He then binds to LDAP successfully and OpenShift still answers 401. That pair is what proves the gate does
+real work rather than passing everyone through.
+
+##### Why three of those passwords had to be set explicitly
+
+`ldap-structure-combined.ldif` gives `john.doe`, `jane.smith`, `bob.wilson`, `alice.cooper` and
+`charlie.brown` this:
+
+```
+userPassword: {SSHA}password123
+```
+
+That is **not a hash**. It is the literal string `password123` behind an `{SSHA}` prefix — an 11-byte
+base64 body that decodes to nothing usable — so slapd rejects *every* bind for those five, with nothing in
+the logs to say why. Three of them are gate members, which is the worst combination to debug: the gate
+admits them and the login still fails.
+
+`ldap-oauth-login-gate.ldif` therefore replaces the password for those three, as cleartext, exactly as
+`lateef.o` and the service accounts already are. `bob.wilson` and `charlie.brown` are left alone on
+purpose, so the denial test above stays meaningful — otherwise you could not tell a gate denial from a bad
+credential.
+
+#### Group-restricted login: absolute DNs, never a wildcard
+
+Membership in `app-ssb-autobahnusers` is what lets you authenticate at all; the `app-ocp-rbac-*` groups
+then decide what you can do. The restriction is a filter on the **user** entry, because an OpenShift LDAP
+provider does exactly one search and never expands a group's members.
+
+A wildcard does not work there, and fails **silently**. Measured on this directory:
+
+| filter | attribute syntax | matches |
+|---|---|---|
+| `(cn=app-ocp-rbac-*)` | `cn` — string, **has** a SUBSTR rule | 41 |
+| `(member=cn=john*,…)` | `member` — DN, **no** SUBSTR rule | **0** |
+| `(member=uid=john.doe,…)` | `member` — DN, absolute | 14 |
+
+A substring assertion against a DN-syntax attribute returns success with zero rows — no error. So
+`(memberOf=cn=app-ocp-rbac-*,ou=Groups,…)` denies everyone, which at a login prompt looks exactly like
+the directory being down. Name groups absolutely and OR them for several:
+`(|(memberOf=<dn1>)(memberOf=<dn2>))`. `apply` refuses to write a provider whose filter matches no user,
+so this cannot be shipped by accident.
+
+The gate group is `groupOfUniqueNames`/`uniqueMember` rather than `groupOfNames`/`member` because this
+directory's memberof overlay is configured for the former — verified, not assumed:
+
+```
+olcOverlay={0}memberof,olcDatabase={1}mdb,cn=config
+  olcMemberOfGroupOC:  groupOfUniqueNames
+  olcMemberOfMemberAD: uniqueMember
+```
+
+That is also why no user entry has ever carried `memberOf` despite the overlay being loaded: the
+`app-ocp-rbac-*` groups are `groupOfNames`, which the overlay never matches. Creating the gate group in
+the shape the overlay already watches populates `memberOf` immediately, with no slapd reconfiguration
+and no change to the existing RBAC groups.
 
 ## 🚀 Quick Start
 
