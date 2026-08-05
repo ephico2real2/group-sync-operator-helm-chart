@@ -2,6 +2,49 @@ apiVersion: v1
 entries:
   group-sync-operator-helm:
   - annotations:
+      artifacthub.io/changes: |
+        - kind: security
+          description: The helm test ServiceAccount no longer has cluster-wide get/list on secrets, configmaps, pods, namespaces and events. Reads are scoped to the release namespace, with secrets pinned to the credentials secret by name.
+        - kind: changed
+          description: "BEHAVIOUR: helm test can now fail. Both test scripts previously routed every failure through a counter and ended in an unconditional exit 0 - measured against a live cluster, 7 of 8 broken configurations reported success."
+        - kind: changed
+          description: "BEHAVIOUR: the seven rfc2307 attribute and error-tolerance settings under groupSync.rfc2307 are now honoured. They were declared in values.yaml but the template emitted fixed literals, so any override was silently discarded."
+        - kind: fixed
+          description: Whether a CA is needed is now decided from the resolved LDAP url rather than the raw values field, so a url discovered from the cluster OAuth CR no longer loses its caSecret when insecure is true.
+        - kind: fixed
+          description: The TLS check in ldap-connection-test.sh asserts success from curl's ssl_verify_result and time_appconnect instead of negating one exit code, which reported a verified chain for five of six failure modes.
+        - kind: fixed
+          description: Test 5 of the operator health check reads the CA with oc extract instead of jsonpath, which cannot address a key containing a dot and so reported a valid 149-certificate bundle as unreadable.
+        - kind: fixed
+          description: The OAuth read is granted whenever the extraction Job needs it, rather than only when a CA copy is also enabled.
+        - kind: changed
+          description: ArgoCD renders Helm sources with --include-crds, so crds/ IS part of an Application. argocd-application.yaml now sets skipCrds true to leave the GroupSync CRD owned by OLM. Adding it to an existing Application needs care - see the README, as prune can delete the CRD and cascade to every GroupSync CR.
+      artifacthub.io/operator: "true"
+      artifacthub.io/operatorCapabilities: Basic Install
+    apiVersion: v2
+    appVersion: "1.1"
+    created: "2026-08-05T16:39:00.07207074Z"
+    description: A Helm chart to deploy the GroupSync Operator and its configuration
+      for LDAP synchronization in OpenShift
+    digest: 980aa1ac4f4611a282a9ac07ce67e3f12b50fe219f9ec5cf5700ec556d62a438
+    home: https://github.com/ephico2real2/group-sync-operator-helm-chart
+    icon: https://raw.githubusercontent.com/redhat-cop/group-sync-operator/master/assets/logo.png
+    keywords:
+    - openshift
+    - ldap
+    - group-sync
+    - operator
+    maintainers:
+    - name: ephico2real2
+    name: group-sync-operator-helm
+    sources:
+    - https://github.com/ephico2real2/group-sync-operator-helm-chart
+    - https://github.com/redhat-cop/group-sync-operator
+    type: application
+    urls:
+    - group-sync-operator-helm-0.4.0.tgz
+    version: 0.4.0
+  - annotations:
       artifacthub.io/operator: "true"
       artifacthub.io/operatorCapabilities: Basic Install
     apiVersion: v2
@@ -27,4 +70,4 @@ entries:
     urls:
     - group-sync-operator-helm-0.3.0.tgz
     version: 0.3.0
-generated: "2026-08-04T23:42:11.585963358Z"
+generated: "2026-08-05T16:39:00.072085171Z"
