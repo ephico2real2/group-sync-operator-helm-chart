@@ -22,25 +22,71 @@ metadata:
     # As an ordinary release resource this also exists before the test Jobs run.
   labels:
     {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+# CLUSTER-SCOPED RESOURCES ONLY. This used to grant secrets, pods, configmaps and events across every
+# namespace, which let the test ServiceAccount read kube-system/kubeadmin — confirmed with
+# `oc auth can-i get secrets/kubeadmin -n kube-system`. Everything the test scripts actually read is
+# namespaced except Groups, so the rest moved to a Role below.
+rules:
+# Groups are cluster-scoped (user.openshift.io Group NAMESPACED=false), so this cannot be narrowed to
+# a namespace. list is required: the tests count all groups, and RBAC does not honour resourceNames
+# for list.
+- apiGroups: ["user.openshift.io"]
+  resources: ["groups"]
+  verbs: ["get", "list"]
+# Namespaces are cluster-scoped, but only this one is ever read — `oc get namespace $GROUPSYNC_NAMESPACE`.
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get"]
+  resourceNames: ["{{ .Values.groupSync.namespace }}"]
+---
+# The namespaced half of what the ClusterRole above used to grant cluster-wide. Every `oc get` in
+# files/*.sh other than Groups and the CA targets $GROUPSYNC_NAMESPACE, so a Role here is sufficient.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-test-ns-role
+  namespace: {{ .Values.groupSync.namespace }}
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
 rules:
 - apiGroups: [""]
-  resources: ["namespaces", "pods", "secrets", "configmaps", "events"]
+  resources: ["pods", "events"]
   verbs: ["get", "list"]
 - apiGroups: ["apps"]
   resources: ["deployments"]
   verbs: ["get", "list"]
-- apiGroups: ["redhatcop.redhat.io"]
-  resources: ["groupsyncs"]
-  verbs: ["get", "list"]
-- apiGroups: ["user.openshift.io"]
-  resources: ["groups"]
-  verbs: ["get", "list"]
 - apiGroups: ["batch"]
   resources: ["jobs"]
+  verbs: ["get", "list"]
+- apiGroups: ["redhatcop.redhat.io"]
+  resources: ["groupsyncs"]
   verbs: ["get", "list"]
 - apiGroups: ["metrics.k8s.io"]
   resources: ["pods"]
   verbs: ["get", "list"]
+# The bind credentials, by name. The only Secret the scripts read here — they fetch
+# $CREDENTIALS_SECRET_NAME to compare against the values mounted at /credentials. list is NOT granted:
+# nothing enumerates Secrets, and granting it would re-open reading every Secret in this namespace.
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get"]
+  resourceNames: ["{{ .Values.groupSync.credentialsSecret.name }}"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-test-ns-binding
+  namespace: {{ .Values.groupSync.namespace }}
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+subjects:
+- kind: ServiceAccount
+  name: {{ .Release.Name }}-test-sa
+  namespace: {{ .Values.groupSync.namespace }}
+roleRef:
+  kind: Role
+  name: {{ .Release.Name }}-test-ns-role
+  apiGroup: rbac.authorization.k8s.io
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role

@@ -36,6 +36,19 @@ rules:
 - apiGroups: [""]
   resources: ["namespaces"]
   verbs: ["get"]
+{{- if or .Values.oauthSecretExtraction.caCopy.discoverFromOAuth (not .Values.oauthSecretExtraction.bindDN) (not .Values.oauthSecretExtraction.sourceSecret.name) }}
+# Reads the cluster OAuth CR. Deliberately OUTSIDE the needsCa and caCopy gates: the Job resolves the
+# bind DN and password secret at the TOP of its script, before any CA work and regardless of whether a
+# CA is needed. Nested inside those gates, `ldap:// + insecure=true` or `caCopy.enabled=false` with an
+# empty bindDN produced a Job that calls this API with no permission — measured as 0 oauths rules
+# against 2 `oc get oauth cluster` calls.
+#
+# Cluster-scoped resource, so it must live in a ClusterRole; pinned to the single object named "cluster".
+- apiGroups: ["config.openshift.io"]
+  resources: ["oauths"]
+  verbs: ["get"]
+  resourceNames: ["cluster"]
+{{- end }}
 {{- if include "group-sync-operator-helm.needsCa" .Values.groupSync }}
 # Read the CA that groupSync.ca points at, so the preflight can verify it before the operator
 # reconciles. Named, so this SA cannot read anything else in that namespace.
@@ -53,14 +66,6 @@ rules:
 - apiGroups: [""]
   resources: [{{ if eq (.Values.oauthSecretExtraction.caCopy.destinationCa.kind | default "ConfigMap") "Secret" }}"secrets"{{ else }}"configmaps"{{ end }}]
   verbs: ["create"]
-{{- if or .Values.oauthSecretExtraction.caCopy.discoverFromOAuth (not .Values.oauthSecretExtraction.bindDN) (not .Values.oauthSecretExtraction.sourceSecret.name) }}
-# Discovery reads the ConfigMap name off the cluster OAuth CR. Cluster-scoped, so it must live in
-# a ClusterRole, and pinned to the one object named "cluster".
-- apiGroups: ["config.openshift.io"]
-  resources: ["oauths"]
-  verbs: ["get"]
-  resourceNames: ["cluster"]
-{{- end }}
 {{- end }}
 {{- end }}
 {{- end }}
