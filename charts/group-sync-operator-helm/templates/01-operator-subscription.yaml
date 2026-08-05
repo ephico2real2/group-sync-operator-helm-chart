@@ -14,6 +14,21 @@ spec:
       - name: WATCH_NAMESPACE
         value: {{ .Values.subscription.watchNamespaces }}
   installPlanApproval: {{ .Values.subscription.installPlanApproval }}
-  name: group-sync-operator
+  # The OLM PACKAGE name, and deliberately the SAME value as metadata.name above.
+  #
+  # OLM does not formally require the Subscription object's name to equal the package — the CRD has no
+  # such validation. But every Red Hat and OLM example names it after the package, and OperatorHub
+  # generates them that way, so divergence is not something anyone should do. Hardcoding one side while
+  # templating the other made it possible, and that was a trap: the CSV OLM creates is named
+  # "<package>.v<version>", and both hook Jobs match CSV and Deployment names using
+  # .Values.subscription.name. Rename it and they hunt for a CSV that never exists — the operator-wait
+  # Job burns its whole budget and reports "no gso.* CSV reached Succeeded" while the operator is
+  # perfectly healthy, and the InstallPlan approver will not match the plan, so a Manual install is
+  # never approved.
+  #
+  # Taking both from one value removes the trap by construction rather than teaching every consumer to
+  # cope with it. If subscription.name is set to something the catalog does not carry, OLM reports
+  # ResolutionFailed — which the approver already detects and explains.
+  name: {{ .Values.subscription.name }}
   source: {{ .Values.subscription.source }}
   sourceNamespace: {{ .Values.subscription.sourceNamespace }}

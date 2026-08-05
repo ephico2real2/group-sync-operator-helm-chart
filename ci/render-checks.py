@@ -180,6 +180,31 @@ def no_cluster_wide_credential_write(docs):
                        f"Move it to a Role in the namespace it writes to.")
     return bad
 
+def olm_name_consistent(docs):
+    """A Subscription's object name and its package name must be the same value.
+
+    OLM does not validate this — the CRD allows them to differ. But the CSV OLM creates is named
+    "<package>.v<version>" and the operator Deployment is named from the CSV, while both hook Jobs match
+    those using .Values.subscription.name. When the two names diverge, the Jobs hunt for a CSV that never
+    exists: operator-wait burns its entire budget and reports "no <name>.* CSV reached Succeeded" while
+    the operator is healthy, and the InstallPlan approver never matches the plan, so a Manual install is
+    never approved.
+
+    Every Red Hat and OLM example names the Subscription after the package, and OperatorHub generates
+    them that way, so this asserts the convention rather than accommodating a divergence nobody wants.
+    """
+    bad = []
+    for d in docs:
+        if d.get('kind') != 'Subscription':
+            continue
+        obj = d['metadata']['name']
+        pkg = (d.get('spec') or {}).get('name')
+        if pkg != obj:
+            bad.append(f"Subscription metadata.name={obj!r} but spec.name={pkg!r}. The CSV will be named "
+                       f"{pkg}.v<version> while the hook Jobs match on {obj!r}, so they will wait for a "
+                       f"CSV that never appears. Both must come from one value.")
+    return bad
+
 def ca_coherence(docs):
     """ldaps:// (or insecure=false) => CA on the CR, CA preflight in the Job, CA read granted."""
     bad = []
@@ -311,7 +336,8 @@ CHECKS = {'oauth-rbac': oauth_rbac, 'source-secret-rbac': source_secret_rbac,
           'ca-coherence': ca_coherence, 'ca-copy-kind': ca_copy_kind,
           'test-env-matches-cr': test_env_matches_cr,
           'no-cluster-wide-secret-read': no_cluster_wide_secret_read,
-          'no-cluster-wide-credential-write': no_cluster_wide_credential_write}
+          'no-cluster-wide-credential-write': no_cluster_wide_credential_write,
+          'olm-name-consistent': olm_name_consistent}
 
 if __name__ == '__main__':
     name, path = sys.argv[1], sys.argv[2]

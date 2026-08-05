@@ -205,8 +205,22 @@ customGroupSyncs:
 # -------------------- Operator Subscription Configuration --------------------
 # Controls how the operator is installed via OLM
 subscription:
-  # OLM channel to use (alpha, beta, stable)
+  # The OLM PACKAGE name, exactly as the catalog publishes it. Confirm it on your cluster with:
+  #   oc get packagemanifest group-sync-operator -n openshift-marketplace
+  #
+  # NOT a free rename knob. This one value supplies BOTH the Subscription object's name and its
+  # spec.name, on purpose, because they must not diverge: OLM names the ClusterServiceVersion
+  # "<package>.v<version>" and the operator Deployment is named from the CSV, while the InstallPlan
+  # approver and the operator-wait Job both match those using this value. Setting the object name away
+  # from the package sent them hunting for a CSV that never exists — the wait Job burned its whole
+  # budget reporting "no <name>.* CSV reached Succeeded" while the operator was perfectly healthy.
+  #
+  # Change it only if your catalog carries the package under a different name, which a mirrored or
+  # disconnected catalog can. A name the catalog does not carry makes OLM report ResolutionFailed, which
+  # the InstallPlan approver detects and explains rather than waiting out.
   name: group-sync-operator
+  # OLM channel to use (alpha, beta, stable). The comment used to sit above `name`, describing the
+  # wrong field.
   channel: alpha
   # Comma-separated list of namespaces for the operator to watch
   watchNamespaces: group-sync-operator,openshift-config
