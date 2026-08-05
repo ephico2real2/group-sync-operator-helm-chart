@@ -29,15 +29,6 @@
 groupSync:
   url: "ldaps://openldap-service.ldap-testing.svc.cluster.local:636"
 
-  ca:
-    field: caSecret
-    kind: ConfigMap
-    # The ConfigMap the chart creates empty and OpenShift fills. Measured on CRC after
-    # trust-cluster: 149 certificates — 148 public roots plus the local one.
-    name: ldap-trusted-ca
-    namespace: group-sync-operator
-    # ca-bundle.crt, NOT ca.crt. The injector fixes this key name.
-    key: ca-bundle.crt
 
 oauthSecretExtraction:
   bindDN: "cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com"
@@ -47,6 +38,10 @@ oauthSecretExtraction:
     # Nothing to copy: OpenShift populates the destination directly.
     enabled: false
 
+# One switch. It resolves the CR's caSecret, the extraction Job's CA preflight, the RBAC that grants read
+# on it, and both test pods — all to this ConfigMap with key ca-bundle.crt, which is what OpenShift's
+# injector writes. It used to resolve none of them, so this file had to restate name/namespace/key/kind
+# under groupSync.ca by hand; that is no longer necessary and has been removed.
 trustedCA:
   injected:
     enabled: true

@@ -100,7 +100,7 @@ TROUBLESHOOTING:
 If you encounter issues:
 
 1. Check that the CA certificate is correct:
-   $ oc get configmap {{ .Values.groupSync.ca.name }} -n {{ .Values.groupSync.ca.namespace }}
+   $ oc get configmap {{ include "group-sync-operator-helm.caName" . }} -n {{ include "group-sync-operator-helm.caNamespace" . }}
 
 2. Verify LDAP credentials secret:
    $ oc get secret {{ .Values.groupSync.credentialsSecret.name }} -n {{ .Values.groupSync.credentialsSecret.namespace }}

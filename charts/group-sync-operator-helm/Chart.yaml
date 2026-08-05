@@ -2,7 +2,7 @@ apiVersion: v2
 name: group-sync-operator-helm
 description: A Helm chart to deploy the GroupSync Operator and its configuration for LDAP synchronization in OpenShift
 type: application
-version: 0.4.2
+version: 0.5.0
 appVersion: "1.1"
 home: https://github.com/ephico2real2/group-sync-operator-helm-chart
 icon: https://raw.githubusercontent.com/redhat-cop/group-sync-operator/master/assets/logo.png
@@ -24,6 +24,10 @@ annotations:
   # list, and two of those DID change behaviour — a suite that was always green can now fail, and rfc2307
   # values that were silently discarded now take effect. Anyone moving from 0.3.x still needs to read them.
   artifacthub.io/changes: |
+    - kind: security
+      description: "The extraction ServiceAccount no longer has create on secrets and configmaps in every namespace. RBAC ignores resourceNames for create so those rules could not be pinned by name; they are now Roles in the namespaces the Job actually writes to. Verified live: create secrets in default and kube-system are now denied, in the release namespace still allowed."
+    - kind: changed
+      description: "BEHAVIOUR: trustedCA.injected.enabled=true now resolves the CA for the GroupSync CR, the extraction Job's preflight, the RBAC that grants read on it, and both test pods - previously it only created a labelled empty ConfigMap that nothing read. If you set injected.enabled=true AND a custom groupSync.ca.name, the injected ConfigMap now wins where your name used to; unset injected.enabled to keep a custom CA."
     - kind: fixed
       description: "A CA copy written as one kind and read as another is now refused at render time. Setting only groupSync.ca.kind=Secret left the extraction Job creating a ConfigMap while the GroupSync CR asked for a Secret, so the operator looked for an object nobody created."
     - kind: fixed
