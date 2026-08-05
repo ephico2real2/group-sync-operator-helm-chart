@@ -23,10 +23,11 @@ rules:
   resources: ["secrets"]
   verbs: ["get", "list", "create", "update", "patch", "delete"]
   resourceNames: ["{{ .Values.oauthSecretExtraction.targetSecret.name }}"]
-# Access to create secrets in group-sync-operator namespace (for target secret creation)
-- apiGroups: [""]
-  resources: ["secrets"]
-  verbs: ["create"]
+# The unpinned `create` on secrets that used to be here is now a Role in targetSecret.namespace, at the
+# bottom of this file. RBAC IGNORES resourceNames for create, so a create rule can never be pinned by
+# name — the only thing that can bound it is a namespace, and in a ClusterRole it was bounded by nothing:
+# this ServiceAccount could create a Secret in EVERY namespace on the cluster.
+#
 # Access to namespaces (to check and create target namespace if needed)
 - apiGroups: [""]
   resources: ["namespaces"]
@@ -53,19 +54,16 @@ rules:
 # Read the CA that groupSync.ca points at, so the preflight can verify it before the operator
 # reconciles. Named, so this SA cannot read anything else in that namespace.
 - apiGroups: [""]
-  resources: [{{ if eq (.Values.groupSync.ca.kind | default "ConfigMap") "Secret" }}"secrets"{{ else }}"configmaps"{{ end }}]
+  resources: [{{ if eq (include "group-sync-operator-helm.caKind" .) "Secret" }}"secrets"{{ else }}"configmaps"{{ end }}]
   verbs: ["get", "list"]
-  resourceNames: ["{{ .Values.groupSync.ca.name }}"]
+  resourceNames: ["{{ include "group-sync-operator-helm.caName" . }}"]
 {{- if .Values.oauthSecretExtraction.caCopy.enabled }}
 # The copy target in groupSync.namespace, which is what groupSync.ca should point at.
 - apiGroups: [""]
   resources: [{{ if eq (.Values.oauthSecretExtraction.caCopy.destinationCa.kind | default "ConfigMap") "Secret" }}"secrets"{{ else }}"configmaps"{{ end }}]
   verbs: ["get", "update", "patch"]
   resourceNames: ["{{ .Values.oauthSecretExtraction.caCopy.destinationCa.name }}"]
-# create takes no resourceNames — RBAC ignores them for create, so the name cannot be pinned here.
-- apiGroups: [""]
-  resources: [{{ if eq (.Values.oauthSecretExtraction.caCopy.destinationCa.kind | default "ConfigMap") "Secret" }}"secrets"{{ else }}"configmaps"{{ end }}]
-  verbs: ["create"]
+# The unpinned `create` for the copy is likewise a Role in destinationCa.namespace, below.
 {{- end }}
 {{- end }}
 {{- end }}
@@ -159,6 +157,101 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: {{ include "group-sync-operator-helm.fullname" . }}-oauth-secret-read
+subjects:
+- kind: ServiceAccount
+  name: {{ .Values.oauthSecretExtraction.serviceAccount.name }}
+  namespace: {{ .Values.groupSync.namespace }}
+{{- end }}
+
+{{/*
+The two `create` grants, moved out of the ClusterRole and into the namespaces the Job actually creates in.
+
+RBAC ignores resourceNames for create — a create rule cannot be pinned to a name, so the ONLY thing that
+can bound it is a namespace. In a ClusterRole it was bounded by nothing: this ServiceAccount could create
+a Secret, and a ConfigMap, in every namespace on the cluster. Create-only is narrower than it sounds — it
+cannot read or overwrite an existing object — but planting an object under a name something else later
+mounts is a real cluster-wide write primitive, and nothing here needs it.
+
+The Job creates in exactly two places, both of which default to the release namespace:
+  the target Secret   oauthSecretExtraction.targetSecret.namespace
+  the CA copy         oauthSecretExtraction.caCopy.destinationCa.namespace
+*/}}
+{{- if .Values.oauthSecretExtraction.enabled }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "group-sync-operator-helm.fullname" . }}-oauth-target-create
+  namespace: {{ .Values.oauthSecretExtraction.targetSecret.namespace }}
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: oauth-secret-extraction
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["create"]
+{{- if and (include "group-sync-operator-helm.needsCa" .Values.groupSync) .Values.oauthSecretExtraction.caCopy.enabled (eq .Values.oauthSecretExtraction.caCopy.destinationCa.namespace .Values.oauthSecretExtraction.targetSecret.namespace) }}
+# Same namespace as the target Secret, so the copy's create belongs in this Role rather than a second one.
+- apiGroups: [""]
+  resources: [{{ if eq (.Values.oauthSecretExtraction.caCopy.destinationCa.kind | default "ConfigMap") "Secret" }}"secrets"{{ else }}"configmaps"{{ end }}]
+  verbs: ["create"]
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "group-sync-operator-helm.fullname" . }}-oauth-target-create
+  namespace: {{ .Values.oauthSecretExtraction.targetSecret.namespace }}
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: oauth-secret-extraction
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "group-sync-operator-helm.fullname" . }}-oauth-target-create
+subjects:
+- kind: ServiceAccount
+  name: {{ .Values.oauthSecretExtraction.serviceAccount.name }}
+  namespace: {{ .Values.groupSync.namespace }}
+{{- end }}
+
+{{- if and .Values.oauthSecretExtraction.enabled (include "group-sync-operator-helm.needsCa" .Values.groupSync) .Values.oauthSecretExtraction.caCopy.enabled (ne .Values.oauthSecretExtraction.caCopy.destinationCa.namespace .Values.oauthSecretExtraction.targetSecret.namespace) }}
+---
+# Only when the copy lands somewhere other than the target Secret's namespace — otherwise its create is
+# already covered by the Role above, and a second Role in the same namespace would just be noise.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "group-sync-operator-helm.fullname" . }}-oauth-ca-create
+  namespace: {{ .Values.oauthSecretExtraction.caCopy.destinationCa.namespace }}
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: oauth-secret-extraction
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+rules:
+- apiGroups: [""]
+  resources: [{{ if eq (.Values.oauthSecretExtraction.caCopy.destinationCa.kind | default "ConfigMap") "Secret" }}"secrets"{{ else }}"configmaps"{{ end }}]
+  verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "group-sync-operator-helm.fullname" . }}-oauth-ca-create
+  namespace: {{ .Values.oauthSecretExtraction.caCopy.destinationCa.namespace }}
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: oauth-secret-extraction
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "group-sync-operator-helm.fullname" . }}-oauth-ca-create
 subjects:
 - kind: ServiceAccount
   name: {{ .Values.oauthSecretExtraction.serviceAccount.name }}

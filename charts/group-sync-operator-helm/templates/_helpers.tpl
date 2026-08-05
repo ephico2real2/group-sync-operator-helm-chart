@@ -74,6 +74,62 @@ behaviour, unchanged.
 {{- if or (hasPrefix "ldaps://" (include "group-sync-operator-helm.ldapUrlOrEmpty" .)) (not .insecure) -}}true{{- end -}}
 {{- end }}
 
+{{/*
+Points a config dict's ca block at the OpenShift-injected trust bundle, when trustedCA.injected is on.
+
+trustedCA.injected.enabled used to render a labelled empty ConfigMap and nothing else — the CR still
+pointed at the CA COPY, so the switch produced a bundle nobody read. It only looked like it worked
+because crc-injected-values.yaml also restates name, namespace, key and kind by hand. A switch that
+needs four companion values set manually is not a switch, and the failure is quiet: the operator loads
+the copy, or fails to find one, while a perfectly good 149-certificate bundle sits unused beside it.
+
+Resolved here rather than defaulted in values.yaml because groupSync.ca.name already HAS a default, so
+there is no way to tell "left alone" from "deliberately set to the same string".
+
+The key is ca-bundle.crt, not ca.crt: that is what OpenShift's injector writes into a ConfigMap carrying
+config.openshift.io/inject-trusted-cabundle, and looking for ca.crt in one finds nothing.
+
+Takes (list $root $cfg) and mutates $cfg, so every caller must deepCopy first — otherwise this reaches
+into .Values and every later template sees the change.
+*/}}
+The four caX helpers below are the single source of truth, and EVERY consumer must use them. There are
+more consumers than the CR: the extraction Job preflights the CA, the ClusterRole grants read on it, and
+both test pods verify it. Resolving it for the CR alone left those pointing at the copy — caught by
+ci/render-checks.py, which reported "Job preflights configmaps/ldap-trusted-ca ... with no get there"
+and "CA_NAME='ca-config-map-copy' but the CR's ca.name is 'ldap-trusted-ca'".
+*/}}
+{{- define "group-sync-operator-helm.caKind" -}}
+{{- if .Values.trustedCA.injected.enabled -}}ConfigMap{{- else -}}{{ .Values.groupSync.ca.kind | default "ConfigMap" }}{{- end -}}
+{{- end }}
+
+{{- define "group-sync-operator-helm.caName" -}}
+{{- if .Values.trustedCA.injected.enabled -}}{{ .Values.trustedCA.injected.name }}{{- else -}}{{ .Values.groupSync.ca.name }}{{- end -}}
+{{- end }}
+
+{{- define "group-sync-operator-helm.caNamespace" -}}
+{{- if .Values.trustedCA.injected.enabled -}}{{ .Values.groupSync.namespace }}{{- else -}}{{ .Values.groupSync.ca.namespace }}{{- end -}}
+{{- end }}
+
+{{- define "group-sync-operator-helm.caKey" -}}
+{{- if .Values.trustedCA.injected.enabled -}}ca-bundle.crt{{- else -}}{{ .Values.groupSync.ca.key | default "ca.crt" }}{{- end -}}
+{{- end }}
+
+{{/*
+Applies the resolved CA to a config dict, for groupsyncSpec — which receives a dict shaped like
+.Values.groupSync and so cannot reach .Values.trustedCA itself. Reads the same four helpers, so the CR
+can never disagree with the Job, the RBAC or the test pods.
+*/}}
+{{- define "group-sync-operator-helm.applyInjectedCa" -}}
+{{- $root := index . 0 -}}
+{{- $cfg := index . 1 -}}
+{{- if $root.Values.trustedCA.injected.enabled -}}
+{{- $_ := set $cfg.ca "kind" (include "group-sync-operator-helm.caKind" $root) -}}
+{{- $_ := set $cfg.ca "name" (include "group-sync-operator-helm.caName" $root) -}}
+{{- $_ := set $cfg.ca "namespace" (include "group-sync-operator-helm.caNamespace" $root) -}}
+{{- $_ := set $cfg.ca "key" (include "group-sync-operator-helm.caKey" $root) -}}
+{{- end -}}
+{{- end }}
+
 {{- define "group-sync-operator-helm.groupsyncSpec" -}}
 spec:
   schedule: {{ .schedule | quote }}

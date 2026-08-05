@@ -43,7 +43,7 @@ jobs:
         run: |
           set -uo pipefail
           CHECKS="oauth-rbac source-secret-rbac ca-coherence ca-copy-kind test-env-matches-cr
-                  no-cluster-wide-secret-read no-artifacts"
+                  no-cluster-wide-secret-read no-cluster-wide-credential-write no-artifacts"
           fails=0
 
           # must_render <label> -- <helm args...>

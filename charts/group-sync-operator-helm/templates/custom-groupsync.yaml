@@ -16,6 +16,7 @@
 # values are never mutated.
 
 {{- $cfg := deepCopy $root.Values.groupSync }}
+{{- include "group-sync-operator-helm.applyInjectedCa" (list $root $cfg) }}
 {{- if not (or $item.filter $item.groupCn) }}
 {{- fail (printf "customGroupSyncs item %q has neither groupCn nor filter.\n  groupCn builds the filter (&(objectClass=groupOfNames)(cn=<groupCn>)); filter overrides it wholesale.\n  With neither, printf renders the missing value as the literal %%!s(<nil>) INTO the CR's filter, which\n  the operator then uses verbatim — it matches nothing, and the only symptom is a tenant that syncs no\n  groups. Set one of them." ($item.name | default "<unnamed>")) }}
 {{- end }}

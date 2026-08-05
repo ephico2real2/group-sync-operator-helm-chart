@@ -56,13 +56,13 @@ spec:
         - name: USERS_FILTER
           value: "{{ .Values.groupSync.rfc2307.usersQuery.filter | default "(objectClass=inetOrgPerson)" }}"
         - name: CA_NAME
-          value: "{{ .Values.groupSync.ca.name }}"
+          value: "{{ include "group-sync-operator-helm.caName" . }}"
         - name: CA_NAMESPACE
-          value: "{{ .Values.groupSync.ca.namespace }}"
+          value: "{{ include "group-sync-operator-helm.caNamespace" . }}"
         - name: CA_KEY
-          value: "{{ .Values.groupSync.ca.key | default "ca.crt" }}"
+          value: "{{ include "group-sync-operator-helm.caKey" . }}"
         - name: CA_KIND
-          value: "{{ .Values.groupSync.ca.kind | default "ConfigMap" }}"
+          value: "{{ include "group-sync-operator-helm.caKind" . }}"
         - name: SYNC_WAIT_SECONDS
           value: "{{ .Values.test.syncWaitSeconds | default 180 }}"
       volumeMounts:

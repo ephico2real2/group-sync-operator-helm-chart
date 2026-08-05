@@ -127,6 +127,41 @@ def no_cluster_wide_secret_read(docs):
                            f"cluster-wide with no resourceNames")
     return bad
 
+WRITE = {'create', 'update', 'patch', 'delete', 'deletecollection', '*'}
+
+def no_cluster_wide_credential_write(docs):
+    """No ClusterRole may grant an unpinned WRITE over Secrets or ConfigMaps.
+
+    The read check above missed this entirely: it looked only at get/list/watch, so an unpinned
+    `create` on secrets AND configmaps sat in the extraction ClusterRole and passed.
+
+    Unpinned is not sloppiness for create specifically — RBAC IGNORES resourceNames for create, so a
+    create rule can never be pinned by name. The only thing that can bound it is a namespace, which
+    means the rule belongs in a Role. Create-only is narrower than read (it cannot fetch or overwrite
+    an existing object) but planting a Secret or ConfigMap under a name something else later mounts is
+    a real cluster-wide write primitive.
+
+    Deliberately limited to secrets and configmaps. Unpinned writes on other resources are a separate
+    and lower concern — the InstallPlan approver's `patch` on installplans is one, guarded at runtime by
+    a check that refuses an InstallPlan not naming this chart's subscription — and folding them in here
+    would make this check about scope hygiene in general rather than about credential material.
+    """
+    bad = []
+    for d in docs:
+        if d.get('kind') != 'ClusterRole':
+            continue
+        for r in d.get('rules') or []:
+            res = set(r.get('resources', []))
+            hit = res & {'secrets', 'configmaps', '*'}
+            if not hit:
+                continue
+            writes = sorted(set(r.get('verbs', [])) & WRITE)
+            if writes and not r.get('resourceNames'):
+                bad.append(f"ClusterRole/{d['metadata']['name']} grants {writes} on "
+                           f"{sorted(hit)} in EVERY namespace with no resourceNames — move it to a "
+                           f"Role in the namespace it writes to (resourceNames cannot pin create)")
+    return bad
+
 def ca_coherence(docs):
     """ldaps:// (or insecure=false) => CA on the CR, CA preflight in the Job, CA read granted."""
     bad = []
@@ -257,7 +292,8 @@ def no_artifacts_text(path):
 CHECKS = {'oauth-rbac': oauth_rbac, 'source-secret-rbac': source_secret_rbac,
           'ca-coherence': ca_coherence, 'ca-copy-kind': ca_copy_kind,
           'test-env-matches-cr': test_env_matches_cr,
-          'no-cluster-wide-secret-read': no_cluster_wide_secret_read}
+          'no-cluster-wide-secret-read': no_cluster_wide_secret_read,
+          'no-cluster-wide-credential-write': no_cluster_wide_credential_write}
 
 if __name__ == '__main__':
     name, path = sys.argv[1], sys.argv[2]

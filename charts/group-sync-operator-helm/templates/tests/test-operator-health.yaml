@@ -53,11 +53,11 @@ spec:
         - name: CREDENTIALS_SECRET_NAMESPACE
           value: "{{ .Values.groupSync.credentialsSecret.namespace }}"
         - name: CA_NAME
-          value: "{{ .Values.groupSync.ca.name }}"
+          value: "{{ include "group-sync-operator-helm.caName" . }}"
         - name: CA_NAMESPACE
-          value: "{{ .Values.groupSync.ca.namespace }}"
+          value: "{{ include "group-sync-operator-helm.caNamespace" . }}"
         - name: CA_KEY
-          value: "{{ .Values.groupSync.ca.key | default "ca.crt" }}"
+          value: "{{ include "group-sync-operator-helm.caKey" . }}"
         - name: OAUTH_ENABLED
           value: "{{ .Values.oauthSecretExtraction.enabled }}"
       volumeMounts:

@@ -92,7 +92,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: {{ .Release.Name }}-test-ca-role
-  namespace: {{ .Values.groupSync.ca.namespace }}
+  namespace: {{ include "group-sync-operator-helm.caNamespace" . }}
   annotations:
     # Not a helm test hook. helm test --logs fetches pod logs for every test hook and fails
     # with 'unable to get pod logs ...: pods "..." not found' on any hook that is not a Pod.
@@ -103,15 +103,15 @@ rules:
 # Follows groupSync.ca.kind: the CA can be a Secret copied into this namespace or a ConfigMap
 # referenced directly, and granting the wrong one leaves the test unable to read it.
 - apiGroups: [""]
-  resources: [{{ if eq (.Values.groupSync.ca.kind | default "ConfigMap") "Secret" }}"secrets"{{ else }}"configmaps"{{ end }}]
+  resources: [{{ if eq (include "group-sync-operator-helm.caKind" .) "Secret" }}"secrets"{{ else }}"configmaps"{{ end }}]
   verbs: ["get", "list"]
-  resourceNames: ["{{ .Values.groupSync.ca.name }}"]
+  resourceNames: ["{{ include "group-sync-operator-helm.caName" . }}"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: {{ .Release.Name }}-test-ca-binding
-  namespace: {{ .Values.groupSync.ca.namespace }}
+  namespace: {{ include "group-sync-operator-helm.caNamespace" . }}
   annotations:
     # Not a helm test hook. helm test --logs fetches pod logs for every test hook and fails
     # with 'unable to get pod logs ...: pods "..." not found' on any hook that is not a Pod.
