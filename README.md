@@ -47,6 +47,11 @@ Working examples live in the chart: `crc-values.yaml` (LDAPS with the CA copied)
 [CA_CERTIFICATE_FLOW.md](CA_CERTIFICATE_FLOW.md) for how the CA reaches the operator, and
 [setup-local-ldap-testing/](setup-local-ldap-testing/) to stand up a test directory.
 
+**Publishing a change?** Read [docs/RELEASING.md](docs/RELEASING.md) first. The short version: bumping
+`Chart.yaml`'s `version` is what triggers a release, and merging chart changes without bumping it
+publishes nothing while still showing a green tick. That has already cost this repo two releases,
+including one carrying a security fix.
+
 
 
 ## Install ordering, and why `helm install` used to fail
