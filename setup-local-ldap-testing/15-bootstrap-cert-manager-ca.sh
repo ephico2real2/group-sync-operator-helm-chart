@@ -321,6 +321,18 @@ VALUES
 
 # Publishes the root to the cluster-wide trust bundle, so trustedCA.injected can carry it.
 #
+# LOCAL SIMULATION ONLY — NEVER RUN THIS ON A SHARED OR PRODUCTION CLUSTER.
+#
+# proxy/cluster.spec.trustedCA is platform-team property. On a real cluster it already holds the
+# corporate root, it is changed only when that root is rotated, and repointing it swaps the trust anchor
+# for EVERY workload that consumes the injected bundle — not just this operator. A chart or script that
+# manages it can take out unrelated services.
+#
+# This exists purely so a lab cluster can pretend it has what an enterprise already has, and the chart
+# can then be exercised as a CONSUMER of it. The chart itself never touches the proxy: no template
+# patches it and no ServiceAccount is granted config.openshift.io/proxies. That separation is
+# deliberate — keep it.
+#
 # This is what an enterprise cluster normally already has: the corporate root sits in
 # proxy/cluster.spec.trustedCA, a validator merges it with the system store into
 # openshift-config-managed/trusted-ca-bundle, and every ConfigMap labelled
@@ -398,7 +410,8 @@ cmd_trust_cluster() {
 NEXT
 }
 
-# Reverts trust-cluster. Only clears trustedCA if it still names OUR ConfigMap.
+# Reverts trust-cluster. Only clears trustedCA if it still names OUR ConfigMap, so it can never strip a
+# corporate trust anchor someone else put there. Same LOCAL-SIMULATION-ONLY caveat as trust-cluster.
 cmd_untrust_cluster() {
   local current
   current=$(oc get proxy cluster -o jsonpath='{.spec.trustedCA.name}' 2>/dev/null)
@@ -417,22 +430,53 @@ cmd_untrust_cluster() {
 cmd_verify() {
   step "certificate the LDAPS endpoint actually presents"
 
-  # Verifies against the COPY the operator loads, not the source this script wrote. Checking the
-  # source would pass while the copy was stale, which is the one failure worth catching here.
-  local ca_cm="$COPY_NAME"
-  if ! oc get configmap "$ca_cm" -n "$OPERATOR_NS" >/dev/null 2>&1; then
-    oc get configmap "$CA_CONFIGMAP_NAME" -n "$CA_CONFIGMAP_NAMESPACES" >/dev/null 2>&1 \
-      || die "neither ${OPERATOR_NS}/${COPY_NAME} nor ${CA_CONFIGMAP_NAMESPACES}/${CA_CONFIGMAP_NAME} exists — run apply"
-    die "${OPERATOR_NS}/${COPY_NAME} does not exist yet, so the operator has no CA to load.
-  The chart's extraction job creates it from ${CA_CONFIGMAP_NAMESPACES}/${CA_CONFIGMAP_NAME}:
-    helm upgrade group-sync . -n ${OPERATOR_NS}"
+  # Verifies against the CA the operator ACTUALLY loads, read from the GroupSync CR — not a name this
+  # script assumes. The chart can point the CR at either the copy fed by this script's source
+  # (caCopy.enabled) or an OpenShift-injected trust bundle (trustedCA.injected), and those differ in
+  # BOTH name and key: ca.crt for the copy, ca-bundle.crt for an injected bundle. Hardcoding the copy
+  # verified a stale orphan left behind by an earlier copy-mode install while the live release trusted
+  # something else entirely — reporting FAILED with the chain in fact fine.
+  #
+  # `|| true` is load-bearing twice over: with no GroupSync CR in the namespace `oc get` exits 1, and
+  # under the set -euo pipefail at the top of this file a failing command substitution aborts the whole
+  # script — silently, before the fallback below can explain anything. Ranging over providers[*].ldap
+  # rather than indexing providers[0] also skips any non-LDAP provider, so an unrelated GroupSync CR
+  # sorting ahead of ours cannot make this read an empty name and fall back for the wrong reason.
+  local ca_cm ca_key ref
+  ref=$(oc get groupsync -n "$OPERATOR_NS" \
+        -o jsonpath='{range .items[*].spec.providers[*].ldap}{.caSecret.name}{" "}{.caSecret.key}{"\n"}{end}' \
+        2>/dev/null | grep -v '^[[:space:]]*$' | head -1) || true
+  ca_cm=${ref%% *}
+  ca_key=${ref#* }
+
+  if [ -n "$ca_cm" ]; then
+    # Empty key means the chart left it defaulted; the operator falls back to ca.crt, so match that.
+    : "${ca_key:=ca.crt}"
+    if ! oc get configmap "$ca_cm" -n "$OPERATOR_NS" >/dev/null 2>&1; then
+      die "the GroupSync CR loads ${OPERATOR_NS}/${ca_cm}, which does not exist — so the operator has
+  no CA at all. Either the chart's extraction job has not run, or trustedCA.injected names a
+  ConfigMap that was never created:
+    helm upgrade group-sync ../charts/group-sync-operator-helm -n ${OPERATOR_NS}"
+    fi
+  else
+    # Nothing to read: either the chart is not installed, or its LDAP provider has no caSecret at all
+    # (insecure: true, so the chain is never checked). Fall back to the copy this script's source feeds,
+    # which is still worth verifying — it is what a later switch to insecure: false would rely on.
+    ca_cm="$COPY_NAME"
+    ca_key="ca.crt"
+    oc get configmap "$ca_cm" -n "$OPERATOR_NS" >/dev/null 2>&1 \
+      || die "no GroupSync CR in ${OPERATOR_NS} names a CA, and there is no ${OPERATOR_NS}/${COPY_NAME}
+  to fall back on. Install the chart first — or, if it is installed with insecure: true, run apply so
+  ${CA_CONFIGMAP_NAMESPACES}/${CA_CONFIGMAP_NAME} exists and the copy can be built from it."
+    log "no CA named by any GroupSync CR — falling back to the copy"
   fi
 
-  # A stale copy verifies against nothing useful, so the recorded source hash is surfaced.
+  # A stale copy verifies against nothing useful, so the recorded source hash is surfaced. Absent on an
+  # injected bundle, which this script does not write, so the suffix simply drops out.
   local stamped
   stamped=$(oc get configmap "$ca_cm" -n "$OPERATOR_NS" \
             -o jsonpath='{.metadata.annotations.group-sync\.redhat-cop\.io/source-hash}' 2>/dev/null)
-  log "verifying against ${OPERATOR_NS}/${ca_cm}${stamped:+ (source-hash ${stamped})}"
+  log "verifying against ${OPERATOR_NS}/${ca_cm} key ${ca_key}${stamped:+ (source-hash ${stamped})}"
 
   # Run inside the cluster and against the Service DNS name: that is the only way the SAN check
   # means anything. -verify_return_error makes a bad chain a non-zero exit rather than a warning.
@@ -444,9 +488,9 @@ print(json.dumps({'spec':{
     'name':'verify','image':'registry.redhat.io/rhel9/openssl:latest',
     'command':['/bin/sh','-c',
       'echo | openssl s_client -connect ${SAN_FQDN}:636 -servername ${SAN_FQDN} '
-      '-CAfile /ca/ca.crt -verify_return_error 2>&1 '
+      '-CAfile /ca/${ca_key} -verify_return_error 2>&1 '
       '| grep -Ei \"^subject=|^issuer=|Verify return code|Verification\"; '
-      'echo | openssl s_client -connect ${SAN_FQDN}:636 -CAfile /ca/ca.crt 2>/dev/null '
+      'echo | openssl s_client -connect ${SAN_FQDN}:636 -CAfile /ca/${ca_key} 2>/dev/null '
       '| openssl x509 -noout -ext subjectAltName'],
     'volumeMounts':[{'name':'ca','mountPath':'/ca','readOnly':True}],
     'securityContext':{'allowPrivilegeEscalation':False,'capabilities':{'drop':['ALL']}}}],
@@ -464,8 +508,10 @@ print(json.dumps({'spec':{
 
   printf '%s' "$out" | grep -q 'Verify return code: 0 (ok)' \
     || die "the LDAPS endpoint did not verify against ${OPERATOR_NS}/${ca_cm}.
-  Either the endpoint is not serving the cert-manager certificate (run switch-ldap), or the CA in
-  the ConfigMap is not the one that signed it (run apply)."
+  Either the endpoint is not serving the cert-manager certificate (run switch-ldap, then
+  'oc rollout restart deploy/openldap-server -n ${LDAP_NS}'), or ${ca_cm} does not carry the root that
+  signed it. For a copy that means the source is stale (run apply); for an injected bundle it means the
+  root never reached the cluster's trust (run trust-cluster)."
 
   printf '%s' "$out" | grep -q "DNS:${SAN_FQDN}" \
     || die "the served certificate has no SAN for ${SAN_FQDN}, so a verifying client will reject it."
@@ -474,8 +520,32 @@ print(json.dumps({'spec':{
 
 cmd_delete() {
   step "deleting only objects labelled ${OWNED}"
+
+  # The trust bundle is labelled OWNED and lives in openshift-config, so the sweep below would take it —
+  # while proxy/cluster.spec.trustedCA still names it. That leaves the cluster proxy pointing at a
+  # ConfigMap that no longer exists, and the validator can no longer build
+  # openshift-config-managed/trusted-ca-bundle for anything relying on trusted-CA injection.
+  #
+  # So it is EXCLUDED rather than deleted, and the proxy is left untouched: removing a ConfigMap the
+  # cluster depends on should be an explicit act, not a side effect of cleanup. untrust-cluster is the
+  # command that does it, in the right order.
+  local trusted_by_proxy
+  trusted_by_proxy=$(oc get proxy cluster -o jsonpath='{.spec.trustedCA.name}' 2>/dev/null)
+
   for ns in $CA_CONFIGMAP_NAMESPACES; do
-    oc delete configmap -n "$ns" -l "$OWNED" --ignore-not-found 2>&1 | sed 's/^/  /'
+    if [ "$trusted_by_proxy" = "$TRUST_BUNDLE_CM" ] && [ "$ns" = "openshift-config" ]; then
+      # Delete by name, skipping the bundle, instead of by label selector.
+      for cm in $(oc get configmap -n "$ns" -l "$OWNED" -o name 2>/dev/null); do
+        if [ "${cm##*/}" = "$TRUST_BUNDLE_CM" ]; then
+          log "KEEPING ${ns}/${TRUST_BUNDLE_CM} — proxy/cluster.spec.trustedCA still names it"
+          log "  to remove it: ./15-bootstrap-cert-manager-ca.sh untrust-cluster"
+          continue
+        fi
+        oc delete "$cm" -n "$ns" --ignore-not-found 2>&1 | sed 's/^/  /'
+      done
+    else
+      oc delete configmap -n "$ns" -l "$OWNED" --ignore-not-found 2>&1 | sed 's/^/  /'
+    fi
   done
   oc delete certificate -n "$LDAP_NS" -l "$OWNED" --ignore-not-found 2>&1 | sed 's/^/  /'
   oc delete certificate -n "$CM_NS"   -l "$OWNED" --ignore-not-found 2>&1 | sed 's/^/  /'
