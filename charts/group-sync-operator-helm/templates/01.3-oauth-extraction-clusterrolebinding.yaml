@@ -1,4 +1,5 @@
-{{- if .Values.oauthSecretExtraction.enabled }}
+{{/* Follows the ClusterRole it binds: no ClusterRole, nothing to bind. */}}
+{{- if include "group-sync-operator-helm.clusterRoleEnabled" . }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:

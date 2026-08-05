@@ -1,0 +1,255 @@
+{{/*
+Preflights the CA the operator will load, and — when oauthSecretExtraction.caCopy is on — copies it into
+the operator's namespace.
+
+Split out of 01.5-oauth-secret-extraction-job.yaml, where all of this sat inside the extraction Job and was
+therefore gated by oauthSecretExtraction.enabled. A cluster with no OAuth LDAP identity provider to extract
+a bind password FROM still needs its CA: with extraction off the copy silently vanished while the CR went on
+naming ca-config-map-copy. See caJobEnabled in _helpers.tpl for the gate.
+
+The copy is only useful if the operator reads it as the kind the Job wrote it as. These are two
+independent values and nothing tied them together, so setting only groupSync.ca.kind: Secret left the
+Job creating a ConfigMap while the CR asked for a Secret — the operator then looks for an object that
+does not exist, and the first symptom is a reconcile error naming a Secret nobody created.
+
+Refused at render time rather than coerced: coercing would silently override whichever value the user
+meant, and there is no way to tell which one that was.
+
+The guard no longer requires extraction to be on. With a copy configured and extraction off it used to
+render happily and hand the operator a CR pointing at an object of the wrong kind that nothing creates.
+*/}}
+{{- if .Values.oauthSecretExtraction.caCopy.enabled }}
+{{- $wrote := .Values.oauthSecretExtraction.caCopy.destinationCa.kind | default "ConfigMap" }}
+{{- $reads := include "group-sync-operator-helm.caKind" . }}
+{{- if ne $wrote $reads }}
+{{- fail (printf "the CA copy is written as a %s but groupSync.ca.kind reads it as a %s.\n  oauthSecretExtraction.caCopy.destinationCa.kind = %s   (what the Job creates)\n  groupSync.ca.kind                             = %s   (what the GroupSync CR loads)\n  Set both to the same kind, or disable oauthSecretExtraction.caCopy.enabled if something else\n  supplies the CA." $wrote $reads $wrote $reads) }}
+{{- end }}
+{{- end }}
+{{- if include "group-sync-operator-helm.caJobEnabled" . }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "group-sync-operator-helm.fullname" . }}-ldap-ca
+  namespace: {{ .Values.groupSync.namespace }}
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ldap-ca
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+    helm.sh/hook: post-install,post-upgrade
+    # After the extraction Job, which is weight 5. It creates targetSecret.namespace when that is missing,
+    # and the copy's destination defaults to the same namespace — so on a first install into a namespace
+    # Helm did not create, running the copy first would fail on a namespace that appears moments later.
+    helm.sh/hook-weight: "6"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  # ttlSecondsAfterFinished: {{ .Values.oauthSecretExtraction.ttlSecondsAfterFinished }} # Commented out to keep Job for audit purposes
+  backoffLimit: {{ .Values.oauthSecretExtraction.backoffLimit }}
+  template:
+    metadata:
+      labels:
+        {{- include "group-sync-operator-helm.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: ldap-ca
+{{- if .Values.oauthSecretExtraction.caCopy.enabled }}
+      annotations:
+        # A changed source CA changes this, so the pod spec differs and the copy is remade. Only with the
+        # copy on: a preflight-only run creates nothing to remake.
+        checksum/ca-source: {{ include "group-sync-operator-helm.caSourceHash" . }}
+{{- end }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ .Values.oauthSecretExtraction.serviceAccount.name }}
+      containers:
+      - name: ldap-ca
+        image: {{ .Values.oauthSecretExtraction.image.repository }}:{{ .Values.oauthSecretExtraction.image.tag }}
+        imagePullPolicy: {{ .Values.oauthSecretExtraction.image.pullPolicy }}
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+
+          echo "🔏 LDAP CA Job Started"
+          echo "======================"
+
+          # ---- LDAP CA preflight --------------------------------------------------------
+          # The url is ldaps:// or insecure is false, so the operator needs the CA that
+          # groupSync.ca points at. Checked here because a missing one is not an install failure —
+          # the operator just reconciles forever with "ConfigMap ... not found, caSecret must be
+          # specified when insecure=false", which names neither the chart value nor the fix.
+{{- if .Values.oauthSecretExtraction.caCopy.enabled }}
+          # The source is the CA the cluster's OAuth LDAP identity provider already trusts, which
+          # is copied into groupSync.namespace below so the operator needs no cross-namespace read.
+          CA_KIND=ConfigMap
+          CA_SRC={{ .Values.oauthSecretExtraction.caCopy.sourceCa.name }}
+          CA_SRC_NS={{ .Values.oauthSecretExtraction.caCopy.sourceCa.namespace }}
+          CA_SRC_KEY={{ .Values.oauthSecretExtraction.caCopy.sourceCa.key | default "ca.crt" }}
+{{- if .Values.oauthSecretExtraction.caCopy.discoverFromOAuth }}
+
+          # The OAuth CR is the authority on which ConfigMap holds that CA, so the name is read off
+          # it rather than trusted from values. Only the name: the API fixes the namespace to
+          # openshift-config and the key to ca.crt.
+          echo
+          echo "🔎 Reading the LDAP identity provider CA from the cluster OAuth CR"
+          DISCOVERED=$(oc get oauth cluster \
+            -o jsonpath='{range .spec.identityProviders[?(@.type=="LDAP")]}{.ldap.ca.name}{"\n"}{end}' \
+            2>/dev/null | grep -v '^$' | head -1)
+
+          if [[ -n "$DISCOVERED" ]]; then
+            if [[ "$DISCOVERED" != "$CA_SRC" ]]; then
+              echo "   OAuth CR names ${DISCOVERED}, values say ${CA_SRC} — using the OAuth CR"
+            else
+              echo "   OAuth CR names ${DISCOVERED}, matching values"
+            fi
+            CA_SRC="$DISCOVERED"
+          else
+            # Not an error: a cluster can sync groups from a directory it does not authenticate
+            # against, and then no LDAP identity provider exists to discover from.
+            IDPS=$(oc get oauth cluster \
+              -o jsonpath='{range .spec.identityProviders[*]}{.name}={.type} {end}' 2>/dev/null)
+            echo "   no LDAP identity provider in the OAuth CR (found: ${IDPS:-none})"
+            echo "   using the configured source ${CA_SRC_NS}/${CA_SRC}"
+          fi
+{{- end }}
+{{- else }}
+          CA_KIND={{ include "group-sync-operator-helm.caKind" . }}
+          CA_SRC={{ include "group-sync-operator-helm.caName" . }}
+          CA_SRC_NS={{ include "group-sync-operator-helm.caNamespace" . }}
+          CA_SRC_KEY={{ include "group-sync-operator-helm.caKey" . }}
+{{- end }}
+          CA_RES=$(echo "$CA_KIND" | tr '[:upper:]' '[:lower:]')
+
+          echo
+          echo "🔏 Checking LDAP CA: ${CA_RES}/${CA_SRC} in ${CA_SRC_NS}, key ${CA_SRC_KEY}"
+
+          if ! oc get "$CA_RES" "$CA_SRC" -n "$CA_SRC_NS" >/dev/null 2>&1; then
+            echo "❌ ${CA_KIND} ${CA_SRC} not found in ${CA_SRC_NS}"
+            echo "   groupSync.url is ldaps:// or groupSync.insecure is false, so a CA is required."
+            echo "   Either create it from your enterprise root CA:"
+            echo "     oc create configmap ${CA_SRC} -n ${CA_SRC_NS} --from-file=${CA_SRC_KEY}=<root-ca.pem>"
+            echo "   or point groupSync.ca at one that exists, or use ldap:// with insecure true."
+            echo "   ${CA_KIND}s in ${CA_SRC_NS}:"
+            oc get "$CA_RES" -n "$CA_SRC_NS" -o name 2>/dev/null | sed 's/^/     /'
+            exit 1
+          fi
+
+          # oc extract, not jsonpath. The key contains a dot, and jsonpath treats it as a path
+          # separator: both {.data.ca.crt} and {.data['ca.crt']} return empty on a resource that has
+          # the key. Only {.data['ca\.crt']} works. extract takes the key literally, so any key name
+          # is safe, and it reads Secrets and ConfigMaps alike.
+          # Retried, because a ConfigMap can exist before it has contents. With
+          # trustedCA.injected the chart ships it EMPTY and OpenShift's network operator fills
+          # ca-bundle.crt moments later — reading once would fail the install on a race. Harmless for a
+          # CA that is already populated: the first read succeeds and the loop exits.
+          rm -rf /tmp/ca && mkdir -p /tmp/ca
+          for attempt in $(seq 1 12); do
+            oc extract "${CA_RES}/${CA_SRC}" -n "$CA_SRC_NS" \
+              --keys="$CA_SRC_KEY" --to=/tmp/ca --confirm >/dev/null 2>&1
+            [[ -s "/tmp/ca/${CA_SRC_KEY}" ]] && break
+            [[ $attempt -eq 1 ]] && echo "   ${CA_SRC_KEY} not populated yet, waiting"
+            sleep 5
+          done
+
+          # Checked on the file, not the exit code: a missing key exits 0 and writes nothing.
+          if [[ ! -s "/tmp/ca/${CA_SRC_KEY}" ]]; then
+            echo "❌ ${CA_SRC_NS}/${CA_SRC} has no '${CA_SRC_KEY}' key, or it is empty."
+            echo "   Set groupSync.ca.key to one of:"
+            rm -rf /tmp/ca-all && mkdir -p /tmp/ca-all
+            oc extract "${CA_RES}/${CA_SRC}" -n "$CA_SRC_NS" --to=/tmp/ca-all --confirm >/dev/null 2>&1
+            ls -1 /tmp/ca-all 2>/dev/null | sed 's/^/     /'
+            exit 1
+          fi
+
+          # PEM, not an arbitrary blob: a wrong key would otherwise pass and fail later inside the
+          # operator's TLS handshake, where the message names neither the key nor the resource.
+          if ! grep -q 'BEGIN CERTIFICATE' "/tmp/ca/${CA_SRC_KEY}"; then
+            echo "❌ ${CA_SRC_KEY} in ${CA_SRC_NS}/${CA_SRC} is not PEM (no BEGIN CERTIFICATE)"
+            exit 1
+          fi
+
+          CA_COUNT=$(grep -c 'BEGIN CERTIFICATE' "/tmp/ca/${CA_SRC_KEY}")
+          echo "✅ CA present: ${CA_COUNT} certificate(s) in ${CA_SRC_NS}/${CA_SRC} key ${CA_SRC_KEY}"
+{{- if .Values.oauthSecretExtraction.caCopy.enabled }}
+
+          # Copied into groupSync.namespace so the operator reads the CA from its own namespace.
+          # Cross-namespace ConfigMap read is granted on some clusters and denied on others, and
+          # where it is denied the operator just reconciles forever on "ConfigMap ... not found".
+          CA_TGT={{ .Values.oauthSecretExtraction.caCopy.destinationCa.name }}
+          CA_TGT_KEY={{ .Values.oauthSecretExtraction.caCopy.destinationCa.key | default "ca.crt" }}
+          CA_TGT_NS={{ .Values.oauthSecretExtraction.caCopy.destinationCa.namespace | default .Values.groupSync.namespace }}
+          CA_SRC_HASH={{ include "group-sync-operator-helm.caSourceHash" . }}
+{{- if eq (.Values.oauthSecretExtraction.caCopy.destinationCa.kind | default "ConfigMap") "Secret" }}
+          oc create secret generic "$CA_TGT" \
+            --from-file="${CA_TGT_KEY}=/tmp/ca/${CA_SRC_KEY}" \
+            -n "$CA_TGT_NS" \
+            --dry-run=client -o yaml \
+            | oc annotate --local -f - -o yaml \
+                "group-sync.redhat-cop.io/source=${CA_SRC_NS}/${CA_SRC}" \
+                "group-sync.redhat-cop.io/source-key=${CA_SRC_KEY}" \
+                "group-sync.redhat-cop.io/source-hash=${CA_SRC_HASH}" \
+            | oc apply -f - >/dev/null
+          echo "✅ CA copied to secret ${CA_TGT_NS}/${CA_TGT} key ${CA_TGT_KEY}"
+{{- else }}
+          oc create configmap "$CA_TGT" \
+            --from-file="${CA_TGT_KEY}=/tmp/ca/${CA_SRC_KEY}" \
+            -n "$CA_TGT_NS" \
+            --dry-run=client -o yaml \
+            | oc annotate --local -f - -o yaml \
+                "group-sync.redhat-cop.io/source=${CA_SRC_NS}/${CA_SRC}" \
+                "group-sync.redhat-cop.io/source-key=${CA_SRC_KEY}" \
+                "group-sync.redhat-cop.io/source-hash=${CA_SRC_HASH}" \
+            | oc apply -f - >/dev/null
+          echo "✅ CA copied to configmap ${CA_TGT_NS}/${CA_TGT} key ${CA_TGT_KEY}"
+{{- end }}
+
+          # groupSync.ca must name the copy, not the source — otherwise the copy is dead weight and
+          # the operator still needs the cross-namespace read this exists to avoid.
+          if [ "{{ include "group-sync-operator-helm.caName" . }}" != "$CA_TGT" ] \
+          || [ "{{ include "group-sync-operator-helm.caNamespace" . }}" != "$CA_TGT_NS" ]; then
+            echo "⚠️  groupSync.ca points at {{ include "group-sync-operator-helm.caNamespace" . }}/{{ include "group-sync-operator-helm.caName" . }}, not the copy."
+            echo "    The operator will read the source directly and needs cross-namespace access."
+            echo "    To use the copy, set:"
+            echo "      groupSync.ca.kind: {{ .Values.oauthSecretExtraction.caCopy.destinationCa.kind | default "ConfigMap" }}"
+            echo "      groupSync.ca.name: ${CA_TGT}"
+            echo "      groupSync.ca.namespace: ${CA_TGT_NS}"
+            echo "      groupSync.ca.key: ${CA_TGT_KEY}"
+          fi
+{{- end }}
+          rm -rf /tmp/ca /tmp/ca-all
+
+          echo
+{{- if .Values.oauthSecretExtraction.caCopy.enabled }}
+          echo "🎉 LDAP CA copied into ${CA_TGT_NS}/${CA_TGT}"
+{{- else }}
+          # No copy configured, so groupSync.ca names something this chart does not create. The
+          # preflight above is the only check that it exists and is readable before the operator
+          # starts reconciling on it.
+          echo "🎉 LDAP CA verified in ${CA_SRC_NS}/${CA_SRC} (not copied: caCopy.enabled is false)"
+{{- end }}
+          
+        env:
+        - name: HOME
+          value: /tmp
+        resources:
+          requests:
+            cpu: {{ .Values.oauthSecretExtraction.resources.requests.cpu }}
+            memory: {{ .Values.oauthSecretExtraction.resources.requests.memory }}
+          limits:
+            cpu: {{ .Values.oauthSecretExtraction.resources.limits.cpu }}
+            memory: {{ .Values.oauthSecretExtraction.resources.limits.memory }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+      # runAsNonRoot is deliberately NOT set. The image declares USER 0, so asserting it without a
+      # runAsUser depends entirely on the SCC injecting one: restricted-v2 assigns a UID from the
+      # namespace range and it works, but a RunAsAny SCC injects nothing and the kubelet refuses with
+      # "container has runAsNonRoot and image will run as root". Pinning a runAsUser instead would
+      # break restricted-v2, whose MustRunAsRange rejects any UID outside the namespace range — so the
+      # SCC governs the user, and this keeps only the hardening that never conflicts.
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+{{- end }}
+

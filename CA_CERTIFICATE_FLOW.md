@@ -8,7 +8,7 @@ syncs. This document is the reference.
 
 | | Enable with | Who populates it | Key | Use when |
 |---|---|---|---|---|
-| **1. Copy** *(default)* | `oauthSecretExtraction.caCopy.enabled: true` | the extraction Job, from `sourceCa` | `ca.crt` | the cluster already has the CA for its OAuth LDAP identity provider |
+| **1. Copy** *(default)* | `oauthSecretExtraction.caCopy.enabled: true` | the CA Job, from `sourceCa` | `ca.crt` | the cluster already has the CA for its OAuth LDAP identity provider |
 | **2. Injected** | `trustedCA.injected.enabled: true` | OpenShift's network operator | `ca-bundle.crt` | the LDAP server's CA is already in `proxy/cluster.spec.trustedCA` |
 | **3. Existing** | both of the above `false` | you, out of band | yours | a CA the cluster has never been told about |
 
@@ -20,8 +20,16 @@ All three end at the same place, so `groupSync.ca` is the constant:
 3. a ConfigMap you created ──────────────────────▶ ┘
 ```
 
-Whichever you pick, the extraction Job preflights it — exists, has the key, key is PEM — so a
-misconfiguration surfaces at install time rather than as an endless reconcile loop.
+Whichever of the first two you pick, the CA Job preflights it — exists, has the key, key is PEM — so a
+misconfiguration surfaces at install time rather than as an endless reconcile loop. Option 3 gets no Job at
+all: with both flags false nothing here creates, copies or checks the CA, and `groupSync.ca` must name
+something that already exists. Leaving it at the copy's default name is the one way to get this wrong, and
+`NOTES.txt` says so on install.
+
+The CA Job is gated on there being CA work to do, **not** on `oauthSecretExtraction.enabled`. A cluster with
+no OAuth LDAP identity provider to extract a bind password from still needs its CA, so
+`oauthSecretExtraction.enabled: false` with `caCopy.enabled: true` copies the CA and leaves the bind Secret
+for you to create, with the keys `username` and `password`.
 
 ### 2. Injected — and its one hard limit
 
@@ -142,7 +150,7 @@ The rest of this document covers **mode 1**, the default, where the two-ConfigMa
    openshift-config/ca-config-map                group-sync-operator/ca-config-map-copy
    ───────────────────────────────               ──────────────────────────────────────
    THE SOURCE                                    THE COPY
-   you create it, or the cluster                 the chart's extraction Job creates it
+   you create it, or the cluster                 the chart's CA Job creates it
    already has it for its OAuth
    LDAP identity provider                        THIS is what the operator loads
                                     ─copy──▶     groupSync.ca points HERE
@@ -152,9 +160,9 @@ The rest of this document covers **mode 1**, the default, where the two-ConfigMa
 |---|---|---|
 | Default name | `ca-config-map` | `ca-config-map-copy` |
 | Namespace | `openshift-config` | `group-sync-operator` |
-| Created by | you, or already present for the OAuth IdP | the extraction Job, on every install and upgrade |
+| Created by | you, or already present for the OAuth IdP | the CA Job, on every install and upgrade |
 | Configured as | `oauthSecretExtraction.caCopy.sourceCa` | `oauthSecretExtraction.caCopy.destinationCa` |
-| Read by | the extraction Job | **the operator** |
+| Read by | the CA Job | **the operator** |
 | Safe to hand-edit | yes | **no** — overwritten on the next upgrade, which is why it is named `-copy` |
 
 `groupSync.ca` must name the **copy**. If it names the source, the Job logs a warning and the operator
@@ -215,8 +223,9 @@ cert-manager PKI and writes the source for you.
 
 ## How the copy is made
 
-The extraction Job (`charts/group-sync-operator-helm/templates/01.5-oauth-secret-extraction-job.yaml`) runs as a
-`post-install,post-upgrade` hook and:
+The CA Job (`charts/group-sync-operator-helm/templates/01.6-ldap-ca-job.yaml`, named
+`<release>-ldap-ca`) runs as a `post-install,post-upgrade` hook at weight 6 — after the credential
+extraction at weight 5, which creates the target namespace when it is missing — and:
 
 1. **Discovers the source name** from the cluster OAuth CR's first LDAP identity provider, rather than
    trusting `sourceCa.name`. Only the name — the OpenShift API fixes the namespace to
@@ -292,7 +301,7 @@ The operator cannot read what `groupSync.ca` names. Either it points at `openshi
 that denies the read, or the copy was never created. Check the Job:
 
 ```bash
-oc logs -n group-sync-operator job/group-sync-operator-oauth-secret-extraction | grep -E '🔎|CA'
+oc logs -n group-sync-operator job/group-sync-operator-ldap-ca | grep -E '🔎|CA'
 ```
 
 **`caSecret must be specified` even though the resource exists**

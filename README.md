@@ -217,9 +217,9 @@ The chart deploys these main components:
 > when a CA is required, rotation, verification and troubleshooting.
 
 **There are two CA ConfigMaps and this section describes only the first.** The one you create below is
-the **source**, in `openshift-config`. The operator does **not** read it. The chart's extraction Job
-copies it to `ca-config-map-copy` in the operator's own namespace, and that copy is what `groupSync.ca`
-names and what the operator loads.
+the **source**, in `openshift-config`. The operator does **not** read it. The chart's CA Job
+(`<release>-ldap-ca`) copies it to `ca-config-map-copy` in the operator's own namespace, and that copy is
+what `groupSync.ca` names and what the operator loads.
 
 ```
 openshift-config/ca-config-map  ──copy──▶  group-sync-operator/ca-config-map-copy  ──▶  operator
@@ -255,8 +255,10 @@ oc create configmap ca-config-map \
   -n openshift-config
 ```
 
-Nothing further is needed: the extraction Job discovers this ConfigMap, preflights it, and copies it
-into the operator's namespace on every install and upgrade. To confirm the copy landed:
+Nothing further is needed: the CA Job discovers this ConfigMap, preflights it, and copies it into the
+operator's namespace on every install and upgrade. That Job is gated by
+`oauthSecretExtraction.caCopy.enabled`, independently of `oauthSecretExtraction.enabled` — a cluster with no
+OAuth LDAP identity provider still gets its CA copied. To confirm the copy landed:
 
 ```bash
 oc get configmap ca-config-map-copy -n group-sync-operator \
@@ -682,7 +684,7 @@ only relaxes checks the operator makes itself. It is also required with `insecur
 Reading it in place needs cross-namespace ConfigMap read that the operator has on some clusters and
 not others, and where it is denied the only symptom is the operator reconciling forever on
 `ConfigMap ... not found, caSecret must be specified when insecure=false` — naming neither the
-namespace nor the permission. The extraction job makes the copy.
+namespace nor the permission. The CA Job makes the copy.
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
@@ -696,7 +698,7 @@ namespace nor the permission. The extraction job makes the copy.
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| oauthSecretExtraction.caCopy.enabled | Copy the CA into the operator's namespace. Only runs when a CA is needed | true |
+| oauthSecretExtraction.caCopy.enabled | Copy the CA into the operator's namespace, in its own Job. Only runs when a CA is needed, and **independent of `oauthSecretExtraction.enabled`** — with extraction off the copy still happens, and the bind Secret becomes yours to create with the keys `username` and `password` | true |
 | oauthSecretExtraction.caCopy.discoverFromOAuth | Read the source ConfigMap **name** from the cluster OAuth CR rather than trusting the value below | true |
 | oauthSecretExtraction.caCopy.sourceCa.name | Source ConfigMap — the one the OAuth LDAP identity provider uses | ca-config-map |
 | oauthSecretExtraction.caCopy.sourceCa.namespace | Fixed by the OpenShift API | openshift-config |
@@ -706,7 +708,7 @@ namespace nor the permission. The extraction job makes the copy.
 | oauthSecretExtraction.caCopy.destinationCa.namespace | Defaults to `groupSync.namespace` | group-sync-operator |
 
 The copy carries `group-sync.redhat-cop.io/source-hash`, and that hash is also stamped on the
-extraction job's pod template — so a changed source CA changes the pod spec and the copy is remade on
+CA job's pod template — so a changed source CA changes the pod spec and the copy is remade on
 the next upgrade. It is computed with `lookup`, which reads the live cluster, so `helm template` and
 offline GitOps renders show `unavailable` and the runtime stamp is the reliable record.
 

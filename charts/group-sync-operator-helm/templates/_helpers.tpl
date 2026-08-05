@@ -112,6 +112,58 @@ and "CA_NAME='ca-config-map-copy' but the CR's ca.name is 'ldap-trusted-ca'".
 {{- end }}
 
 {{/*
+Gates for the two hook Jobs, which used to be one.
+
+The CA preflight and copy lived INSIDE the extraction Job, so oauthSecretExtraction.enabled removed both.
+A cluster with no LDAP identity provider to extract a bind password FROM, but which still needs the CA
+copied into the operator's namespace, had no way to ask for that: caCopy.enabled read like a peer flag and
+behaved like a subordinate one. With extraction off the copy silently vanished while the CR went on naming
+ca-config-map-copy, and the only symptom was the operator reconciling forever on an object nobody created.
+
+caJobEnabled therefore does not turn on the CA work because extraction is on; it turns on because there IS
+CA work to do:
+  needsCa AND caCopy.enabled       the copy, with or without extraction
+  needsCa AND extraction.enabled   preflight only — what caCopy.enabled=false has always done
+Both false means the chart creates no CA object and runs no Job for one: the CA is yours to supply, and
+groupSync.ca must name something that already exists.
+*/}}
+{{- define "group-sync-operator-helm.caJobEnabled" -}}
+{{- if and (include "group-sync-operator-helm.needsCa" .Values.groupSync) (or .Values.oauthSecretExtraction.caCopy.enabled .Values.oauthSecretExtraction.enabled) -}}true{{- end -}}
+{{- end }}
+
+{{/*
+True when EITHER hook Job renders. The ServiceAccount, its ClusterRole and the binding are shared, so they
+have to survive extraction being off — otherwise the CA Job renders with no identity to run as.
+*/}}
+{{- define "group-sync-operator-helm.oauthJobsEnabled" -}}
+{{- if or .Values.oauthSecretExtraction.enabled (include "group-sync-operator-helm.caJobEnabled" .) -}}true{{- end -}}
+{{- end }}
+
+{{/*
+Both Jobs read the cluster OAuth CR, for different reasons, so the one cluster-scoped rule that grants it
+has to follow whichever of them actually calls the API:
+
+  extraction   resolves an empty bindDN or sourceSecret.name off the CR, at the top of its script
+  CA Job       resolves the source CA's NAME off the CR, when caCopy.discoverFromOAuth is on
+
+Gated too narrowly, the symptom is a Job calling an API it has no permission for: an earlier version nested
+this inside the needsCa and caCopy gates and measured 0 oauths rules against 2 `oc get oauth cluster` calls.
+*/}}
+{{- define "group-sync-operator-helm.oauthCrRead" -}}
+{{- if or (and .Values.oauthSecretExtraction.enabled (or (not .Values.oauthSecretExtraction.bindDN) (not .Values.oauthSecretExtraction.sourceSecret.name))) (and (include "group-sync-operator-helm.caJobEnabled" .) .Values.oauthSecretExtraction.caCopy.enabled .Values.oauthSecretExtraction.caCopy.discoverFromOAuth) -}}true{{- end -}}
+{{- end }}
+
+{{/*
+The shared ClusterRole carries only what is genuinely cluster-scoped: namespaces, which only the extraction
+Job creates, and the OAuth CR. When neither is needed — a CA-copy-only install that does not discover from
+the OAuth CR — there is nothing left to grant, and rendering it anyway leaves an empty ClusterRole and a
+binding that confers nothing.
+*/}}
+{{- define "group-sync-operator-helm.clusterRoleEnabled" -}}
+{{- if or .Values.oauthSecretExtraction.enabled (include "group-sync-operator-helm.oauthCrRead" .) -}}true{{- end -}}
+{{- end }}
+
+{{/*
 Applies the resolved CA to a config dict, for groupsyncSpec — which receives a dict shaped like
 .Values.groupSync and so cannot reach .Values.trustedCA itself. Reads the same four helpers, so the CR
 can never disagree with the Job, the RBAC or the test pods.

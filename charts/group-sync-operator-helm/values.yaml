@@ -250,7 +250,21 @@ subscription:
 # -------------------- OAuth Secret Extraction Configuration --------------------
 # Controls the Job that extracts password from OAuth LDAP secret and creates GroupSync secret
 oauthSecretExtraction:
-  # Enable or disable the OAuth secret extraction job
+  # Enable or disable the OAuth secret extraction job.
+  #
+  # This gates the CREDENTIALS half only: reading the bind password out of the cluster's OAuth LDAP identity
+  # provider and writing groupSync.credentialsSecret. The CA half is caCopy.enabled below, and the two are
+  # independent — see the note there.
+  #
+  # false means the bind Secret is YOURS to create, with the keys username and password:
+  #
+  #   oc create secret generic ldap-group-sync -n group-sync-operator \
+  #     --from-literal=username='<bind DN>' --from-literal=password='<bind password>'
+  #
+  # That is the mode for a cluster with no OAuth LDAP identity provider to extract from — one that
+  # authenticates some other way, or is not OpenShift at all — and for one where platform automation already
+  # places the credentials. A missing key is not an error to the operator: it substitutes an empty string and
+  # binds anonymously, so the key names matter more than they look. See groupSync.credentialsSecret above.
   enabled: true
 
   # Service account configuration for OAuth secret extraction
@@ -293,6 +307,23 @@ oauthSecretExtraction:
   # operator reconciling forever on "ConfigMap ... not found". A local copy removes the dependency, so
   # groupSync.ca must point at destinationCa below.
   caCopy:
+    # Independent of oauthSecretExtraction.enabled above, and deliberately so.
+    #
+    # Until 0.6.0 this flag read like a peer and behaved like a subordinate: the copy lived inside the
+    # extraction Job, so enabled=false removed the copy, its preflight and its RBAC while the GroupSync CR
+    # went on naming destinationCa.name below. Nothing created that object, and the only symptom was the
+    # operator reconciling forever on "caSecret must be specified when insecure=false". The copy now has its
+    # own Job and its own gate.
+    #
+    # The four combinations, with groupSync needing a CA at all (ldaps:// or insecure=false):
+    #
+    #   extraction  copy   what runs
+    #   true        true   both: credentials extracted, CA copied              (the default)
+    #   true        false  credentials extracted; groupSync.ca is yours, and is preflighted before use
+    #   false       true   CA copied; the bind Secret is yours to create
+    #   false       false  neither — both are yours, and nothing here checks them. Point groupSync.ca at
+    #                      the CA you actually have: leaving it at destinationCa.name names a copy that
+    #                      will not be made. NOTES.txt warns about exactly that.
     enabled: true
 
     # Reads the ConfigMap name from the OAuth CR's LDAP identity provider rather than trusting

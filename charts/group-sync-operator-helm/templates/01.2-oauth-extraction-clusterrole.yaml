@@ -1,4 +1,4 @@
-{{- if .Values.oauthSecretExtraction.enabled }}
+{{- if include "group-sync-operator-helm.clusterRoleEnabled" . }}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -24,6 +24,11 @@ rules:
 # unpinned `create` that was removed first, so pinning was never the fix — scoping is.
 #
 # What remains below is only genuinely cluster-scoped: namespaces and the OAuth CR.
+{{- if .Values.oauthSecretExtraction.enabled }}
+#
+# Namespaces are the extraction Job's alone: it creates targetSecret.namespace when that is missing. The CA
+# Job makes no namespace call, so with extraction off these rules would grant a cluster-scoped verb nothing
+# asks for.
 #
 # Access to namespaces (to check and create target namespace if needed)
 - apiGroups: [""]
@@ -34,12 +39,13 @@ rules:
 - apiGroups: [""]
   resources: ["namespaces"]
   verbs: ["get"]
-{{- if or .Values.oauthSecretExtraction.caCopy.discoverFromOAuth (not .Values.oauthSecretExtraction.bindDN) (not .Values.oauthSecretExtraction.sourceSecret.name) }}
-# Reads the cluster OAuth CR. Deliberately OUTSIDE the needsCa and caCopy gates: the Job resolves the
-# bind DN and password secret at the TOP of its script, before any CA work and regardless of whether a
-# CA is needed. Nested inside those gates, `ldap:// + insecure=true` or `caCopy.enabled=false` with an
-# empty bindDN produced a Job that calls this API with no permission — measured as 0 oauths rules
-# against 2 `oc get oauth cluster` calls.
+{{- end }}
+{{- if include "group-sync-operator-helm.oauthCrRead" . }}
+# Reads the cluster OAuth CR. Which Job needs this, and why, is decided by the oauthCrRead helper: the
+# extraction Job resolves an empty bindDN or sourceSecret.name off the CR before any CA work, and the CA Job
+# resolves the source CA's name off it when caCopy.discoverFromOAuth is on. Gated too narrowly — nested
+# inside the needsCa and caCopy gates, as it once was — it produced a Job calling this API with no
+# permission: measured as 0 oauths rules against 2 `oc get oauth cluster` calls.
 #
 # Cluster-scoped resource, so it must live in a ClusterRole; pinned to the single object named "cluster".
 - apiGroups: ["config.openshift.io"]
@@ -48,11 +54,16 @@ rules:
   resourceNames: ["cluster"]
 {{- end }}
 {{- end }}
-{{- $caRead := and .Values.oauthSecretExtraction.caCopy.enabled (include "group-sync-operator-helm.needsCa" .Values.groupSync) }}
+{{/*
+The CA Roles follow the CA Job, NOT oauthSecretExtraction.enabled. They used to be gated on the extraction
+flag because the CA work lived in the extraction Job; now that it has its own Job, gating them that way
+would render the Job with no permission to read or write the CA it exists for.
+*/}}
+{{- $caJob := include "group-sync-operator-helm.caJobEnabled" . }}
+{{- $caRead := and $caJob .Values.oauthSecretExtraction.caCopy.enabled }}
 {{- $secretRead := not .Values.oauthSecretExtraction.sourceSecret.name }}
 {{/* The source Secret needs its own Role unless it sits in the namespace the target Role covers. */}}
 {{- $srcElsewhere := ne .Values.oauthSecretExtraction.sourceSecret.namespace .Values.oauthSecretExtraction.targetSecret.namespace }}
-{{- $caElsewhere := ne (include "group-sync-operator-helm.caNamespace" .) .Values.oauthSecretExtraction.targetSecret.namespace }}
 
 {{/*
 Roles, not more ClusterRole rules: these names are not known until the Job reads the OAuth CR, and an
@@ -71,7 +82,7 @@ wrong namespace.
 get alone is not enough in either: listing is how the Job reports the available keys when the expected
 one is missing, and RBAC does not honour resourceNames for list.
 */}}
-{{- if and .Values.oauthSecretExtraction.enabled $caRead }}
+{{- if $caRead }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -109,11 +120,14 @@ subjects:
 {{- end }}
 
 {{/*
-The CA the preflight verifies, when it is NOT in the namespace the target Role already covers. Pinned by
-name AND bounded to its namespace — the pinned-in-a-ClusterRole version of this rule granted the same name
-in every namespace on the cluster.
+The CA the preflight verifies. Pinned by name AND bounded to its namespace — the pinned-in-a-ClusterRole
+version of this rule granted the same name in every namespace on the cluster.
+
+No longer conditional on the CA living outside the target Secret's namespace. That special case put this
+rule in the -oauth-target-create Role whenever the two namespaces matched, which is the default, so with
+extraction off the read vanished along with a Role about Secrets. One namespace, one purpose, one Role.
 */}}
-{{- if and .Values.oauthSecretExtraction.enabled (include "group-sync-operator-helm.needsCa" .Values.groupSync) $caElsewhere }}
+{{- if $caJob }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -236,23 +250,9 @@ rules:
   verbs: ["get", "list"]
   resourceNames: ["{{ .Values.oauthSecretExtraction.sourceSecret.name }}"]
 {{- end }}
-{{- if and (include "group-sync-operator-helm.needsCa" .Values.groupSync) (eq (include "group-sync-operator-helm.caNamespace" .) .Values.oauthSecretExtraction.targetSecret.namespace) }}
-# The CA the preflight verifies, when it is in this namespace.
-- apiGroups: [""]
-  resources: [{{ if eq (include "group-sync-operator-helm.caKind" .) "Secret" }}"secrets"{{ else }}"configmaps"{{ end }}]
-  verbs: ["get", "list"]
-  resourceNames: ["{{ include "group-sync-operator-helm.caName" . }}"]
-{{- end }}
-{{- if and (include "group-sync-operator-helm.needsCa" .Values.groupSync) .Values.oauthSecretExtraction.caCopy.enabled (eq (.Values.oauthSecretExtraction.caCopy.destinationCa.namespace | default .Values.groupSync.namespace) .Values.oauthSecretExtraction.targetSecret.namespace) }}
-# Same namespace as the target Secret, so the copy's rules belong in this Role rather than a second one.
-- apiGroups: [""]
-  resources: [{{ if eq (.Values.oauthSecretExtraction.caCopy.destinationCa.kind | default "ConfigMap") "Secret" }}"secrets"{{ else }}"configmaps"{{ end }}]
-  verbs: ["create"]
-- apiGroups: [""]
-  resources: [{{ if eq (.Values.oauthSecretExtraction.caCopy.destinationCa.kind | default "ConfigMap") "Secret" }}"secrets"{{ else }}"configmaps"{{ end }}]
-  verbs: ["get", "update", "patch"]
-  resourceNames: ["{{ .Values.oauthSecretExtraction.caCopy.destinationCa.name }}"]
-{{- end }}
+# The CA rules that used to be folded in here whenever the CA shared this namespace now live in
+# -oauth-ca-load and -oauth-ca-create, which follow the CA Job rather than this one. Folding them in was
+# what made the CA read and write disappear when oauthSecretExtraction.enabled went false.
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -274,10 +274,15 @@ subjects:
   namespace: {{ .Values.groupSync.namespace }}
 {{- end }}
 
-{{- if and .Values.oauthSecretExtraction.enabled (include "group-sync-operator-helm.needsCa" .Values.groupSync) .Values.oauthSecretExtraction.caCopy.enabled (ne (.Values.oauthSecretExtraction.caCopy.destinationCa.namespace | default .Values.groupSync.namespace) .Values.oauthSecretExtraction.targetSecret.namespace) }}
+{{- if $caRead }}
 ---
-# Only when the copy lands somewhere other than the target Secret's namespace — otherwise its create is
-# already covered by the Role above, and a second Role in the same namespace would just be noise.
+# Where the copy is written. Rendered wherever the destination is, rather than only when it differs from the
+# target Secret's namespace: that condition put these rules inside -oauth-target-create for the default
+# same-namespace case, so turning extraction off took the copy's own permissions with it.
+#
+# create AND get/update/patch, because the Job writes with `oc create --dry-run=client | oc apply`, and
+# apply reads the object before patching it. The previous different-namespace form of this Role granted
+# create alone: the first install succeeded and every upgrade after it failed on the read.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -285,13 +290,17 @@ metadata:
   namespace: {{ .Values.oauthSecretExtraction.caCopy.destinationCa.namespace | default .Values.groupSync.namespace }}
   labels:
     {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
-    app.kubernetes.io/component: oauth-secret-extraction
+    app.kubernetes.io/component: ldap-ca
   annotations:
     argocd.argoproj.io/sync-wave: "1"
 rules:
 - apiGroups: [""]
   resources: [{{ if eq (.Values.oauthSecretExtraction.caCopy.destinationCa.kind | default "ConfigMap") "Secret" }}"secrets"{{ else }}"configmaps"{{ end }}]
   verbs: ["create"]
+- apiGroups: [""]
+  resources: [{{ if eq (.Values.oauthSecretExtraction.caCopy.destinationCa.kind | default "ConfigMap") "Secret" }}"secrets"{{ else }}"configmaps"{{ end }}]
+  verbs: ["get", "update", "patch"]
+  resourceNames: ["{{ .Values.oauthSecretExtraction.caCopy.destinationCa.name }}"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

@@ -49,6 +49,34 @@ STEP 2: Wait for operator to be ready, then enable GroupSync CR
 
 Alternatively, enable OAuth secret extraction for automated setup:
   helm install {{ .Release.Name }} . --set oauthSecretExtraction.enabled=true
+
+WITH EXTRACTION OFF, THE BIND SECRET IS YOURS TO CREATE. Nothing in this release writes it, and the
+operator treats a missing key as an empty string rather than an error — so wrong key names give you an
+anonymous bind, not a failure:
+
+  oc create secret generic {{ .Values.oauthSecretExtraction.targetSecret.name }} \
+    -n {{ .Values.oauthSecretExtraction.targetSecret.namespace }} \
+    --from-literal=username='<bind DN>' --from-literal=password='<bind password>'
+
+The keys must be exactly username and password. The OAuth identity provider's own Secret uses bindPassword
+and is not managed by this chart.
+{{- end }}
+{{- if and (include "group-sync-operator-helm.needsCa" .Values.groupSync) (not (include "group-sync-operator-helm.caJobEnabled" .)) }}
+
+⚠️  NO CA IS SUPPLIED BY THIS RELEASE
+    The GroupSync CR loads {{ include "group-sync-operator-helm.caKind" . | lower }}/{{ include "group-sync-operator-helm.caName" . }} from {{ include "group-sync-operator-helm.caNamespace" . }}, but with
+    oauthSecretExtraction.caCopy.enabled and .enabled both false nothing here creates, copies or even
+    checks it. It must already exist, with the key {{ include "group-sync-operator-helm.caKey" . }}.
+{{- if eq (include "group-sync-operator-helm.caName" .) .Values.oauthSecretExtraction.caCopy.destinationCa.name }}
+
+    IT ALMOST CERTAINLY DOES NOT. groupSync.ca.name is still {{ .Values.oauthSecretExtraction.caCopy.destinationCa.name }}, which is the name the CA
+    copy WRITES — so it exists only when the copy runs, and the copy is off. Point groupSync.ca at the CA
+    you actually have, or set oauthSecretExtraction.caCopy.enabled=true. Left as it is, the operator
+    reconciles forever on "caSecret must be specified when insecure=false" and syncs no groups.
+{{- end }}
+
+    Verify before trusting it:
+      oc get {{ include "group-sync-operator-helm.caKind" . | lower }} {{ include "group-sync-operator-helm.caName" . }} -n {{ include "group-sync-operator-helm.caNamespace" . }} -o jsonpath='{.data.{{ include "group-sync-operator-helm.caKey" . }}}' | head -c 40
 {{- end }}
 
 This ensures the OperatorGroup and Subscription are created before the GroupSync CR.

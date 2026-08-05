@@ -2,7 +2,7 @@ apiVersion: v2
 name: group-sync-operator-helm
 description: A Helm chart to deploy the GroupSync Operator and its configuration for LDAP synchronization in OpenShift
 type: application
-version: 0.5.1
+version: 0.6.0
 appVersion: "1.1"
 home: https://github.com/ephico2real2/group-sync-operator-helm-chart
 icon: https://raw.githubusercontent.com/redhat-cop/group-sync-operator/master/assets/logo.png
@@ -19,11 +19,28 @@ sources:
 annotations:
   artifacthub.io/operator: "true"
   artifacthub.io/operatorCapabilities: Basic Install
-  # 0.4.1 is a patch: both changes make a broken configuration work and neither alters behaviour anyone
-  # was relying on. The 0.4.0 entries below are kept because Artifact Hub shows only the current release's
-  # list, and two of those DID change behaviour — a suite that was always green can now fail, and rfc2307
-  # values that were silently discarded now take effect. Anyone moving from 0.3.x still needs to read them.
+  # 0.6.0 is a minor, not a patch: the CA copy becomes reachable in a configuration where it previously
+  # could not run at all, and three behaviours change with it — the RBAC is reorganised (same effective
+  # permissions, different Role objects), one unused cluster-scoped grant is dropped, and a render-time
+  # guard now fires in a case it used to skip.
+  #
+  # Earlier entries are kept because Artifact Hub shows only the current release's list, and several of them
+  # DID change behaviour — a suite that was always green can now fail, rfc2307 values that were silently
+  # discarded now take effect, and trustedCA.injected now wins over a custom groupSync.ca.name. Anyone
+  # moving from 0.3.x or 0.4.x still needs to read them.
   artifacthub.io/changes: |
+    - kind: added
+      description: "The LDAP CA preflight and copy moved into their own hook Job (01.6-ldap-ca-job.yaml), gated by whether there is CA work to do rather than by oauthSecretExtraction.enabled. A cluster with no OAuth LDAP identity provider to extract a bind password from can now still have its CA copied into the operator's namespace: set oauthSecretExtraction.enabled=false and leave caCopy.enabled=true."
+    - kind: changed
+      description: "BEHAVIOUR: oauthSecretExtraction.enabled=false no longer silently removes the CA copy, its preflight and its RBAC. caCopy.enabled read like a peer flag and behaved like a subordinate one - with extraction off the copy vanished while the GroupSync CR went on naming ca-config-map-copy, so the operator reconciled forever on an object nothing created. With extraction off the bind Secret is yours to create, with the keys username and password; NOTES.txt now says so, and warns when groupSync.ca still names the copy that no longer runs."
+    - kind: fixed
+      description: "A CA copy whose destination is outside the target Secret's namespace now survives an upgrade. Its Role granted create alone, while the Job writes with `oc create --dry-run=client | oc apply` and apply reads the object before patching it - so the first install succeeded and every upgrade after it failed on the read."
+    - kind: security
+      description: "The cluster-scoped get on oauths/cluster is now granted only to the Jobs that can actually reach `oc get oauth cluster`. It was granted whenever caCopy.discoverFromOAuth was set, which is about the CA rather than the credentials, so a cluster supplying both bindDN and sourceSecret.name and not copying a CA carried a cluster-scoped grant nothing used. The render check asserts both directions and is verified against the empty-bindDN case the previous rule existed to protect."
+    - kind: changed
+      description: "BEHAVIOUR: the guard refusing a CA copy written as one kind and read as another now fires with oauthSecretExtraction.enabled=false too. That combination previously rendered happily and produced a CR pointing at an object of the wrong kind that nothing creates."
+    - kind: fixed
+      description: "The ca-coherence render check no longer fails two legitimate installs. It asserted that a Job preflights the CA, which conflated 'a Job exists' with 'the CA is satisfied' - so trustedCA.injected, where the chart itself creates the ConfigMap, and a bring-your-own CA that predates the release were both reported broken."
     - kind: fixed
       description: "subscription.name now supplies both the Subscription object's name and its spec.name (the OLM package), from one value, so they cannot diverge. spec.name was hardcoded while the object name was templated, and both hook Jobs match CSV and Deployment names - which derive from the package - using subscription.name. Renaming it sent them waiting for a CSV that never appears."
     - kind: security
