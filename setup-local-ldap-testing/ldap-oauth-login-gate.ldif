@@ -56,10 +56,21 @@
 # credentials: either can be rotated or revoked without taking the other down.
 #
 # It is ALSO a member of the gate group below, so the same account both binds for the provider and
-# serves as a login identity you can actually test with. That matters here because every user under
-# ou=People was imported with `userPassword: {SSHA}password123` — a literal string behind an {SSHA}
-# prefix, not a real hash — so slapd rejects every bind for them. This account's password is stored in
-# a form the server accepts, so it is the only identity in the directory that can currently log in.
+# serves as a login identity you can test with — one whose password is stored in a form the server
+# accepts, which is not true of every user here. Measured across ou=People:
+#
+#   john.doe, jane.smith, bob.wilson,   userPassword: {SSHA}password123, from
+#   alice.cooper, charlie.brown         ldap-structure-combined.ldif. That is a literal string behind an
+#                                       {SSHA} prefix, not a hash: the base64 body is 11 bytes and
+#                                       decodes to nothing usable, so slapd rejects EVERY bind for them.
+#
+#   lateef.o, dana.lee, sarah.jones     cleartext `newuser123`, from the later LDIFs. These bind fine,
+#                                       and lateef.o is in the gate group below — so it is a working
+#                                       console login with no extra setup.
+#
+# Give one of the malformed ones a usable password when you want a specific username:
+#   ldappasswd -x -D "cn=admin,dc=ephico2real,dc=com" -w admin123 \
+#     -s '<newpassword>' "uid=jane.smith,ou=People,dc=ephico2real,dc=com"
 #
 # extensibleObject is what allows uid on an organizationalRole entry. The provider searches for the
 # login attribute (uid), so without it this account could not be found no matter what the filter said.
