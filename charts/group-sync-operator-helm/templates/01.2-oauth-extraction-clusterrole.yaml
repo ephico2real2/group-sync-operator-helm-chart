@@ -71,14 +71,26 @@ rules:
 {{- end }}
 {{- $caRead := and .Values.oauthSecretExtraction.caCopy.enabled (include "group-sync-operator-helm.needsCa" .Values.groupSync) }}
 {{- $secretRead := not .Values.oauthSecretExtraction.sourceSecret.name }}
-{{- if and .Values.oauthSecretExtraction.enabled (or $caRead $secretRead) }}
+
+{{/*
+Roles, not more ClusterRole rules: these names are not known until the Job reads the OAuth CR, and an
+unpinned rule in a ClusterRole would grant them in EVERY namespace.
+
+TWO Roles, in two namespaces, because the Job reads the two objects from two different places:
+
+  the CA ConfigMap    caCopy.sourceCa.namespace       (CA_SRC_NS in the Job)
+  the bind Secret     oauthSecretExtraction.sourceSecret.namespace
+
+Both rules used to live in one Role in caCopy.sourceCa.namespace. They default to the same namespace
+(openshift-config), so it worked — but point sourceSecret.namespace anywhere else and the Job reads a
+Secret in a namespace nothing granted it, and fails with a Forbidden that names the right verb on the
+wrong namespace.
+
+get alone is not enough in either: listing is how the Job reports the available keys when the expected
+one is missing, and RBAC does not honour resourceNames for list.
+*/}}
+{{- if and .Values.oauthSecretExtraction.enabled $caRead }}
 ---
-# A Role, not more ClusterRole rules. These names are not known until the Job reads the OAuth CR,
-# and an unpinned rule in a ClusterRole would grant them in EVERY namespace. Scoped here to the one
-# namespace that holds them.
-#
-# get alone is not enough: listing is how the Job reports the available keys when the expected one
-# is missing, and RBAC does not honour resourceNames for list.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -90,18 +102,9 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "1"
 rules:
-{{- if $caRead }}
 - apiGroups: [""]
   resources: ["configmaps"]
   verbs: ["get", "list"]
-{{- end }}
-{{- if $secretRead }}
-# sourceSecret.name is unset, so the Job discovers it and the ClusterRole's pinned rule cannot
-# cover a name that is not known at render time.
-- apiGroups: [""]
-  resources: ["secrets"]
-  verbs: ["get", "list"]
-{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -117,6 +120,45 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
   name: {{ include "group-sync-operator-helm.fullname" . }}-oauth-ca-read
+subjects:
+- kind: ServiceAccount
+  name: {{ .Values.oauthSecretExtraction.serviceAccount.name }}
+  namespace: {{ .Values.groupSync.namespace }}
+{{- end }}
+
+{{- if and .Values.oauthSecretExtraction.enabled $secretRead }}
+---
+# sourceSecret.name is unset, so the Job discovers it from the OAuth CR and the ClusterRole's pinned
+# rule cannot cover a name that is not known at render time.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "group-sync-operator-helm.fullname" . }}-oauth-secret-read
+  namespace: {{ .Values.oauthSecretExtraction.sourceSecret.namespace }}
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: oauth-secret-extraction
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "group-sync-operator-helm.fullname" . }}-oauth-secret-read
+  namespace: {{ .Values.oauthSecretExtraction.sourceSecret.namespace }}
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: oauth-secret-extraction
+  annotations:
+    argocd.argoproj.io/sync-wave: "1"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "group-sync-operator-helm.fullname" . }}-oauth-secret-read
 subjects:
 - kind: ServiceAccount
   name: {{ .Values.oauthSecretExtraction.serviceAccount.name }}
