@@ -2,7 +2,7 @@ apiVersion: v2
 name: group-sync-operator-helm
 description: A Helm chart to deploy the GroupSync Operator and its configuration for LDAP synchronization in OpenShift
 type: application
-version: 0.4.1
+version: 0.4.2
 appVersion: "1.1"
 home: https://github.com/ephico2real2/group-sync-operator-helm-chart
 icon: https://raw.githubusercontent.com/redhat-cop/group-sync-operator/master/assets/logo.png
@@ -24,6 +24,12 @@ annotations:
   # list, and two of those DID change behaviour — a suite that was always green can now fail, and rfc2307
   # values that were silently discarded now take effect. Anyone moving from 0.3.x still needs to read them.
   artifacthub.io/changes: |
+    - kind: fixed
+      description: "A CA copy written as one kind and read as another is now refused at render time. Setting only groupSync.ca.kind=Secret left the extraction Job creating a ConfigMap while the GroupSync CR asked for a Secret, so the operator looked for an object nobody created."
+    - kind: fixed
+      description: "A customGroupSyncs item with neither groupCn nor filter is now refused. It previously rendered the literal %!s(<nil>) into the CR's LDAP filter, which the operator uses verbatim - it matches nothing, and the only symptom is a tenant that syncs no groups."
+    - kind: fixed
+      description: "NOTES.txt's LDAP verification command pointed at ldapsearch in the operator image (which is distroless and has no shell utilities), read bindDN/bindPassword from a Secret that holds username/password, and printed the raw groupSync.url so a discovered url came out blank. It now points at helm test."
     - kind: fixed
       description: "helm test now verifies the endpoint the GroupSync CR actually uses. The test pods baked groupSync.url, so on a discovery-based install (empty url derived from the cluster OAuth CR) they received an empty url and the suite failed outright - the qa-values.yaml path could never pass."
     - kind: fixed
