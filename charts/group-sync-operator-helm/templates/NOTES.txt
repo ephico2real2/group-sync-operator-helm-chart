@@ -23,8 +23,12 @@ and create the required GroupSync secret. The installation order is:
 6. GroupSync CR (sync-wave: 3)
 
 The GroupSync CRD itself is NOT in this list: `helm install` installs it from crds/ before it
-renders any template, which is the only ordering mechanism early enough. Under ArgoCD it comes
-from OLM at wave 0 instead, and Argo never sees crds/ at all.
+renders any template, which is the only ordering mechanism early enough.
+
+Under ArgoCD, set spec.source.helm.skipCrds: true. Argo renders with `helm template --include-crds`,
+so crds/ IS part of the Application unless you skip it — Argo would then manage the CRD, be able to
+prune it, and contend with OLM, which owns the same CRD through the Subscription. With skipCrds set,
+the CRD comes from OLM at wave 0 and crds/ stays a `helm install` mechanism only.
 
 The OAuth extraction job will:
 - Extract bindPassword from {{ .Values.oauthSecretExtraction.sourceSecret.name }} ({{ .Values.oauthSecretExtraction.sourceSecret.namespace }})
