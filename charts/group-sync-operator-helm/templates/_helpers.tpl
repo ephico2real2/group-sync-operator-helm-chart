@@ -60,9 +60,18 @@ rfc2307). Keeping one copy here means the two templates can never drift apart.
 True when the provider needs CA material: an ldaps:// URL always does, and insecure=false does even
 over plain ldap://. insecure only relaxes verification the operator performs itself; it cannot make
 a TLS handshake trust an unknown root.
+
+The scheme is read from the RESOLVED url, not from .url. With .url empty the url comes from the cluster's
+OAuth CR at install time, so reading the raw field saw "" and concluded no CA was needed for what is in
+fact an ldaps:// endpoint — no caSecret on the CR, no CA preflight, no copy. That only surfaced with
+insecure=true, since insecure=false makes this true regardless of scheme.
+
+Deliberately ldapUrlOrEmpty and not ldapUrl: see the note above ldapUrlOrEmpty for why a fail cannot be
+reached from here. When nothing resolves, this falls back to the insecure flag alone — the pre-existing
+behaviour, unchanged.
 */}}
 {{- define "group-sync-operator-helm.needsCa" -}}
-{{- if or (hasPrefix "ldaps://" (.url | default "")) (not .insecure) -}}true{{- end -}}
+{{- if or (hasPrefix "ldaps://" (include "group-sync-operator-helm.ldapUrlOrEmpty" .)) (not .insecure) -}}true{{- end -}}
 {{- end }}
 
 {{- define "group-sync-operator-helm.groupsyncSpec" -}}
@@ -158,8 +167,18 @@ differing only in the basedn that is being stripped anyway.
 lookup reads the LIVE cluster, so this resolves during helm install/upgrade only. With .url empty and
 no cluster to read — helm template, --dry-run, an offline GitOps render — there is nothing to derive
 from and the render fails rather than emitting a GroupSync with no url.
+
+Resolution is split in two:
+
+  ldapUrlOrEmpty  resolves, or yields "". Used where the answer is advisory.
+  ldapUrl         resolves, or FAILS the render. Used where a url must exist — a GroupSync provider.
+
+The split exists because needsCa has to ask "what scheme is this?" from templates that render with no
+GroupSync CR at all (01.2, 01.5). With both groupSync.enabled and customGroupSyncs.enabled false the
+chart renders 20 objects including the extraction Job, and nothing resolves a url — so a fail reached
+from needsCa would break a configuration that renders today.
 */}}
-{{- define "group-sync-operator-helm.ldapUrl" -}}
+{{- define "group-sync-operator-helm.ldapUrlOrEmpty" -}}
 {{- if .url -}}
 {{- .url -}}
 {{- else -}}
@@ -172,9 +191,14 @@ from and the render fails rather than emitting a GroupSync with no url.
 {{- end -}}
 {{- end -}}
 {{- end -}}
-{{- if not $found -}}
-{{- fail (printf "groupSync.url is empty and no LDAP url could be derived from the cluster OAuth CR.\n  Either set groupSync.url, or install against a cluster whose OAuth CR has an LDAP identity provider.\n  Note that `helm template` and --dry-run cannot read the cluster at all, so url must be set for those.") -}}
-{{- end -}}
 {{- $found -}}
 {{- end -}}
+{{- end }}
+
+{{- define "group-sync-operator-helm.ldapUrl" -}}
+{{- $url := include "group-sync-operator-helm.ldapUrlOrEmpty" . -}}
+{{- if not $url -}}
+{{- fail (printf "groupSync.url is empty and no LDAP url could be derived from the cluster OAuth CR.\n  Either set groupSync.url, or install against a cluster whose OAuth CR has an LDAP identity provider.\n  Note that `helm template` and --dry-run cannot read the cluster at all, so url must be set for those.") -}}
+{{- end -}}
+{{- $url -}}
 {{- end }}
