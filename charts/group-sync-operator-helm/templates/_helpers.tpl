@@ -89,9 +89,6 @@ there is no way to tell "left alone" from "deliberately set to the same string".
 The key is ca-bundle.crt, not ca.crt: that is what OpenShift's injector writes into a ConfigMap carrying
 config.openshift.io/inject-trusted-cabundle, and looking for ca.crt in one finds nothing.
 
-Takes (list $root $cfg) and mutates $cfg, so every caller must deepCopy first — otherwise this reaches
-into .Values and every later template sees the change.
-*/}}
 The four caX helpers below are the single source of truth, and EVERY consumer must use them. There are
 more consumers than the CR: the extraction Job preflights the CA, the ClusterRole grants read on it, and
 both test pods verify it. Resolving it for the CR alone left those pointing at the copy — caught by

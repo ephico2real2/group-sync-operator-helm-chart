@@ -145,6 +145,20 @@ def no_cluster_wide_credential_write(docs):
     and lower concern — the InstallPlan approver's `patch` on installplans is one, guarded at runtime by
     a check that refuses an InstallPlan not naming this chart's subscription — and folding them in here
     would make this check about scope hygiene in general rather than about credential material.
+
+    resourceNames DOES NOT EXCUSE A RULE HERE, and an earlier version of this check wrongly skipped any
+    rule that had them. resourceNames pins the NAME and says nothing about the NAMESPACE, so a pinned rule
+    in a ClusterRole grants that name in every namespace. Measured live against a rule reading
+    `secrets [get,list,create,update,patch,delete] resourceNames:[ldap-group-sync]`:
+
+        update secrets/ldap-group-sync -n kube-system       yes
+        delete secrets/ldap-group-sync -n default           yes
+        update secrets/UNRELATED-name  -n kube-system       no    <- the pin works, on the name only
+
+    Overwriting an EXISTING Secret in someone else's namespace is strictly stronger than creating a new
+    one where none exists, so the pinned form was the more dangerous of the two. The invariant for this
+    chart is therefore simple: a ClusterRole may not write secrets or configmaps at all, pinned or not.
+    Everything the Job needs is namespace-bounded.
     """
     bad = []
     for d in docs:
@@ -156,10 +170,14 @@ def no_cluster_wide_credential_write(docs):
             if not hit:
                 continue
             writes = sorted(set(r.get('verbs', [])) & WRITE)
-            if writes and not r.get('resourceNames'):
-                bad.append(f"ClusterRole/{d['metadata']['name']} grants {writes} on "
-                           f"{sorted(hit)} in EVERY namespace with no resourceNames — move it to a "
-                           f"Role in the namespace it writes to (resourceNames cannot pin create)")
+            if not writes:
+                continue
+            pinned = r.get('resourceNames')
+            how = (f"pinned to {pinned} — but resourceNames bounds the NAME, not the NAMESPACE, so those "
+                   f"names are writable in EVERY namespace" if pinned else
+                   "with no resourceNames, so every such object in every namespace")
+            bad.append(f"ClusterRole/{d['metadata']['name']} grants {writes} on {sorted(hit)} {how}. "
+                       f"Move it to a Role in the namespace it writes to.")
     return bad
 
 def ca_coherence(docs):
