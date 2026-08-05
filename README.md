@@ -52,6 +52,10 @@ Working examples live in the chart: `crc-values.yaml` (LDAPS with the CA copied)
 publishes nothing while still showing a green tick. That has already cost this repo two releases,
 including one carrying a security fix.
 
+Known open defects, with evidence and severity, are in
+[docs/ADVERSARIAL_REVIEW.md](docs/ADVERSARIAL_REVIEW.md) — 30 validated findings from a three-reviewer
+pass, mostly documentation and setup-script hygiene, plus the one that still matters most (#31).
+
 
 
 ## Install ordering, and why `helm install` used to fail
