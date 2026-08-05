@@ -119,16 +119,31 @@ spec:
             scope: {{ .rfc2307.groupsQuery.scope | quote }}
             timeout: {{ .rfc2307.groupsQuery.timeout }}
 
+          # These seven come from values. They were written as fixed literals here while values.yaml
+          # declared every one of them under groupSync.rfc2307, so setting groupMembershipAttributes to
+          # uniqueMember for a groupOfUniqueNames directory, or userNameAttributes to sAMAccountName,
+          # produced member and uid regardless. The defaults are the literals that were here.
+          #
+          # Attribute names are quoted: unquoted, a directory attribute called y, n, on or off would be
+          # coerced to a boolean, and the CRD wants strings.
           groupNameAttributes:
-            - cn
-          groupUIDAttribute: dn
+            {{- range .rfc2307.groupNameAttributes | default (list "cn") }}
+            - {{ . | quote }}
+            {{- end }}
+          groupUIDAttribute: {{ .rfc2307.groupUIDAttribute | default "dn" | quote }}
           groupMembershipAttributes:
-            - member
+            {{- range .rfc2307.groupMembershipAttributes | default (list "member") }}
+            - {{ . | quote }}
+            {{- end }}
           userNameAttributes:
-            - uid
-          userUIDAttribute: dn
-          tolerateMemberNotFoundErrors: true
-          tolerateMemberOutOfScopeErrors: true
+            {{- range .rfc2307.userNameAttributes | default (list "uid") }}
+            - {{ . | quote }}
+            {{- end }}
+          userUIDAttribute: {{ .rfc2307.userUIDAttribute | default "dn" | quote }}
+          # hasKey, not `default true`: Helm's default treats false as empty, so an explicit false would
+          # be turned back into true — the same class of silent override this block is fixing.
+          tolerateMemberNotFoundErrors: {{ if hasKey .rfc2307 "tolerateMemberNotFoundErrors" }}{{ .rfc2307.tolerateMemberNotFoundErrors }}{{ else }}true{{ end }}
+          tolerateMemberOutOfScopeErrors: {{ if hasKey .rfc2307 "tolerateMemberOutOfScopeErrors" }}{{ .rfc2307.tolerateMemberOutOfScopeErrors }}{{ else }}true{{ end }}
 {{- end -}}
 
 {{/*
