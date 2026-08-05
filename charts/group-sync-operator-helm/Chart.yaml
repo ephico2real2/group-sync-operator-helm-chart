@@ -2,7 +2,7 @@ apiVersion: v2
 name: group-sync-operator-helm
 description: A Helm chart to deploy the GroupSync Operator and its configuration for LDAP synchronization in OpenShift
 type: application
-version: 0.4.0
+version: 0.4.1
 appVersion: "1.1"
 home: https://github.com/ephico2real2/group-sync-operator-helm-chart
 icon: https://raw.githubusercontent.com/redhat-cop/group-sync-operator/master/assets/logo.png
@@ -19,10 +19,17 @@ sources:
 annotations:
   artifacthub.io/operator: "true"
   artifacthub.io/operatorCapabilities: Basic Install
-  # Two of these change BEHAVIOUR rather than just fixing a defect, which is why 0.3.0 -> 0.4.0 is a
-  # minor bump: a suite that was always green can now fail, and rfc2307 values that were silently
-  # discarded now take effect. Anyone pinning a version should read those two before upgrading.
+  # 0.4.1 is a patch: both changes make a broken configuration work and neither alters behaviour anyone
+  # was relying on. The 0.4.0 entries below are kept because Artifact Hub shows only the current release's
+  # list, and two of those DID change behaviour — a suite that was always green can now fail, and rfc2307
+  # values that were silently discarded now take effect. Anyone moving from 0.3.x still needs to read them.
   artifacthub.io/changes: |
+    - kind: fixed
+      description: "helm test now verifies the endpoint the GroupSync CR actually uses. The test pods baked groupSync.url, so on a discovery-based install (empty url derived from the cluster OAuth CR) they received an empty url and the suite failed outright - the qa-values.yaml path could never pass."
+    - kind: fixed
+      description: The test pods default CA_KEY to ca.crt exactly as the CR does, so an emptied groupSync.ca.key no longer makes the suite report an unreadable CA on a ConfigMap that is fine.
+    - kind: fixed
+      description: The Role granting read on the discovered bind Secret is created in oauthSecretExtraction.sourceSecret.namespace instead of caCopy.sourceCa.namespace. They default to the same namespace, so this only mattered once they differed - then the extraction Job read a Secret nothing had granted it.
     - kind: security
       description: The helm test ServiceAccount no longer has cluster-wide get/list on secrets, configmaps, pods, namespaces and events. Reads are scoped to the release namespace, with secrets pinned to the credentials secret by name.
     - kind: changed
