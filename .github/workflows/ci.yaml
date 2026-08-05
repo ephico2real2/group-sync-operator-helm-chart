@@ -43,7 +43,7 @@ jobs:
         run: |
           set -uo pipefail
           CHECKS="oauth-rbac source-secret-rbac ca-coherence ca-copy-kind test-env-matches-cr
-                  no-cluster-wide-secret-read no-cluster-wide-credential-write no-artifacts"
+                  no-cluster-wide-secret-read no-cluster-wide-credential-write olm-name-consistent no-artifacts"
           fails=0
 
           # must_render <label> -- <helm args...>
@@ -100,6 +100,10 @@ jobs:
             --set oauthSecretExtraction.caCopy.destinationCa.kind=Secret
           must_render "a tenant with an explicit filter" -- \
             "$URL" --set-json 'customGroupSyncs.items=[{"name":"t","enabled":true,"filter":"(cn=x)"}]'
+          # subscription.name IS the OLM package name, and supplies the Subscription object's name too.
+          # They must never diverge: the CSV is "<package>.v<version>" and both hook Jobs match on it.
+          must_render "subscription.name renamed, both names follow" -- \
+            "$URL" --set subscription.name=some-mirrored-package
 
           # Incoherent inputs must be refused at render time, not silently mis-deployed.
           must_fail "CA written as ConfigMap, read as Secret" "reads it as a Secret" -- \

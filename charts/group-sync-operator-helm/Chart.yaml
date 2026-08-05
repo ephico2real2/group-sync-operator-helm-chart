@@ -2,7 +2,7 @@ apiVersion: v2
 name: group-sync-operator-helm
 description: A Helm chart to deploy the GroupSync Operator and its configuration for LDAP synchronization in OpenShift
 type: application
-version: 0.5.0
+version: 0.5.1
 appVersion: "1.1"
 home: https://github.com/ephico2real2/group-sync-operator-helm-chart
 icon: https://raw.githubusercontent.com/redhat-cop/group-sync-operator/master/assets/logo.png
@@ -24,6 +24,8 @@ annotations:
   # list, and two of those DID change behaviour — a suite that was always green can now fail, and rfc2307
   # values that were silently discarded now take effect. Anyone moving from 0.3.x still needs to read them.
   artifacthub.io/changes: |
+    - kind: fixed
+      description: "subscription.name now supplies both the Subscription object's name and its spec.name (the OLM package), from one value, so they cannot diverge. spec.name was hardcoded while the object name was templated, and both hook Jobs match CSV and Deployment names - which derive from the package - using subscription.name. Renaming it sent them waiting for a CSV that never appears."
     - kind: security
       description: "The extraction ServiceAccount no longer has create on secrets and configmaps in every namespace. RBAC ignores resourceNames for create so those rules could not be pinned by name; they are now Roles in the namespaces the Job actually writes to. Verified live: create secrets in default and kube-system are now denied, in the release namespace still allowed."
     - kind: changed
