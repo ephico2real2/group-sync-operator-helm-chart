@@ -51,6 +51,7 @@ it carries that name. Edit the source and run `helm upgrade`.
 | `15-bootstrap-cert-manager-ca.sh` | **LDAPS only**: `apply` builds the cert-manager PKI and serving certificate — must run BEFORE the server manifest. `verify` proves the chain from inside the cluster. `trust-cluster` publishes the root to `proxy/cluster.spec.trustedCA` for the injected path |
 | `20-import-ldap-data.sh` | Imports the RBAC groups and test users |
 | `30-manage-ldap-server.sh` | Server lifecycle: deploy, test, restart, logs |
+| `40-setup-oauth-ldap-login.sh` | Adds the directory to `oauth/cluster` as an LDAP identity provider, so you can **log in** with it and not just sync groups from it. Auto-detects LDAPS vs plain LDAP. `bind-account` creates the bind service account and the login gate group; `apply` writes the provider; `verify` checks it. **Additive** — the existing HTPasswd/kubeadmin login is preserved |
 | `50-simulate-ldap-operations.sh` | Adds/removes members to exercise sync |
 | `60-force-groupsync.sh` | Forces a GroupSync now instead of waiting for its schedule |
 | `90-verify-all-resources.sh` | Verifies all resources and configuration |
@@ -64,9 +65,75 @@ it carries that name. Edit the source and run `helm upgrade`.
 | `ldap-bda-rbac-groups.ldif` | 12 Big-Data Analytics groups (`bda-rbac-*`) — demo for the custom GroupSync CR |
 | `ldap-rbac-groups-spar-trno.ldif` | 6 namespace RBAC groups for the `spar` / `trno` mnemonics — pairs with the BDA namespace demo |
 | `ldap-normalize-user-dns.ldif` | One-time migration: renames the 5 `cn=` users to `uid=` so all member DNs resolve |
-| `configure-acls.ldif` | Service account ACL permissions |
+| `ldap-oauth-login-gate.ldif` | The OAuth bind service account and `app-ssb-autobahnusers`, the group you must be in to log in. Re-runnable |
+| `configure-acls.ldif` | Service account ACL permissions — **two** accounts: one for group sync, one for OAuth login |
 | `kubectl-import-commands.md` | Manual import command documentation |
 | `README.md` | This comprehensive documentation |
+
+### 🔑 Logging in with the directory, not just syncing from it
+
+`40-setup-oauth-ldap-login.sh` adds the test directory to `oauth/cluster` as an LDAP identity provider.
+Two reasons to bother:
+
+1. It makes the lab match an enterprise, where the cluster authenticates against the same directory it
+   syncs groups from. Group sync alone never exercises that.
+2. It is the only way to reach the chart's **OAuth discovery** path. With `groupSync.url`,
+   `oauthSecretExtraction.bindDN` and `sourceSecret.name` left empty, the chart derives all three from
+   the first LDAP provider in the OAuth CR. With no such provider, that code is unreachable — which is
+   why `qa-values.yaml` could not be tested before.
+
+```bash
+./40-setup-oauth-ldap-login.sh bind-account   # bind service account, gate group, ACL, Secret
+./40-setup-oauth-ldap-login.sh apply          # add the provider (additive)
+./40-setup-oauth-ldap-login.sh verify
+```
+
+**Two service accounts, on purpose.** `ocp-ldap-bind-serviceid` is the group-sync operator's;
+`ocp-oauth-bind-serviceid` is the identity provider's. Either can be rotated without taking the other
+down. The OAuth one is also a member of the gate group, so it doubles as a login identity you can
+actually test with — which matters because every user under `ou=People` was imported with
+`userPassword: {SSHA}password123`, a literal string behind an `{SSHA}` prefix rather than a real hash,
+so slapd rejects every bind for them. Give one a usable password with:
+
+```bash
+oc exec -c openldap -n ldap-testing <pod> -- \
+  ldappasswd -x -D "cn=admin,dc=ephico2real,dc=com" -w admin123 \
+  -s '<newpassword>' "uid=john.doe,ou=People,dc=ephico2real,dc=com"
+```
+
+#### Group-restricted login: absolute DNs, never a wildcard
+
+Membership in `app-ssb-autobahnusers` is what lets you authenticate at all; the `app-ocp-rbac-*` groups
+then decide what you can do. The restriction is a filter on the **user** entry, because an OpenShift LDAP
+provider does exactly one search and never expands a group's members.
+
+A wildcard does not work there, and fails **silently**. Measured on this directory:
+
+| filter | attribute syntax | matches |
+|---|---|---|
+| `(cn=app-ocp-rbac-*)` | `cn` — string, **has** a SUBSTR rule | 41 |
+| `(member=cn=john*,…)` | `member` — DN, **no** SUBSTR rule | **0** |
+| `(member=uid=john.doe,…)` | `member` — DN, absolute | 14 |
+
+A substring assertion against a DN-syntax attribute returns success with zero rows — no error. So
+`(memberOf=cn=app-ocp-rbac-*,ou=Groups,…)` denies everyone, which at a login prompt looks exactly like
+the directory being down. Name groups absolutely and OR them for several:
+`(|(memberOf=<dn1>)(memberOf=<dn2>))`. `apply` refuses to write a provider whose filter matches no user,
+so this cannot be shipped by accident.
+
+The gate group is `groupOfUniqueNames`/`uniqueMember` rather than `groupOfNames`/`member` because this
+directory's memberof overlay is configured for the former — verified, not assumed:
+
+```
+olcOverlay={0}memberof,olcDatabase={1}mdb,cn=config
+  olcMemberOfGroupOC:  groupOfUniqueNames
+  olcMemberOfMemberAD: uniqueMember
+```
+
+That is also why no user entry has ever carried `memberOf` despite the overlay being loaded: the
+`app-ocp-rbac-*` groups are `groupOfNames`, which the overlay never matches. Creating the gate group in
+the shape the overlay already watches populates `memberOf` immediately, with no slapd reconfiguration
+and no change to the existing RBAC groups.
 
 ## 🚀 Quick Start
 

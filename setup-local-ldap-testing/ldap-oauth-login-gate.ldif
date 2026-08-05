@@ -1,0 +1,113 @@
+# OAuth login: a dedicated bind service account, and the group you must belong to to log in.
+#
+# Mirrors the production shape, where a TrustedApplications service account binds for the identity
+# provider and a single "gate" group decides who may authenticate at all — separately from the
+# app-ocp-rbac-* groups, which decide what you can DO once you are in.
+#
+# Apply with:  ./40-setup-oauth-ldap-login.sh bind-account
+# or by hand:  oc exec -c openldap -n ldap-testing <pod> -- \
+#                ldapmodify -c -x -D "cn=admin,dc=ephico2real,dc=com" -w admin123 -f <this file>
+#
+# ldapmodify, not ldapadd, and -c: the file is written to be re-runnable. The two `add` records fail
+# harmlessly with "Already exists (68)" on a second run and -c carries on, then the `modify` records
+# use `replace`, which reaches the same end state whether or not the values were already there.
+#
+# ── Why the gate group is groupOfUniqueNames and not groupOfNames ─────────────────────────────────
+#
+# An OpenShift LDAP identity provider performs ONE search, for the user, and the group restriction has
+# to be a condition on the USER entry. That means the user needs a memberOf attribute, which OpenLDAP
+# only maintains through the memberof overlay.
+#
+# This directory's overlay is already loaded and is configured — measured, not assumed — as:
+#
+#   olcOverlay={0}memberof,olcDatabase={1}mdb,cn=config
+#     olcMemberOfGroupOC:  groupOfUniqueNames
+#     olcMemberOfMemberAD: uniqueMember
+#     olcMemberOfMemberOfAD: memberOf
+#
+# The app-ocp-rbac-* groups are groupOfNames with `member`, so the overlay never matches them and no
+# user entry had ever had a memberOf. Creating THIS group as groupOfUniqueNames with `uniqueMember`
+# matches what the overlay already watches, so memberOf appears on these members the moment this file
+# is applied — no slapd reconfiguration, and nothing about the 41 existing RBAC groups changes.
+#
+# If you ever need to gate login on one of the app-ocp-rbac-* groups instead, the overlay has to be
+# repointed at groupOfNames/member, and because the overlay does not backfill you must then re-write
+# every group's member attribute for memberOf to appear. That is a bigger, riskier change; this file
+# deliberately avoids needing it.
+#
+# ── Why a wildcard group filter does not work ────────────────────────────────────────────────────
+#
+# Measured on this directory:
+#
+#   (cn=app-ocp-rbac-*)                       41 matches   cn is a string attribute, has SUBSTR
+#   (member=cn=john*,ou=People,...)            0 matches   member is DN-syntax, no SUBSTR rule
+#   (member=uid=john.doe,ou=People,...)       14 matches   absolute DN
+#
+# A substring assertion against a DN-syntax attribute returns success with zero rows — no error. So a
+# filter like (memberOf=cn=app-ocp-rbac-*,ou=Groups,...) silently denies everyone, which at a login
+# prompt is indistinguishable from the directory being down. Group names must be ABSOLUTE, which is
+# exactly what a real production config does. For several groups, OR them.
+#
+# Membership below is a deliberate SUBSET of the directory's users. A gate that everybody is inside
+# proves nothing, so half are left out to make the denial path testable too.
+
+# ── Bind service account for the identity provider ───────────────────────────────────────────────
+# Separate from cn=ocp-ldap-bind-serviceid, which the group-sync operator uses. Two consumers, two
+# credentials: either can be rotated or revoked without taking the other down.
+#
+# It is ALSO a member of the gate group below, so the same account both binds for the provider and
+# serves as a login identity you can actually test with. That matters here because every user under
+# ou=People was imported with `userPassword: {SSHA}password123` — a literal string behind an {SSHA}
+# prefix, not a real hash — so slapd rejects every bind for them. This account's password is stored in
+# a form the server accepts, so it is the only identity in the directory that can currently log in.
+#
+# extensibleObject is what allows uid on an organizationalRole entry. The provider searches for the
+# login attribute (uid), so without it this account could not be found no matter what the filter said.
+dn: cn=ocp-oauth-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com
+changetype: add
+objectClass: simpleSecurityObject
+objectClass: organizationalRole
+objectClass: extensibleObject
+cn: ocp-oauth-bind-serviceid
+uid: ocp-oauth-bind-serviceid
+description: Bind account for the OpenShift OAuth LDAP identity provider, and a testable login identity
+userPassword: oauthbindpassword123
+
+# ── The login gate group ─────────────────────────────────────────────────────────────────────────
+# Same name as production. Being in this group is what makes you able to log in to OpenShift at all;
+# what you can do afterwards comes from the app-ocp-rbac-* groups the operator syncs.
+dn: cn=app-ssb-autobahnusers,ou=Groups,dc=ephico2real,dc=com
+changetype: add
+objectClass: groupOfUniqueNames
+cn: app-ssb-autobahnusers
+description: Gate group - membership is required to authenticate to OpenShift
+uniqueMember: uid=john.doe,ou=People,dc=ephico2real,dc=com
+uniqueMember: uid=jane.smith,ou=People,dc=ephico2real,dc=com
+uniqueMember: uid=alice.cooper,ou=People,dc=ephico2real,dc=com
+uniqueMember: uid=lateef.o,ou=People,dc=ephico2real,dc=com
+uniqueMember: cn=ocp-oauth-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com
+
+# ── Re-run safety ────────────────────────────────────────────────────────────────────────────────
+# `replace` reaches the intended state whether or not the adds above did anything, so an existing
+# directory converges instead of being left half-updated.
+dn: cn=ocp-oauth-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com
+changetype: modify
+replace: objectClass
+objectClass: simpleSecurityObject
+objectClass: organizationalRole
+objectClass: extensibleObject
+-
+replace: uid
+uid: ocp-oauth-bind-serviceid
+-
+replace: userPassword
+userPassword: oauthbindpassword123
+
+dn: cn=app-ssb-autobahnusers,ou=Groups,dc=ephico2real,dc=com
+changetype: modify
+replace: uniqueMember
+uniqueMember: uid=john.doe,ou=People,dc=ephico2real,dc=com
+uniqueMember: uid=jane.smith,ou=People,dc=ephico2real,dc=com
+uniqueMember: uid=alice.cooper,ou=People,dc=ephico2real,dc=com
+uniqueMember: uid=lateef.o,ou=People,dc=ephico2real,dc=com
+uniqueMember: cn=ocp-oauth-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com
