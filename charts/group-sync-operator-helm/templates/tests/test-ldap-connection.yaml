@@ -27,8 +27,22 @@ spec:
         - |
           /scripts/ldap-connection-test.sh
       env:
+        # Every value here has to be the one the GroupSync CR ACTUALLY got, not the raw values field, or
+        # the suite verifies something the operator is not using. Two of them differ:
+        #
+        #   url     the CR takes it from ldapUrl, which falls back to the cluster's OAuth LDAP provider
+        #           when groupSync.url is empty. Baking .Values.groupSync.url meant that on a
+        #           discovery-based install — the qa-values.yaml shape — this rendered "" while the CR
+        #           held a real url, and both scripts treat an empty url as a hard failure. So
+        #           `helm test` failed outright on the documented QA path.
+        #   ca.key  the CR defaults it to ca.crt; without the same default an emptied ca.key gives the
+        #           CR ca.crt and the test "", so it looks for a key that is not there.
+        #
+        # ldapUrlOrEmpty, not ldapUrl: the fail-closed variant would break a render that works today.
+        # With groupSync.enabled=false and customGroupSyncs.enabled=false the chart still emits 22
+        # objects including these test pods, and nothing there can derive a url. Measured, not assumed.
         - name: GROUPSYNC_URL
-          value: "{{ .Values.groupSync.url }}"
+          value: "{{ include "group-sync-operator-helm.ldapUrlOrEmpty" .Values.groupSync }}"
         - name: GROUPSYNC_INSECURE
           value: "{{ .Values.groupSync.insecure }}"
         - name: GROUPSYNC_NAMESPACE
@@ -46,7 +60,7 @@ spec:
         - name: CA_NAMESPACE
           value: "{{ .Values.groupSync.ca.namespace }}"
         - name: CA_KEY
-          value: "{{ .Values.groupSync.ca.key }}"
+          value: "{{ .Values.groupSync.ca.key | default "ca.crt" }}"
         - name: CA_KIND
           value: "{{ .Values.groupSync.ca.kind | default "ConfigMap" }}"
         - name: SYNC_WAIT_SECONDS

@@ -33,8 +33,11 @@ spec:
           value: "{{ .Values.groupSync.namespace }}"
         - name: GROUPSYNC_NAME
           value: "{{ .Values.groupSync.name }}"
+        # Resolved, not raw — see the note in test-ldap-connection.yaml. Baking
+        # .Values.groupSync.url rendered "" on a discovery-based install while the CR held a real url,
+        # and this suite treats an unparseable url as a failed precondition.
         - name: GROUPSYNC_URL
-          value: "{{ .Values.groupSync.url }}"
+          value: "{{ include "group-sync-operator-helm.ldapUrlOrEmpty" .Values.groupSync }}"
         - name: GROUPSYNC_INSECURE
           value: "{{ .Values.groupSync.insecure }}"
         - name: GROUPSYNC_SCHEDULE
@@ -54,7 +57,7 @@ spec:
         - name: CA_NAMESPACE
           value: "{{ .Values.groupSync.ca.namespace }}"
         - name: CA_KEY
-          value: "{{ .Values.groupSync.ca.key }}"
+          value: "{{ .Values.groupSync.ca.key | default "ca.crt" }}"
         - name: OAUTH_ENABLED
           value: "{{ .Values.oauthSecretExtraction.enabled }}"
       volumeMounts:
