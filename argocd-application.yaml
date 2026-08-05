@@ -18,6 +18,14 @@ spec:
     helm:
       valueFiles:
         - values.yaml
+      # ArgoCD renders Helm sources with `helm template --include-crds`, so the vendored
+      # crds/groupsyncs.redhatcop.redhat.io.yaml IS part of this Application unless it is skipped.
+      # Without this, Argo takes management of a CRD that OLM already owns through the Subscription and
+      # CSV, and with prune + selfHeal below it can delete or revert it. crds/ exists only so a plain
+      # `helm install` can resolve the GroupSync kind before rendering templates — see the README.
+      #
+      # Deleting that CRD cascades to every GroupSync CR, so leave this set.
+      skipCrds: true
   destination:
     server: https://kubernetes.default.svc
     namespace: group-sync-operator

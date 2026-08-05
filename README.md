@@ -77,8 +77,55 @@ adopting it:
 
 - on a cluster that already has the CRD from OLM, Helm **skips** it and leaves `olm.managed=true` intact
 - `helm uninstall` never deletes anything in `crds/`, so removing the release cannot cascade-delete a GroupSync CR
-- `helm template` does **not** emit `crds/`, so **ArgoCD never sees the file** — it cannot prune it or fight OLM over it
-- under Argo the CRD still comes from OLM at wave 0, exactly as before
+- plain `helm template` does **not** emit `crds/` — measured: 0 CustomResourceDefinition objects
+
+#### ArgoCD does see `crds/` — set `skipCrds: true`
+
+An earlier version of this section claimed ArgoCD never sees the file. That is wrong, and it is worth
+correcting rather than deleting, because the conclusion drawn from it was the opposite of the truth.
+
+ArgoCD renders Helm sources with `helm template --include-crds`, which **does** emit `crds/`:
+
+```
+$ helm template r charts/group-sync-operator-helm --set groupSync.url=ldaps://x:636
+0 CustomResourceDefinition objects
+$ helm template r charts/group-sync-operator-helm --set groupSync.url=ldaps://x:636 --include-crds
+1 CustomResourceDefinition object
+```
+
+So under ArgoCD the vendored CRD **is** part of the Application: Argo applies it, takes management of
+it, can prune it if it ever leaves the source, and can contend with OLM — which owns the same CRD
+through the Subscription and CSV — over its contents. Exactly the risk the old wording said did not
+exist.
+
+Set `skipCrds` on the Application so `crds/` stays a `helm install` mechanism only, and let OLM
+remain the single owner under GitOps. `argocd-application.yaml` in this repo now sets it:
+
+```yaml
+spec:
+  source:
+    helm:
+      skipCrds: true
+```
+
+⚠️ **Adding `skipCrds` to an Application that is already running without it needs care.** The CRD
+leaves the rendered source, and this Application has `prune: true` — a resource that leaves the
+source gets pruned. Deleting the GroupSync CRD **cascades to every GroupSync CR on the cluster**.
+
+Before changing an existing Application, check whether Argo is managing the CRD:
+
+```bash
+oc get crd groupsyncs.redhatcop.redhat.io \
+  -o jsonpath='{.metadata.annotations.argocd\.argoproj\.io/tracking-id}{"\n"}'
+```
+
+Empty means Argo never took it (OLM installed it first) and setting `skipCrds` changes nothing about
+its lifecycle. Non-empty means Argo owns it — annotate it `argocd.argoproj.io/sync-options: Prune=false`
+first, or sync with pruning disabled, and confirm the CRD survives before re-enabling automated prune.
+
+Not verified on a live cluster: this cluster runs no ArgoCD (`openshift-gitops` is not installed), so
+the prune behaviour above is from ArgoCD's documented semantics, not measured here. What *was* measured
+is the part that matters for the fix — `--include-crds` emits the file, plain `helm template` does not.
 
 The trade-off, stated plainly: it is a vendored copy of an OLM-owned CRD, and Helm never updates
 `crds/` on upgrade. If the operator ships a new CRD version, refresh the file. OLM remains
