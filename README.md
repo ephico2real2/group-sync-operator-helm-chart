@@ -312,9 +312,12 @@ different owners** — and mixing them up is quiet rather than loud, so it is wo
 | `openshift-config/ldap-secret` | `bindPassword` | **not this chart.** The bind password for the cluster's OAuth LDAP identity provider. On a real cluster it already exists, placed there by whatever automation manages platform credentials, and it pre-dates this chart |
 | `group-sync-operator/ldap-group-sync` | `username`, `password` | **this chart**, when `oauthSecretExtraction.enabled` is true (the default) — the extraction Job writes it on every install and upgrade |
 
-The chart only ever **reads** the first one. Its RBAC grants `get` and `list` on that name in
-`openshift-config` and nothing else, so it cannot write it even by accident — the same separation the
-chart keeps from `proxy/cluster.spec.trustedCA`.
+The chart only ever **reads** the first one: it is granted no write verb on it anywhere, so it cannot
+change it even by accident — the same separation the chart keeps from `proxy/cluster.spec.trustedCA`. How
+narrowly that read is scoped depends on one value. With `oauthSecretExtraction.sourceSecret.name` set it is
+pinned to that one name. Left empty — the default — the name is discovered from the OAuth CR at runtime, so
+no `resourceNames` can cover it and the read spans Secrets in `openshift-config`. Read-only either way, but
+if that is too broad for your cluster, name the Secret explicitly.
 
 The OAuth provider's **bind DN is a field on the OAuth CR** (`.ldap.bindDN`), not a secret key. There is
 no `bindDN` key anywhere in this design.

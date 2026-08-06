@@ -75,10 +75,15 @@ groupSync:
   #
   # The OAuth one holds the bind password for the cluster's LDAP identity provider. On a real cluster it
   # already exists — placed there by whatever automation manages platform credentials, and predating this
-  # chart. The chart only READS it: its RBAC grants get and list on that one name and nothing else, so it
-  # cannot write it even by mistake. Rotate it at the source and re-run the upgrade; see the rotation
-  # section in README.md. (The OAuth provider's bind DN is a field on the OAuth CR, not a Secret key at
-  # all — there is no `bindDN` key in this design.)
+  # chart. The chart only READS it: it is granted no write verb on it anywhere, so it cannot change it even
+  # by mistake. How narrowly that read is scoped depends on sourceSecret.name below — set, it is pinned to
+  # that one name; left empty (the default) the name is discovered from the OAuth CR at runtime, so no
+  # resourceNames can cover it and the read spans Secrets in openshift-config. Read-only either way; name
+  # the Secret explicitly if that is too broad for your cluster.
+  #
+  # Rotate it at the source and re-run the upgrade; see the rotation section in README.md. (The OAuth
+  # provider's bind DN is a field on the OAuth CR, not a Secret key at all — there is no `bindDN` key in
+  # this design.)
   #
   # With oauthSecretExtraction.enabled below, this Secret is machine-managed: the Job rewrites it on every
   # install and upgrade, so hand-editing it is pointless. With extraction disabled it is yours to create,
