@@ -46,3 +46,13 @@ trustedCA:
   injected:
     enabled: true
     name: ldap-trusted-ca
+
+# The bda-rbac tenant, which this lab's directory carries and which used to arrive from the chart defaults.
+# Declared here now that values.yaml ships customGroupSyncs.items empty — the lab states what it wants.
+customGroupSyncs:
+  enabled: true
+  items:
+    - name: bda-rbac-groupsync
+      enabled: true
+      groupCn: "bda-rbac-*"
+      schedule: "0 * * * *"

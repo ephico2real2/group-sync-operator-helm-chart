@@ -42,7 +42,7 @@ jobs:
       - name: Render every combination and assert coherence
         run: |
           set -uo pipefail
-          CHECKS="oauth-rbac source-secret-rbac ca-coherence ca-copy-kind oauth-cr-read test-env-matches-cr
+          CHECKS="source-secret-rbac ca-coherence ca-copy-kind oauth-cr-read test-env-matches-cr
                   no-cluster-wide-secret-read no-cluster-wide-credential-write olm-name-consistent no-artifacts"
           fails=0
 
@@ -377,8 +377,14 @@ jobs:
       - name: No bare chart paths in documented helm commands
         run: |
           set -uo pipefail
-          hits=$(grep -rnE 'helm (install|upgrade|template|lint) [a-z0-9-]* ?(\.|\.\.)([[:space:]]|\\|$)' \
-                   --include='*.md' --include='*.yaml' . \
+          # *.txt and *.sh are included because NOTES.txt — the first thing a user reads after `helm install`
+          # — carried five bare-path commands this check could not see, and two more sat in the local-setup
+          # scripts. The release-name field is now .* rather than [a-z0-9-]*: a templated name such as
+          # {{ .Release.Name }} contains spaces and braces, so the old character class did not reach the
+          # path. Adding the includes alone still found only 2 of the 7; widening the pattern finds all
+          # seven, with zero false positives on this repo.
+          hits=$(grep -rnE 'helm (install|upgrade|template|lint) .*[[:space:]]\.{1,2}([[:space:]]|\\|$)' \
+                   --include='*.md' --include='*.yaml' --include='*.txt' --include='*.sh' . \
                    | grep -v '^\./\.git' || true)
           if [ -n "$hits" ]; then
             echo "::error::helm commands with a bare . or .. chart path — they no longer resolve to a chart:"

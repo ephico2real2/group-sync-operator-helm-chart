@@ -55,7 +55,10 @@ spec:
               NAMESPACE="{{ .Values.groupSync.namespace }}"
               SUBSCRIPTION="{{ .Values.subscription.name }}"
               CRD="groupsyncs.redhatcop.redhat.io"
-              ATTEMPTS={{ div .Values.operatorWait.waitSeconds 5 }}
+              # max 1: integer division makes any waitSeconds below 5 render ATTEMPTS=0, and `seq 1 0` is
+              # empty — so every loop below was skipped and the Job failed instantly, blaming OLM for what is
+              # really a values typo. DEADLINE still caps the total, so a floor of one attempt is safe.
+              ATTEMPTS={{ max 1 (div .Values.operatorWait.waitSeconds 5) }}
               INTERVAL=5
 
               # ONE budget, shared by all three checks, which is what values.yaml has always promised.
@@ -76,9 +79,12 @@ spec:
                    -o jsonpath='{range .items[*]}{.metadata.name}{"|"}{.status.phase}{"\n"}{end}' \
                   2>/dev/null | grep "^${SUBSCRIPTION}\." | head -1
               }
+              # Anchored: a bare substring match also selects a Deployment belonging to a DIFFERENT
+              # operator whose name merely starts the same way. OLM names this one
+              # <subscription>-controller-manager, so require the boundary.
               operator_deploy() {
                 oc get deploy -n "$NAMESPACE" --ignore-not-found=true -o name 2>/dev/null \
-                  | grep -- "${SUBSCRIPTION}" | head -1
+                  | grep -E -- "/${SUBSCRIPTION}(-|$)" | head -1
               }
               deploy_ready() {
                 local dep="$1"

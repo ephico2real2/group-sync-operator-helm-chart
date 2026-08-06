@@ -42,3 +42,13 @@ oauthSecretExtraction:
     # Created by 10-setup-oauth-secrets.sh in openshift-config, holding the password under the
     # bindPassword key.
     name: ldap-secret
+
+# The bda-rbac tenant, which this lab's directory carries and which used to arrive from the chart defaults.
+# Declared here now that values.yaml ships customGroupSyncs.items empty — the lab states what it wants.
+customGroupSyncs:
+  enabled: true
+  items:
+    - name: bda-rbac-groupsync
+      enabled: true
+      groupCn: "bda-rbac-*"
+      schedule: "0 * * * *"

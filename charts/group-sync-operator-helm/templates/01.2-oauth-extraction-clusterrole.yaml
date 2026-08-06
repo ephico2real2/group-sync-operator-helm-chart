@@ -30,15 +30,17 @@ rules:
 # Job makes no namespace call, so with extraction off these rules would grant a cluster-scoped verb nothing
 # asks for.
 #
-# Access to namespaces (to check and create target namespace if needed)
-- apiGroups: [""]
-  resources: ["namespaces"]
-  verbs: ["get", "list", "create"]
-  resourceNames: ["{{ .Values.oauthSecretExtraction.targetSecret.namespace }}"]
-# Access to check namespace existence
+# get, pinned to the one namespace the extraction Job checks for. No create: this rule carried
+# resourceNames AND create, and RBAC never authorises create through a name-pinned rule — a create request
+# carries its name in the body, not the path — so `oc create namespace` was Forbidden all along. Measured:
+# `create namespaces` -> no. The Job now says so plainly instead of dying on a bare Forbidden.
+#
+# No list either: RBAC does not honour resourceNames for list, so the verb was inert on a pinned rule, and
+# nothing lists namespaces.
 - apiGroups: [""]
   resources: ["namespaces"]
   verbs: ["get"]
+  resourceNames: ["{{ .Values.oauthSecretExtraction.targetSecret.namespace }}"]
 {{- end }}
 {{- if include "group-sync-operator-helm.oauthCrRead" . }}
 # Reads the cluster OAuth CR. Which Job needs this, and why, is decided by the oauthCrRead helper: the
@@ -136,7 +138,9 @@ metadata:
 rules:
 - apiGroups: [""]
   resources: [{{ if eq (include "group-sync-operator-helm.caKind" .) "Secret" }}"secrets"{{ else }}"configmaps"{{ end }}]
-  verbs: ["get", "list"]
+  # No list: inert on a pinned rule. The preflight's key-listing diagnostic reads the object with
+  # `oc extract`, and the unpinned list it genuinely needs is granted by -oauth-ca-read on the SOURCE.
+  verbs: ["get"]
   resourceNames: ["{{ include "group-sync-operator-helm.caName" . }}"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -177,10 +181,17 @@ metadata:
 rules:
 - apiGroups: [""]
   resources: ["secrets"]
+{{- if $secretRead }}
+  # Unpinned: the name is discovered from the OAuth CR at runtime, so no resourceNames can cover it. list is
+  # both needed and honoured here — it is how the Job reports the available keys when the expected one is
+  # missing.
   verbs: ["get", "list"]
-  {{- if not $secretRead }}
+{{- else }}
+  # Pinned, so list is omitted: RBAC does not honour resourceNames for list, which made the verb inert.
+  # Measured: `list secrets` -> no, `get secret/<name>` -> yes.
+  verbs: ["get"]
   resourceNames: ["{{ .Values.oauthSecretExtraction.sourceSecret.name }}"]
-  {{- end }}
+{{- end }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -233,13 +244,14 @@ rules:
   verbs: ["create"]
 - apiGroups: [""]
   resources: ["secrets"]
-  verbs: ["get", "list", "update", "patch", "delete"]
+  # No list: inert on a pinned rule.
+  verbs: ["get", "update", "patch", "delete"]
   resourceNames: ["{{ .Values.oauthSecretExtraction.targetSecret.name }}"]
 {{- if and .Values.oauthSecretExtraction.sourceSecret.name (eq .Values.oauthSecretExtraction.sourceSecret.namespace .Values.oauthSecretExtraction.targetSecret.namespace) }}
 # The source OAuth Secret happens to live in this namespace too.
 - apiGroups: [""]
   resources: ["secrets"]
-  verbs: ["get", "list"]
+  verbs: ["get"]
   resourceNames: ["{{ .Values.oauthSecretExtraction.sourceSecret.name }}"]
 {{- end }}
 # The CA rules that used to be folded in here whenever the CA shared this namespace now live in

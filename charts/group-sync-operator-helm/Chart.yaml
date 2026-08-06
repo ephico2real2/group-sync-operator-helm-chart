@@ -2,7 +2,7 @@ apiVersion: v2
 name: group-sync-operator-helm
 description: A Helm chart to deploy the GroupSync Operator and its configuration for LDAP synchronization in OpenShift
 type: application
-version: 0.9.0
+version: 0.10.0
 appVersion: "1.1"
 home: https://github.com/ephico2real2/group-sync-operator-helm-chart
 icon: https://raw.githubusercontent.com/redhat-cop/group-sync-operator/master/assets/logo.png
@@ -29,6 +29,20 @@ annotations:
   # discarded now take effect, and trustedCA.injected now wins over a custom groupSync.ca.name. Anyone
   # moving from 0.3.x or 0.4.x still needs to read them.
   artifacthub.io/changes: |
+    - kind: security
+      description: "The InstallPlan approver is a namespaced Role instead of a ClusterRole. It granted patch on installplans in EVERY namespace - measured yes in default, kube-system and openshift-monitoring - and approving an InstallPlan installs an operator, so that was the broadest grant this chart held. All eight of its API calls are namespace-scoped, so nothing was lost. It also now grants clusterserviceversions get/list, without which csv_phase() returned empty on every call (measured: list clusterserviceversions -> no) leaving two diagnostic escape paths dead, and it no longer discards stderr, so a Forbidden stops looking like 'OLM staged nothing'."
+    - kind: fixed
+      description: "The extraction Job no longer attempts oc create namespace, which was never authorised: the rule granting it carried resourceNames, and RBAC does not honour those for create - a create request carries its name in the body, not the path. Measured: create namespaces -> no, so pointing targetSecret.namespace at a namespace that does not exist killed the Job on a bare Forbidden. It now says which namespace is missing and how to create it. The grant is not widened instead, because on a cluster-scoped resource an unpinned create means 'any namespace on this cluster'."
+    - kind: changed
+      description: "BEHAVIOUR: customGroupSyncs.items ships EMPTY. It carried an enabled bda-rbac-groupsync item, so a default install created a second GroupSync CR nobody asked for - on the reference cluster it owned 21 of 64 synced groups. If you relied on that default, declare the item in your own values file before upgrading; otherwise its CR disappears and the groups it owned stop being refreshed. They are not deleted, since prune runs during a sync and there is no longer a CR to sync."
+    - kind: changed
+      description: "BEHAVIOUR: the helm-test ClusterRole and ClusterRoleBinding are named <release>-<namespace>-test-role/-binding. Cluster-scoped names built from the release name alone collide when the same release name is used in two namespaces, which is the normal way to run this chart twice. Not the fullname helper: values.yaml pins fullnameOverride, which discards the release name and would collide harder."
+    - kind: fixed
+      description: "Six inert or misleading items: waitSeconds below 5 rendered ATTEMPTS=0 so every wait loop was skipped and the Job failed instantly blaming OLM for a values typo; the ownership guards that refuse to approve a plan this chart did not cause matched the subscription name unanchored, so a different package starting with the same string satisfied them; list was dropped from five name-pinned RBAC rules where RBAC ignores it; the documented oauthSecretExtraction.ttlSecondsAfterFinished was inert because both consumers carry the field as a comment; six comment-only annotations blocks rendered annotations: null; and qa-values.yaml documented an install passing -f qa-values.yaml, a file that only exists inside the tarball."
+    - kind: fixed
+      description: "argocd-application.yaml sets RespectIgnoreDifferences=true and now ships the ignoreDifferences entry it needs. Without it, Argo saw a permanent diff on the injected-CA ConfigMap the chart deliberately ships empty and, with selfHeal, emptied it on every sync - breaking LDAPS verification until OpenShift refilled it. The chart stated the requirement in two places and satisfied it in none."
+    - kind: fixed
+      description: "CI's bare-chart-path check covers *.txt and *.sh and no longer relies on a character class a templated release name defeats, so it finally sees the five commands in NOTES.txt and two in the local-setup scripts that pointed at a directory with no Chart.yaml. The render-check list also no longer registers one assertion twice under two names, which reported 10 checks where there are 9."
     - kind: fixed
       description: "helm uninstall no longer leaves the credentials Secret and the CA copy behind. Both are written imperatively from inside hook Job containers, so they never appear in the stored release manifest and Helm has never known about them - measured on a real uninstall, the release went away and both objects stayed. A pre-delete hook Job now removes them by name, using delete verbs pinned to those two names; pre-delete because Helm runs it before deleting the release's own resources, so the ServiceAccount and Roles the Job needs still exist. The Jobs also now stamp both objects with the release's labels and the meta.helm.sh annotations, which makes them selectable by release and lets a later chart version adopt them - but note those annotations govern adoption only and do NOT cause deletion, which is why the pre-delete Job is the mechanism."
     - kind: fixed

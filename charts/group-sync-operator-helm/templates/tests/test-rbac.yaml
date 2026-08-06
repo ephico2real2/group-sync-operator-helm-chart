@@ -5,21 +5,23 @@ kind: ServiceAccount
 metadata:
   name: {{ .Release.Name }}-test-sa
   namespace: {{ .Values.groupSync.namespace }}
-  annotations:
-    # Not a helm test hook. helm test --logs fetches pod logs for every test hook and fails
-    # with 'unable to get pod logs ...: pods "..." not found' on any hook that is not a Pod.
-    # As an ordinary release resource this also exists before the test Jobs run.
+  # Not a helm test hook. helm test --logs fetches pod logs for every test hook and fails
+  # with 'unable to get pod logs ...: pods "..." not found' on any hook that is not a Pod.
+  # As an ordinary release resource this also exists before the test Jobs run.
   labels:
     {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: {{ .Release.Name }}-test-role
-  annotations:
-    # Not a helm test hook. helm test --logs fetches pod logs for every test hook and fails
-    # with 'unable to get pod logs ...: pods "..." not found' on any hook that is not a Pod.
-    # As an ordinary release resource this also exists before the test Jobs run.
+  # CLUSTER-SCOPED, so the name must distinguish releases in DIFFERENT namespaces. The release name alone
+  # does not: the same release name in two namespaces is the normal way to run this chart twice. Not the
+  # fullname helper either — values.yaml pins fullnameOverride, which discards the release name entirely and
+  # would make this collide harder rather than less.
+  name: {{ .Release.Name }}-{{ .Release.Namespace }}-test-role
+  # Not a helm test hook. helm test --logs fetches pod logs for every test hook and fails
+  # with 'unable to get pod logs ...: pods "..." not found' on any hook that is not a Pod.
+  # As an ordinary release resource this also exists before the test Jobs run.
   labels:
     {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
 # CLUSTER-SCOPED RESOURCES ONLY. This used to grant secrets, pods, configmaps and events across every
@@ -93,10 +95,9 @@ kind: Role
 metadata:
   name: {{ .Release.Name }}-test-ca-role
   namespace: {{ include "group-sync-operator-helm.caNamespace" . }}
-  annotations:
-    # Not a helm test hook. helm test --logs fetches pod logs for every test hook and fails
-    # with 'unable to get pod logs ...: pods "..." not found' on any hook that is not a Pod.
-    # As an ordinary release resource this also exists before the test Jobs run.
+  # Not a helm test hook. helm test --logs fetches pod logs for every test hook and fails
+  # with 'unable to get pod logs ...: pods "..." not found' on any hook that is not a Pod.
+  # As an ordinary release resource this also exists before the test Jobs run.
   labels:
     {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
 rules:
@@ -104,7 +105,8 @@ rules:
 # referenced directly, and granting the wrong one leaves the test unable to read it.
 - apiGroups: [""]
   resources: [{{ if eq (include "group-sync-operator-helm.caKind" .) "Secret" }}"secrets"{{ else }}"configmaps"{{ end }}]
-  verbs: ["get", "list"]
+  # No list: RBAC does not honour resourceNames for list, so it was inert on this pinned rule.
+  verbs: ["get"]
   resourceNames: ["{{ include "group-sync-operator-helm.caName" . }}"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -112,10 +114,9 @@ kind: RoleBinding
 metadata:
   name: {{ .Release.Name }}-test-ca-binding
   namespace: {{ include "group-sync-operator-helm.caNamespace" . }}
-  annotations:
-    # Not a helm test hook. helm test --logs fetches pod logs for every test hook and fails
-    # with 'unable to get pod logs ...: pods "..." not found' on any hook that is not a Pod.
-    # As an ordinary release resource this also exists before the test Jobs run.
+  # Not a helm test hook. helm test --logs fetches pod logs for every test hook and fails
+  # with 'unable to get pod logs ...: pods "..." not found' on any hook that is not a Pod.
+  # As an ordinary release resource this also exists before the test Jobs run.
   labels:
     {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
 subjects:
@@ -130,11 +131,11 @@ roleRef:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: {{ .Release.Name }}-test-binding
-  annotations:
-    # Not a helm test hook. helm test --logs fetches pod logs for every test hook and fails
-    # with 'unable to get pod logs ...: pods "..." not found' on any hook that is not a Pod.
-    # As an ordinary release resource this also exists before the test Jobs run.
+  # Cluster-scoped: see the ClusterRole above.
+  name: {{ .Release.Name }}-{{ .Release.Namespace }}-test-binding
+  # Not a helm test hook. helm test --logs fetches pod logs for every test hook and fails
+  # with 'unable to get pod logs ...: pods "..." not found' on any hook that is not a Pod.
+  # As an ordinary release resource this also exists before the test Jobs run.
   labels:
     {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
 subjects:
@@ -143,7 +144,7 @@ subjects:
   namespace: {{ .Values.groupSync.namespace }}
 roleRef:
   kind: ClusterRole
-  name: {{ .Release.Name }}-test-role
+  name: {{ .Release.Name }}-{{ .Release.Namespace }}-test-role
   apiGroup: rbac.authorization.k8s.io
 {{- end }}
 
