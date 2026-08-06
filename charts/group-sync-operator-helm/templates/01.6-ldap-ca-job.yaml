@@ -1,23 +1,21 @@
-{{/*
-Preflights the CA the operator will load, and — when oauthSecretExtraction.caCopy is on — copies it into
-the operator's namespace.
-
-Split out of 01.5-oauth-secret-extraction-job.yaml, where all of this sat inside the extraction Job and was
-therefore gated by oauthSecretExtraction.enabled. A cluster with no OAuth LDAP identity provider to extract
-a bind password FROM still needs its CA: with extraction off the copy silently vanished while the CR went on
-naming ca-config-map-copy. See caJobEnabled in _helpers.tpl for the gate.
-
-The copy is only useful if the operator reads it as the kind the Job wrote it as. These are two
-independent values and nothing tied them together, so setting only groupSync.ca.kind: Secret left the
-Job creating a ConfigMap while the CR asked for a Secret — the operator then looks for an object that
-does not exist, and the first symptom is a reconcile error naming a Secret nobody created.
-
-Refused at render time rather than coerced: coercing would silently override whichever value the user
-meant, and there is no way to tell which one that was.
-
-The guard no longer requires extraction to be on. With a copy configured and extraction off it used to
-render happily and hand the operator a CR pointing at an object of the wrong kind that nothing creates.
-*/}}
+# Preflights the CA the operator will load, and — when oauthSecretExtraction.caCopy is on — copies it into
+# the operator's namespace.
+#
+# Split out of 01.5-oauth-secret-extraction-job.yaml, where all of this sat inside the extraction Job and was
+# therefore gated by oauthSecretExtraction.enabled. A cluster with no OAuth LDAP identity provider to extract
+# a bind password FROM still needs its CA: with extraction off the copy silently vanished while the CR went on
+# naming ca-config-map-copy. See caJobEnabled in _helpers.tpl for the gate.
+#
+# The copy is only useful if the operator reads it as the kind the Job wrote it as. These are two
+# independent values and nothing tied them together, so setting only groupSync.ca.kind: Secret left the
+# Job creating a ConfigMap while the CR asked for a Secret — the operator then looks for an object that
+# does not exist, and the first symptom is a reconcile error naming a Secret nobody created.
+#
+# Refused at render time rather than coerced: coercing would silently override whichever value the user
+# meant, and there is no way to tell which one that was.
+#
+# The guard no longer requires extraction to be on. With a copy configured and extraction off it used to
+# render happily and hand the operator a CR pointing at an object of the wrong kind that nothing creates.
 {{- if .Values.oauthSecretExtraction.caCopy.enabled }}
 {{- $wrote := .Values.oauthSecretExtraction.caCopy.destinationCa.kind | default "ConfigMap" }}
 {{- $reads := include "group-sync-operator-helm.caKind" . }}

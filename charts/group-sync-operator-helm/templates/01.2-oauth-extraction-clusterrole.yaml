@@ -54,34 +54,30 @@ rules:
   resourceNames: ["cluster"]
 {{- end }}
 {{- end }}
-{{/*
-The CA Roles follow the CA Job, NOT oauthSecretExtraction.enabled. They used to be gated on the extraction
-flag because the CA work lived in the extraction Job; now that it has its own Job, gating them that way
-would render the Job with no permission to read or write the CA it exists for.
-*/}}
+# The CA Roles follow the CA Job, NOT oauthSecretExtraction.enabled. They used to be gated on the extraction
+# flag because the CA work lived in the extraction Job; now that it has its own Job, gating them that way
+# would render the Job with no permission to read or write the CA it exists for.
 {{- $caJob := include "group-sync-operator-helm.caJobEnabled" . }}
 {{- $caRead := and $caJob .Values.oauthSecretExtraction.caCopy.enabled }}
 {{- $secretRead := not .Values.oauthSecretExtraction.sourceSecret.name }}
-{{/* The source Secret needs its own Role unless it sits in the namespace the target Role covers. */}}
+# The source Secret needs its own Role unless it sits in the namespace the target Role covers.
 {{- $srcElsewhere := ne .Values.oauthSecretExtraction.sourceSecret.namespace .Values.oauthSecretExtraction.targetSecret.namespace }}
 
-{{/*
-Roles, not more ClusterRole rules: these names are not known until the Job reads the OAuth CR, and an
-unpinned rule in a ClusterRole would grant them in EVERY namespace.
-
-TWO Roles, in two namespaces, because the Job reads the two objects from two different places:
-
-  the CA ConfigMap    caCopy.sourceCa.namespace       (CA_SRC_NS in the Job)
-  the bind Secret     oauthSecretExtraction.sourceSecret.namespace
-
-Both rules used to live in one Role in caCopy.sourceCa.namespace. They default to the same namespace
-(openshift-config), so it worked — but point sourceSecret.namespace anywhere else and the Job reads a
-Secret in a namespace nothing granted it, and fails with a Forbidden that names the right verb on the
-wrong namespace.
-
-get alone is not enough in either: listing is how the Job reports the available keys when the expected
-one is missing, and RBAC does not honour resourceNames for list.
-*/}}
+# Roles, not more ClusterRole rules: these names are not known until the Job reads the OAuth CR, and an
+# unpinned rule in a ClusterRole would grant them in EVERY namespace.
+#
+# TWO Roles, in two namespaces, because the Job reads the two objects from two different places:
+#
+#   the CA ConfigMap    caCopy.sourceCa.namespace       (CA_SRC_NS in the Job)
+#   the bind Secret     oauthSecretExtraction.sourceSecret.namespace
+#
+# Both rules used to live in one Role in caCopy.sourceCa.namespace. They default to the same namespace
+# (openshift-config), so it worked — but point sourceSecret.namespace anywhere else and the Job reads a
+# Secret in a namespace nothing granted it, and fails with a Forbidden that names the right verb on the
+# wrong namespace.
+#
+# get alone is not enough in either: listing is how the Job reports the available keys when the expected
+# one is missing, and RBAC does not honour resourceNames for list.
 {{- if $caRead }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -119,14 +115,12 @@ subjects:
   namespace: {{ .Values.groupSync.namespace }}
 {{- end }}
 
-{{/*
-The CA the preflight verifies. Pinned by name AND bounded to its namespace — the pinned-in-a-ClusterRole
-version of this rule granted the same name in every namespace on the cluster.
-
-No longer conditional on the CA living outside the target Secret's namespace. That special case put this
-rule in the -oauth-target-create Role whenever the two namespaces matched, which is the default, so with
-extraction off the read vanished along with a Role about Secrets. One namespace, one purpose, one Role.
-*/}}
+# The CA the preflight verifies. Pinned by name AND bounded to its namespace — the pinned-in-a-ClusterRole
+# version of this rule granted the same name in every namespace on the cluster.
+#
+# No longer conditional on the CA living outside the target Secret's namespace. That special case put this
+# rule in the -oauth-target-create Role whenever the two namespaces matched, which is the default, so with
+# extraction off the read vanished along with a Role about Secrets. One namespace, one purpose, one Role.
 {{- if $caJob }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -208,19 +202,17 @@ subjects:
   namespace: {{ .Values.groupSync.namespace }}
 {{- end }}
 
-{{/*
-The two `create` grants, moved out of the ClusterRole and into the namespaces the Job actually creates in.
-
-RBAC ignores resourceNames for create — a create rule cannot be pinned to a name, so the ONLY thing that
-can bound it is a namespace. In a ClusterRole it was bounded by nothing: this ServiceAccount could create
-a Secret, and a ConfigMap, in every namespace on the cluster. Create-only is narrower than it sounds — it
-cannot read or overwrite an existing object — but planting an object under a name something else later
-mounts is a real cluster-wide write primitive, and nothing here needs it.
-
-The Job creates in exactly two places, both of which default to the release namespace:
-  the target Secret   oauthSecretExtraction.targetSecret.namespace
-  the CA copy         oauthSecretExtraction.caCopy.destinationCa.namespace
-*/}}
+# The two `create` grants, moved out of the ClusterRole and into the namespaces the Job actually creates in.
+#
+# RBAC ignores resourceNames for create — a create rule cannot be pinned to a name, so the ONLY thing that
+# can bound it is a namespace. In a ClusterRole it was bounded by nothing: this ServiceAccount could create
+# a Secret, and a ConfigMap, in every namespace on the cluster. Create-only is narrower than it sounds — it
+# cannot read or overwrite an existing object — but planting an object under a name something else later
+# mounts is a real cluster-wide write primitive, and nothing here needs it.
+#
+# The Job creates in exactly two places, both of which default to the release namespace:
+#   the target Secret   oauthSecretExtraction.targetSecret.namespace
+#   the CA copy         oauthSecretExtraction.caCopy.destinationCa.namespace
 {{- if .Values.oauthSecretExtraction.enabled }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
