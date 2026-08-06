@@ -284,6 +284,61 @@ subscription:
   # Namespace where the catalog source is located
   sourceNamespace: openshift-marketplace
 
+  # Compute resources for the OPERATOR's own pod, passed through to the Subscription's
+  # spec.config.resources.
+  #
+  # Set by default, and deliberately LOWER per container than what the operator's own CSV declares. Measured
+  # on the shipped bundle: `manager` requests 300m/200Mi and `kube-rbac-proxy` requests NOTHING, with no
+  # limits anywhere. Because OLM applies one block to every container (see 1 below), 100m each means the pod
+  # asks for 200m — LESS than the 300m it asks for today — so this default cannot make the operator harder to
+  # schedule than it already is, while giving the sidecar the floor it never had.
+  #
+  # Verified live at these values: both containers 100m/100Mi, pod Burstable, 0 restarts, no OOM, and both
+  # CRs completing a full sync (21 and 41 groups).
+  #
+  # THREE THINGS TO KNOW BEFORE SETTING THIS. All three were measured against a live cluster, not inferred.
+  #
+  # 1. EVERY NUMBER COUNTS TWICE. OLM applies one resources block to EVERY container in the pod and has no
+  #    per-container form, so `cpu: 500m` asks the scheduler for 1000m — 500m for the manager and 500m for
+  #    the kube-rbac-proxy sidecar that previously requested nothing. Size for the pod, not the container.
+  #
+  # 2. IT REPLACES, IT DOES NOT MERGE. The manager's CSV-declared 300m/200Mi disappears the moment this is
+  #    set. So a requests-only configuration must still ask for at least what the manager needs, or the
+  #    operator has been quietly downgraded.
+  #
+  # 3. TOO LARGE FAILS QUIETLY. If the total does not fit the node, the new pod sits Pending with
+  #    "Insufficient cpu", the OLD pod keeps serving, and `helm upgrade` still reports success — nothing
+  #    turns red. After setting this, check that the rollout actually completed:
+  #
+  #      oc rollout status deploy/<subscription.name>-controller-manager -n <groupSync.namespace>
+  #
+  # requests and limits are independent, which is the point of a pass-through. Setting requests alone is the
+  # production shape for a busy directory: the operator is guaranteed its share and can still burst, and the
+  # pod stays Burstable rather than becoming Guaranteed.
+  #
+  #   resources:
+  #     requests:
+  #       cpu: 500m          # remember: x2 containers = 1000m asked of the scheduler
+  #       memory: 500Mi
+  #
+  # Add limits only to cap it; matching limits to requests makes the pod Guaranteed, which also means it is
+  # OOMKilled rather than throttled when memory runs out.
+  #
+  # To hand sizing back to the operator's own CSV entirely, use `null` — NOT `{}`:
+  #
+  #     subscription:
+  #       resources: null          # in a values file
+  #     --set subscription.resources=null
+  #
+  # `{}` does NOT work, and this was measured rather than assumed. Helm coalesces a user-supplied empty map
+  # with the chart default and copies the default's sub-keys straight back in, so `resources: {}` still
+  # renders 100m/100Mi. Individual leaves can be dropped the same way — `--set
+  # subscription.resources.requests.cpu=null` leaves memory in place and removes only the cpu request.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 100Mi
+
 # -------------------- OAuth Secret Extraction Configuration --------------------
 # Controls the Job that extracts password from OAuth LDAP secret and creates GroupSync secret
 oauthSecretExtraction:

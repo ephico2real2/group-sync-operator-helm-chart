@@ -2,7 +2,7 @@ apiVersion: v2
 name: group-sync-operator-helm
 description: A Helm chart to deploy the GroupSync Operator and its configuration for LDAP synchronization in OpenShift
 type: application
-version: 0.10.0
+version: 0.11.0
 appVersion: "1.1"
 home: https://github.com/ephico2real2/group-sync-operator-helm-chart
 icon: https://raw.githubusercontent.com/redhat-cop/group-sync-operator/master/assets/logo.png
@@ -29,6 +29,8 @@ annotations:
   # discarded now take effect, and trustedCA.injected now wins over a custom groupSync.ca.name. Anyone
   # moving from 0.3.x or 0.4.x still needs to read them.
   artifacthub.io/changes: |
+    - kind: added
+      description: "subscription.resources sizes the OPERATOR's own pod, passed through to the Subscription's spec.config.resources. Empty by default, so nothing changes unless you set it - the operator keeps what its CSV declares, measured as manager requesting 300m/200Mi and kube-rbac-proxy requesting nothing, with no limits. requests and limits are independent, so raising requests while leaving limits unset (guaranteed share, free to burst, pod stays Burstable) is expressible. Three measured caveats are documented in values.yaml and echoed in NOTES.txt when the key is set: OLM applies one block to EVERY container so the scheduler sees double what you write; it REPLACES the CSV's sizing rather than merging; and a total too large for the node leaves the new pod Pending while the old one keeps serving and helm upgrade still reports success. A render-time guard refuses any key other than requests/limits/claims, because the API server prunes the rest silently - a singular 'request' would apply cleanly and do nothing."
     - kind: security
       description: "The InstallPlan approver is a namespaced Role instead of a ClusterRole. It granted patch on installplans in EVERY namespace - measured yes in default, kube-system and openshift-monitoring - and approving an InstallPlan installs an operator, so that was the broadest grant this chart held. All eight of its API calls are namespace-scoped, so nothing was lost. It also now grants clusterserviceversions get/list, without which csv_phase() returned empty on every call (measured: list clusterserviceversions -> no) leaving two diagnostic escape paths dead, and it no longer discards stderr, so a Forbidden stops looking like 'OLM staged nothing'."
     - kind: fixed

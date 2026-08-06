@@ -1,3 +1,12 @@
+# Refused at render time, because the API server would accept it and do nothing. The Subscription CRD defines
+# only requests, limits and claims under spec.config.resources, and anything else is silently PRUNED on
+# apply — so `request:` for `requests:` renders, applies, reports success, and leaves the operator sized
+# exactly as it was. A typo that changes nothing is the hardest kind to notice.
+{{- range $key, $_ := .Values.subscription.resources }}
+{{- if not (has $key (list "requests" "limits" "claims")) }}
+{{- fail (printf "subscription.resources has an unknown key %q.\n  The Subscription CRD accepts only: requests, limits, claims.\n  Anything else is pruned by the API server on apply, so it would render and silently do nothing.\n  Check for a singular 'request'/'limit'." $key) }}
+{{- end }}
+{{- end }}
 apiVersion: operators.coreos.com/v1alpha1
 kind: Subscription
 metadata:
@@ -13,6 +22,16 @@ spec:
     env:
       - name: WATCH_NAMESPACE
         value: {{ .Values.subscription.watchNamespaces }}
+{{- with .Values.subscription.resources }}
+    # Passed through verbatim, so requests and limits stay independent: requests alone, limits alone, or a
+    # single cpu value all render as written. `with` means an empty map emits no resources key at all, rather
+    # than `resources: {}` — which OLM would treat as a deliberate instruction to strip the CSV's own sizing.
+    #
+    # OLM applies this to EVERY container in the operator pod, so the scheduler is asked for double what is
+    # written here. See the note in values.yaml.
+    resources:
+      {{- toYaml . | nindent 6 }}
+{{- end }}
   installPlanApproval: {{ .Values.subscription.installPlanApproval }}
   # The OLM PACKAGE name, and deliberately the SAME value as metadata.name above.
   #

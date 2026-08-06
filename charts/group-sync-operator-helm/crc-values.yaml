@@ -52,3 +52,12 @@ customGroupSyncs:
       enabled: true
       groupCn: "bda-rbac-*"
       schedule: "0 * * * *"
+
+# Operator pod sizing. Kept here as well as in values.yaml so this environment states what it wants rather
+# than inheriting it — and 100m per container is what fits a single-node CRC, where the node runs the whole
+# control plane and leaves only a few hundred millicores spare.
+subscription:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 100Mi

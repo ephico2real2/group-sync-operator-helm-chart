@@ -799,6 +799,8 @@ filter matters.
 | subscription.installPlanApproval | Install plan approval. `Manual` is the upgrade gate — see the rationale in `values.yaml`, and the `installplan-approver` Job that approves the first install | Manual |
 | subscription.source | Operator source | community-operators |
 | subscription.sourceNamespace | Source namespace | openshift-marketplace |
+| subscription.resources.requests.cpu | CPU request for the operator pod, via the Subscription's `spec.config.resources`. **OLM applies it to every container**, so the scheduler is asked for double this, and it **replaces** the sizing the operator's CSV declares rather than merging | 100m |
+| subscription.resources.requests.memory | Memory request, same caveats as above | 100Mi |
 
 ### Test Configuration
 
