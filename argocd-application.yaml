@@ -48,6 +48,20 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: group-sync-operator
+  # Required by RespectIgnoreDifferences below, which until now had nothing to respect. With
+  # trustedCA.injected.enabled the chart ships this ConfigMap EMPTY and OpenShift's network operator fills
+  # data.ca-bundle.crt — so Argo sees a permanent diff and, with selfHeal, empties it again on every sync,
+  # breaking LDAPS verification until the operator refills it. ServerSideApply on the ConfigMap is not
+  # sufficient alone; the chart says so at 01.4 and CA_CERTIFICATE_FLOW.md, and this is the other half.
+  #
+  # Harmless when trustedCA.injected is off: the ConfigMap simply does not exist.
+  ignoreDifferences:
+    - group: ""
+      kind: ConfigMap
+      name: ldap-trusted-ca
+      namespace: group-sync-operator
+      jsonPointers:
+        - /data
   syncPolicy:
     automated:
       prune: true

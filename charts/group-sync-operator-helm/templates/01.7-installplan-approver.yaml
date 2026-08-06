@@ -19,10 +19,20 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "0"
 ---
+# A Role, not a ClusterRole. Every API call this Job makes is `-n "$NAMESPACE"` — all eight of them — so
+# nothing here is cluster-scoped, and the ClusterRole this replaced granted `patch installplans` in EVERY
+# namespace on the cluster. Measured against the installed ClusterRole:
+#
+#   patch installplans -n default                yes
+#   patch installplans -n kube-system            yes
+#   patch installplans -n openshift-monitoring    yes
+#
+# Approving an InstallPlan installs an operator, so that was the broadest grant this chart held.
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
+kind: Role
 metadata:
   name: {{ include "group-sync-operator-helm.fullname" . }}-installplan-approver
+  namespace: {{ .Values.groupSync.namespace }}
   labels:
     {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
   annotations:
@@ -35,18 +45,26 @@ rules:
   - apiGroups: ["operators.coreos.com"]
     resources: ["subscriptions"]
     verbs: ["get", "list", "watch"]
+  # csv_phase() reads these. Without the rule it returned empty on every call — measured as
+  # `list clusterserviceversions` -> no — so the two diagnostic escape paths that depend on a CSV phase were
+  # permanently dead, and the Job's own error output blamed OLM for staging nothing when in fact it had been
+  # refused. Namespaced, like everything else here: OLM copies CSVs into the operator's namespace.
+  - apiGroups: ["operators.coreos.com"]
+    resources: ["clusterserviceversions"]
+    verbs: ["get", "list"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
+kind: RoleBinding
 metadata:
   name: {{ include "group-sync-operator-helm.fullname" . }}-installplan-approver
+  namespace: {{ .Values.groupSync.namespace }}
   labels:
     {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
   annotations:
     argocd.argoproj.io/sync-wave: "0"
 roleRef:
   apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
+  kind: Role
   name: {{ include "group-sync-operator-helm.fullname" . }}-installplan-approver
 subjects:
   - kind: ServiceAccount
@@ -93,7 +111,8 @@ spec:
 
               NAMESPACE="{{ .Values.groupSync.namespace }}"
               SUBSCRIPTION="{{ .Values.subscription.name }}"
-              ATTEMPTS={{ div .Values.installPlanApprover.waitSeconds 5 }}
+              # max 1: see the operator-wait Job. Below 5, integer division gives 0 and `seq 1 0` is empty.
+              ATTEMPTS={{ max 1 (div .Values.installPlanApprover.waitSeconds 5) }}
               INTERVAL=5
 
               # ONE budget for both loops. ATTEMPTS is computed once and used twice, so each wait used to
@@ -121,10 +140,13 @@ spec:
                 exit 0
               fi
 
+              # stderr is NOT discarded. It used to be, which made a Forbidden indistinguishable from "OLM
+              # has staged nothing" — and the read WAS Forbidden, because the RBAC above omitted
+              # clusterserviceversions until 0.10.0. A permission problem must look like one.
               csv_phase() {
                 oc get csv -n "$NAMESPACE" --ignore-not-found=true \
                    -o jsonpath='{range .items[*]}{.metadata.name}{"|"}{.status.phase}{"\n"}{end}' \
-                  2>/dev/null | grep "^${SUBSCRIPTION}\." | head -1
+                  | grep "^${SUBSCRIPTION}\." | head -1
               }
 
               # ---- Wait for a plan, OR for the operator to be installed without one ---------
@@ -181,8 +203,11 @@ spec:
                        -o jsonpath="{range .items[?(@.status.phase=='${phase}')]}{.metadata.name}{' '}{end}" \
                       2>/dev/null); do
                     names="$(plan_field "$cand" '.spec.clusterServiceVersionNames[*]')"
+                    # Anchored on "${SUBSCRIPTION}.v" — a CSV name is <package>.v<version>, so the bare
+                    # substring also matched a DIFFERENT package that merely starts the same way, e.g.
+                    # group-sync-operator-community.v1.2.3 satisfying *group-sync-operator*.
                     case "$names" in
-                      *"${SUBSCRIPTION}"*) PLAN="$cand"
+                      *"${SUBSCRIPTION}.v"*) PLAN="$cand"
                         log "found ${PLAN} in phase ${phase} for ${names}"; break ;;
                     esac
                   done
@@ -199,8 +224,10 @@ spec:
               # OLM can bundle co-installed operators into one plan, so the CSV list is logged.
               CSVS="$(plan_field "$PLAN" '.spec.clusterServiceVersionNames[*]')"
               log "InstallPlan ${PLAN} installs: ${CSVS:-<unknown>}"
+              # Same anchor as the discovery loop above, and it matters more here: this is the guard that
+              # refuses to approve a plan this chart did not cause, and approving a plan installs an operator.
               case "$CSVS" in
-                *"${SUBSCRIPTION}"*) : ;;
+                *"${SUBSCRIPTION}.v"*) : ;;
                 *) fail "InstallPlan ${PLAN} does not mention ${SUBSCRIPTION} (it installs: ${CSVS}).
                 Refusing to approve a plan this chart did not cause. Inspect:
                   oc get installplan -n ${NAMESPACE} -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,APPROVED:.spec.approved,CSV:.spec.clusterServiceVersionNames[*]" ;;

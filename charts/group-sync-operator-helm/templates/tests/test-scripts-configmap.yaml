@@ -5,10 +5,9 @@ kind: ConfigMap
 metadata:
   name: {{ .Release.Name }}-test-scripts
   namespace: {{ .Values.groupSync.namespace }}
-  annotations:
-    # Not a helm test hook. helm test --logs fetches pod logs for every test hook and fails
-    # with 'unable to get pod logs ...: pods "..." not found' on any hook that is not a Pod.
-    # As an ordinary release resource this also exists before the test Jobs run.
+  # Not a helm test hook. helm test --logs fetches pod logs for every test hook and fails
+  # with 'unable to get pod logs ...: pods "..." not found' on any hook that is not a Pod.
+  # As an ordinary release resource this also exists before the test Jobs run.
   labels:
     {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
 data:

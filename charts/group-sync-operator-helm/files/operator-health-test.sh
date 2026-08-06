@@ -377,7 +377,7 @@ if [ "$OAUTH_ENABLED" = "true" ]; then
   else
     echo "ℹ️  OAuth secret extraction job not found"
     echo "   This could be normal if:"
-    echo "   - Job completed and was cleaned up (TTL)"
+    echo "   - a previous install's Job was replaced, or the namespace was recreated"
     echo "   - Job hasn't been triggered yet"
     echo "   - Job name pattern differs from expected"
   fi

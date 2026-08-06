@@ -344,7 +344,7 @@ YAML
   caSourceHash, so the next helm upgrade remakes the copy.
 
   Next: oc apply -f setup-local-ldap-testing/01-ldap-server.yaml   # mounts ${LEAF_SECRET}
-        helm upgrade group-sync . -n ${OPERATOR_NS}
+        helm upgrade group-sync ../charts/group-sync-operator-helm -n ${OPERATOR_NS}
         ./15-bootstrap-cert-manager-ca.sh verify
 VALUES
 }
@@ -434,7 +434,7 @@ cmd_trust_cluster() {
   Every ConfigMap labelled config.openshift.io/inject-trusted-cabundle now receives this root, so
   the chart can use trustedCA.injected instead of copying:
 
-    helm upgrade group-sync .. -n ${OPERATOR_NS} --reset-values -f ../crc-injected-values.yaml
+    helm upgrade group-sync ../charts/group-sync-operator-helm -n ${OPERATOR_NS} --reset-values -f ../charts/group-sync-operator-helm/crc-injected-values.yaml
 
   To undo: ./15-bootstrap-cert-manager-ca.sh untrust-cluster
 NEXT

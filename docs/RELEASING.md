@@ -68,7 +68,7 @@ so a value you stopped passing keeps applying and you are not testing what you t
 
 If the change touches the CA path, exercise more than one mode — the three are genuinely different code
 paths (`crc-values.yaml` copies the CA, `crc-injected-values.yaml` uses OpenShift trust injection,
-`qa-values.yaml` discovers everything from the cluster's OAuth CR).
+`sample-values.yaml` discovers everything from the cluster's OAuth CR).
 
 ### 2. Choose the version
 

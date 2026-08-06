@@ -9,7 +9,7 @@
 #   2. It is the only way to exercise the chart's OAuth DISCOVERY path. With groupSync.url,
 #      oauthSecretExtraction.bindDN and sourceSecret.name all left empty, the chart derives them from
 #      the first LDAP identity provider in the OAuth CR via Helm's `lookup`. With no LDAP provider on
-#      the cluster that branch is unreachable, so it stays untested — see qa-values.yaml.
+#      the cluster that branch is unreachable, so it stays untested — see sample-values.yaml.
 #
 # ADDITIVE, ALWAYS. The existing identity providers are preserved, so the kubeadmin / HTPasswd login
 # this lab depends on keeps working. `delete` removes only the provider this script added, by name.
@@ -613,11 +613,11 @@ CHOOSER
 
   cat <<NEXT
 
-  The chart can now DISCOVER all of this instead of being told it. That is the path qa-values.yaml
+  The chart can now DISCOVER all of this instead of being told it. That is the path sample-values.yaml
   documents and which no cluster here could previously exercise:
 
     helm upgrade group-sync ../charts/group-sync-operator-helm -n ${OPERATOR_NS} --reset-values \\
-      -f ../charts/group-sync-operator-helm/qa-values.yaml
+      -f ../charts/group-sync-operator-helm/sample-values.yaml
 
   Then confirm what it derived:
 

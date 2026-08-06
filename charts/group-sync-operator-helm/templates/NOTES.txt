@@ -36,19 +36,19 @@ The OAuth extraction job will:
 - Use bindDN: {{ .Values.oauthSecretExtraction.bindDN }}
 
 For single-step installation:
-  helm install {{ .Release.Name }} . --set oauthSecretExtraction.enabled=true
+  helm install {{ .Release.Name }} charts/group-sync-operator-helm --set oauthSecretExtraction.enabled=true
 
 {{- else }}
 For a new installation, it's recommended to follow this two-step process:
 
 STEP 1: Install the operator first (without GroupSync CR)
-  helm install {{ .Release.Name }} . --set groupSync.enabled=false
+  helm install {{ .Release.Name }} charts/group-sync-operator-helm --set groupSync.enabled=false
 
 STEP 2: Wait for operator to be ready, then enable GroupSync CR
-  helm upgrade {{ .Release.Name }} . --set groupSync.enabled=true
+  helm upgrade {{ .Release.Name }} charts/group-sync-operator-helm --set groupSync.enabled=true
 
 Alternatively, enable OAuth secret extraction for automated setup:
-  helm install {{ .Release.Name }} . --set oauthSecretExtraction.enabled=true
+  helm install {{ .Release.Name }} charts/group-sync-operator-helm --set oauthSecretExtraction.enabled=true
 
 WITH EXTRACTION OFF, THE BIND SECRET IS YOURS TO CREATE. Nothing in this release writes it, and the
 operator treats a missing key as an empty string rather than an error — so wrong key names give you an
@@ -145,7 +145,7 @@ If you encounter issues:
 
    $ helm get values {{ .Release.Name }} -n {{ .Release.Namespace }}          # what you supplied
    $ helm get values {{ .Release.Name }} -n {{ .Release.Namespace }} --all    # after the merge
-   $ helm upgrade {{ .Release.Name }} . -n {{ .Release.Namespace }} --reset-values
+   $ helm upgrade {{ .Release.Name }} charts/group-sync-operator-helm -n {{ .Release.Namespace }} --reset-values
 
    --reset-values discards ALL remembered values, so re-pass any you still want.
 

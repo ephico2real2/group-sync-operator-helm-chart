@@ -1,5 +1,5 @@
-# QA cluster: LDAPS, CA copied from the cluster's OAuth LDAP identity provider, everything else
-# discovered.
+# Sample values: LDAPS, CA copied from the cluster's OAuth LDAP identity provider, everything else
+# discovered. The best starting point for a real cluster — copy it and change the two group queries.
 #
 # requires-cluster: true
 #
@@ -18,9 +18,14 @@
 # So this file sets ONLY the things no cluster can tell us: where to look in the directory, and which
 # groups to sync. Those are org decisions, not cluster facts.
 #
+#   # this file ships INSIDE the chart, so take a copy out first — -f cannot read it from the tarball,
+#   # and a bare `-f sample-values.yaml` fails with "no such file or directory"
+#   helm show values group-sync-operator/group-sync-operator-helm > my-cluster-values.yaml
+#   # keep the two group queries below in that copy, drop the rest
+#
 #   helm install group-sync group-sync-operator/group-sync-operator-helm \
 #     -n group-sync-operator --create-namespace \
-#     -f qa-values.yaml
+#     -f my-cluster-values.yaml
 #   helm test group-sync -n group-sync-operator --logs
 #
 # REQUIRES A LIVE CLUSTER. Discovery uses Helm's `lookup`, which reads the API server — so this works
@@ -47,7 +52,24 @@ groupSync:
       baseDN: "ou=Groups,dc=example,dc=com"
       filter: "(&(objectClass=groupOfNames)(cn=app-ocp-rbac-*))"
 
-# Off: the shipped example targets the local test directory's bda-rbac-* groups. Add tenants here when
-# QA needs a second naming pattern — see docs/DESIGN_custom_groupsync.md.
+# Off, and now for a plainer reason than before: as of 0.10.0 values.yaml ships customGroupSyncs.items
+# EMPTY, so nothing arrives unless a values file asks for it. Turning the switch on here without items would
+# create no CRs at all; turning it on WITH the lab's bda-rbac-* tenant would create a CR that matches nothing
+# on this cluster, since the groupsQuery above is app-ocp-rbac-* against dc=example,dc=com.
+#
+# One CR per naming pattern. The primary GroupSync already covers app-ocp-rbac-*, so QA needs a tenant here
+# only when a SECOND pattern appears. When it does, declare it like this — the same shape crc-values.yaml
+# uses for the lab's bda-rbac-* groups:
+#
+#   customGroupSyncs:
+#     enabled: true
+#     items:
+#       - name: bda-rbac-groupsync
+#         enabled: true
+#         groupCn: "bda-rbac-*"
+#         schedule: "0 * * * *"     # optional; inherits groupSync.schedule otherwise
+#
+# Patterns must not overlap between tenants — that is guaranteed by the org naming standard, not by the
+# chart. See docs/DESIGN_custom_groupsync.md.
 customGroupSyncs:
   enabled: false

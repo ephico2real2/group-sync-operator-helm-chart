@@ -212,15 +212,22 @@ trustedCA:
 customGroupSyncs:
   # Master switch for ALL custom CRs.
   enabled: true
-  items:
+  # SHIPPED EMPTY on purpose. This list used to carry an enabled bda-rbac-groupsync item, so a default
+  # install created a SECOND GroupSync CR nobody had asked for — on the reference cluster it owned 21 of the
+  # 64 synced groups. Declare the tenants you want; the chart no longer decides for you.
+  #
+  # Upgrading from 0.9.0 or earlier: if you relied on that default, add the item back here or to your own
+  # values file. Its CR disappears otherwise, and the groups it owned stop being refreshed — they are not
+  # deleted (prune runs during a sync, and there is no longer a CR to sync) but they do go stale.
+  items: []
     # Big-Data Analytics: syncs every cn=bda-rbac-* group.
-    - name: bda-rbac-groupsync
-      enabled: true
-      groupCn: "bda-rbac-*"
-      # Hourly, rather than inheriting the 30-minute primary schedule. Written as
-      # "0 * * * *" not "*/60 * * * *" — the minute field only spans 0-59, so */60 is
-      # non-idiomatic and rejected by some cron parsers.
-      schedule: "0 * * * *"
+    # - name: bda-rbac-groupsync
+    #   enabled: true
+    #   groupCn: "bda-rbac-*"
+    #   # Hourly, rather than inheriting the 30-minute primary schedule. Written as
+    #   # "0 * * * *" not "*/60 * * * *" — the minute field only spans 0-59, so */60 is
+    #   # non-idiomatic and rejected by some cron parsers.
+    #   schedule: "0 * * * *"
 
     # Example second tenant (left disabled — enable once its groups exist in LDAP):
     # - name: xyz-ocp-rbac-groupsync
@@ -394,7 +401,14 @@ oauthSecretExtraction:
   # Job configuration
   waitTimeout: 300  # seconds to wait for source secret
   backoffLimit: 3
-  ttlSecondsAfterFinished: 300  # cleanup job after 5 minutes
+  # NO ttlSecondsAfterFinished here, deliberately. It used to be documented as 300, but BOTH consumers —
+  # 01.5's extraction Job and 01.6's CA Job — carry the field as a YAML comment, "kept for audit purposes",
+  # so the value was inert and the documentation promised something nothing implemented. Those two Jobs are
+  # kept after completion on purpose: their logs record which credential and which CA were installed. The
+  # approver and operator-wait Jobs below DO set it, and theirs are real.
+  #
+  # 01.8's pre-delete Job removes the objects these two create; the Jobs themselves go on the next install's
+  # before-hook-creation, or with the namespace.
 
   # Resource limits for the extraction job
   resources:

@@ -375,7 +375,10 @@ def oauth_cr_read(docs):
                                f"reach `oc get oauth cluster` — a cluster-scoped grant nothing uses")
     return bad
 
-CHECKS = {'oauth-rbac': oauth_cr_read, 'source-secret-rbac': source_secret_rbac,
+## 'oauth-rbac' was registered here too, pointing at the same oauth_cr_read function, so CI ran one
+## assertion twice under two names and reported 10 checks where there are 9. Removed rather than aliased:
+## a list whose length overstates its coverage is worse than a shorter honest one.
+CHECKS = {'source-secret-rbac': source_secret_rbac,
           'ca-coherence': ca_coherence, 'ca-copy-kind': ca_copy_kind,
           'oauth-cr-read': oauth_cr_read,
           'test-env-matches-cr': test_env_matches_cr,

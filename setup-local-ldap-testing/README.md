@@ -80,7 +80,7 @@ Two reasons to bother:
 2. It is the only way to reach the chart's **OAuth discovery** path. With `groupSync.url`,
    `oauthSecretExtraction.bindDN` and `sourceSecret.name` left empty, the chart derives all three from
    the first LDAP provider in the OAuth CR. With no such provider, that code is unreachable — which is
-   why `qa-values.yaml` could not be tested before.
+   why `sample-values.yaml` could not be tested before.
 
 ```bash
 ./40-setup-oauth-ldap-login.sh bind-account   # bind service account, gate group, ACL, Secret
@@ -828,7 +828,7 @@ This will delete all resources including the PVC and stored data.
 
 This directory is a local test LDAP. For a real one, nothing here applies except the concepts — use:
 
-- **[`../charts/group-sync-operator-helm/qa-values.yaml`](../charts/group-sync-operator-helm/qa-values.yaml)**
+- **[`../charts/group-sync-operator-helm/sample-values.yaml`](../charts/group-sync-operator-helm/sample-values.yaml)**
   — a minimal per-cluster values file. It sets only the LDAP search scope, because `groupSync.url`,
   `oauthSecretExtraction.bindDN` and `sourceSecret.name` are read from the cluster's OAuth LDAP identity
   provider when left empty, and TLS plus the CA copy are already the defaults.
