@@ -2,7 +2,7 @@ apiVersion: v2
 name: group-sync-operator-helm
 description: A Helm chart to deploy the GroupSync Operator and its configuration for LDAP synchronization in OpenShift
 type: application
-version: 0.7.0
+version: 0.8.0
 appVersion: "1.1"
 home: https://github.com/ephico2real2/group-sync-operator-helm-chart
 icon: https://raw.githubusercontent.com/redhat-cop/group-sync-operator/master/assets/logo.png
@@ -29,6 +29,14 @@ annotations:
   # discarded now take effect, and trustedCA.injected now wins over a custom groupSync.ca.name. Anyone
   # moving from 0.3.x or 0.4.x still needs to read them.
   artifacthub.io/changes: |
+    - kind: fixed
+      description: "The shipped argocd-application.yaml could never render. It pointed valueFiles at the chart's own values.yaml, where groupSync.url is empty, and ArgoCD's repo-server renders offline with helm template so the chart's lookup-based discovery of the url resolves to nothing - every GroupSync CR then hit a fail. It also set targetRevision: HEAD, which is a git ref and meaningless for a Helm chart source, where ArgoCD resolves targetRevision as a chart semver. It is now a two-source Application: the chart from the Helm repository pinned to 0.8.x, and the values file from your own git repository via $values, which must set groupSync.url explicitly. Needs ArgoCD 2.6 or newer."
+    - kind: changed
+      description: "BEHAVIOUR: operatorWait.waitSeconds and installPlanApprover.waitSeconds are now the TOTAL budget across their checks, which is what values.yaml has always documented. The retry count was computed once and reused by each loop, so every check got the full budget and the total could reach 3x the documented value - unreachable anyway, because activeDeadlineSeconds (waitSeconds + 120) killed the pod part-way with no message of its own. Both Jobs now take one wall-clock deadline before the first check. The effective ceiling drops from about waitSeconds + 120 to waitSeconds; raise the value if a slow cluster needs longer."
+    - kind: fixed
+      description: "README's Quick start offered a minimal values file for a directory the cluster does not authenticate against, without saying that exactly that scenario requires two objects to pre-exist in openshift-config: the bind password Secret, and the CA ConfigMap the caCopy source falls back to when there is no OAuth LDAP provider to discover one from. Both are now shown as oc create commands, with the sourceCa.name override that ties them together."
+    - kind: fixed
+      description: "README documented subscription.installPlanApproval as Automatic while values.yaml ships Manual - a documented default that inverted a real control, and one contradicted by README's own prose about the installplan-approver Job. The CI check that should have caught it matched only four value prefixes, so every subscription.*, installPlanApprover.*, operatorWait.* and customGroupSyncs.* row was invisible; it is now scoped by table header instead, raising coverage from 26 to 32 rows."
     - kind: changed
       description: "BEHAVIOUR: helm test now requires the credentials Secret to carry non-empty username and password keys, and fails naming them otherwise. Test 4 of the health check previously asserted key presence with `oc get -o jsonpath={.data.KEY} | base64 -d` and tested only that pipeline's exit status - which is 0 for a key that does not exist, since jsonpath prints nothing and base64 decodes nothing successfully. Measured on a live cluster it reported a key named definitely-not-a-key as present, so the first branch always won, the bindDN/bindPassword branch was unreachable, and a Secret with no username passed as valid with an empty bind DN. Both scripts also no longer accept bindDN/bindPassword as an alternative spelling: those are the OAuth identity provider's key names on its own Secret in openshift-config, which this chart does not own and the operator never reads. A suite that was green against such a Secret now fails."
     - kind: fixed

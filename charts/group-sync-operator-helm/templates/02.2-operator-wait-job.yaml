@@ -58,6 +58,15 @@ spec:
               ATTEMPTS={{ div .Values.operatorWait.waitSeconds 5 }}
               INTERVAL=5
 
+              # ONE budget, shared by all three checks, which is what values.yaml has always promised.
+              # ATTEMPTS is computed once but used by three separate loops, so each check used to get the
+              # FULL waitSeconds — up to 3x the documented budget. It was never reachable anyway:
+              # activeDeadlineSeconds is waitSeconds + 120, so the kubelet killed the pod mid-way with no
+              # message of its own. A wall-clock deadline makes the documented contract true and keeps the
+              # pod deadline as what it looks like — a backstop just above the script's own limit.
+              DEADLINE=$(( $(date +%s) + {{ .Values.operatorWait.waitSeconds }} ))
+              out_of_time() { [ "$(date +%s)" -ge "$DEADLINE" ]; }
+
               log()  { echo "[operator-wait] $*"; }
               fail() { echo "[operator-wait] FAILED: $*" >&2; exit 1; }
 
@@ -103,6 +112,7 @@ spec:
                 CSV="$(csv_phase)"; PHASE="${CSV#*|}"
                 [ "$PHASE" = "Succeeded" ] && { log "CSV ${CSV%|*} is Succeeded"; break; }
                 log "attempt ${i}/${ATTEMPTS}: csv phase=${PHASE:-<not present yet>}"
+                out_of_time && break
                 sleep "$INTERVAL"
               done
               [ "$PHASE" = "Succeeded" ] || fail "no ${SUBSCRIPTION}.* CSV reached Succeeded.
@@ -116,6 +126,7 @@ spec:
                 DEP="$(operator_deploy)"; READY="$(deploy_ready "$DEP")"
                 [ "${READY:-0}" -ge 1 ] 2>/dev/null && { log "${DEP} ready=${READY}"; break; }
                 log "attempt ${i}/${ATTEMPTS}: deployment=${DEP:-<not created yet>} ready=${READY:-0}"
+                out_of_time && break
                 sleep "$INTERVAL"
               done
               [ "${READY:-0}" -ge 1 ] 2>/dev/null || fail "the operator Deployment has no ready replica.
@@ -129,6 +140,7 @@ spec:
                 EST="$(crd_established)"
                 [ "$EST" = "True" ] && { log "CRD ${CRD} is Established"; break; }
                 log "attempt ${i}/${ATTEMPTS}: crd Established=${EST:-<not present yet>}"
+                out_of_time && break
                 sleep "$INTERVAL"
               done
               [ "$EST" = "True" ] || fail "CRD ${CRD} is not Established.

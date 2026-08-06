@@ -30,7 +30,17 @@ helm install group-sync group-sync-operator/group-sync-operator-helm \
 helm test group-sync -n group-sync-operator --logs
 ```
 
-A minimal `my-cluster-values.yaml` for a directory the cluster does **not** authenticate against:
+A minimal `my-cluster-values.yaml` for a directory the cluster does **not** authenticate against. In that
+case there is no OAuth LDAP identity provider to read anything from, so **two objects must already exist in
+`openshift-config`** — the chart reads both and creates neither:
+
+```bash
+# the bind password. The key must be bindPassword; the chart only ever reads it.
+oc create secret generic ldap-secret -n openshift-config --from-literal=bindPassword='<password>'
+
+# the CA that signed the LDAP server's certificate, needed because the url is ldaps://
+oc create configmap my-ldap-ca -n openshift-config --from-file=ca.crt=root-ca.pem
+```
 
 ```yaml
 groupSync:
@@ -39,7 +49,14 @@ oauthSecretExtraction:
   bindDN: "cn=svc-bind,ou=TrustedApplications,dc=example,dc=com"
   sourceSecret:
     name: ldap-secret          # in openshift-config, key bindPassword
+  caCopy:
+    sourceCa:
+      name: my-ldap-ca         # the ConfigMap created above; copied into the operator's namespace
 ```
+
+Without the CA ConfigMap the install fails in the CA preflight, which is the intended outcome — the operator
+cannot verify an `ldaps://` endpoint without it. Skip it only for a plain `ldap://` url with
+`groupSync.insecure: true`.
 
 Working examples live in the chart: `crc-values.yaml` (LDAPS with the CA copied),
 `crc-injected-values.yaml` (LDAPS via OpenShift trusted-CA injection) and
@@ -779,7 +796,7 @@ filter matters.
 |-----------|-------------|---------|
 | subscription.channel | OLM channel | alpha |
 | subscription.watchNamespaces | Namespaces to watch | group-sync-operator,openshift-config |
-| subscription.installPlanApproval | Install plan approval | Automatic |
+| subscription.installPlanApproval | Install plan approval. `Manual` is the upgrade gate — see the rationale in `values.yaml`, and the `installplan-approver` Job that approves the first install | Manual |
 | subscription.source | Operator source | community-operators |
 | subscription.sourceNamespace | Source namespace | openshift-marketplace |
 
