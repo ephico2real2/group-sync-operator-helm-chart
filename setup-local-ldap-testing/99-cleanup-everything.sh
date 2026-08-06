@@ -10,6 +10,12 @@
 
 set -e
 
+# Anchored to this script's directory, not the caller's — the same pattern as
+# 15-bootstrap-cert-manager-ca.sh. Every manifest and LDIF below used to be a bare relative path, so a run
+# from anywhere but this directory aborted partway with "the path ... does not exist" — after earlier steps
+# had already mutated the cluster.
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
 echo "🧹 GroupSync Operator Test Environment Cleanup"
 echo "==============================================="
 echo
@@ -62,15 +68,15 @@ echo
 
 # Remove local certificate files
 echo "📁 Removing local certificate files..."
-if [[ -f ca-cert.pem ]]; then
-    rm -f ca-cert.pem
+if [[ -f "${SCRIPT_DIR}/ca-cert.pem" ]]; then
+    rm -f "${SCRIPT_DIR}/ca-cert.pem"
     echo "✅ Removed ca-cert.pem"
 else
     echo "ℹ️ ca-cert.pem not found"
 fi
 
-if [[ -f ca-key.pem ]]; then
-    rm -f ca-key.pem
+if [[ -f "${SCRIPT_DIR}/ca-key.pem" ]]; then
+    rm -f "${SCRIPT_DIR}/ca-key.pem"
     echo "✅ Removed ca-key.pem"
 else
     echo "ℹ️ ca-key.pem not found"
@@ -81,9 +87,9 @@ echo
 echo "🗑️  Removing ldap-testing namespace and all resources..."
 if kubectl get namespace ldap-testing &> /dev/null; then
     # Delete all resources in the namespace first
-    kubectl delete -f 01-ldap-server.yaml --ignore-not-found=true
-    kubectl delete -f 02-phpldapadmin.yaml --ignore-not-found=true
-    kubectl delete -f 03-ldap-bootstrap-job.yaml --ignore-not-found=true
+    kubectl delete -f "${SCRIPT_DIR}/01-ldap-server.yaml" --ignore-not-found=true
+    kubectl delete -f "${SCRIPT_DIR}/02-phpldapadmin.yaml" --ignore-not-found=true
+    kubectl delete -f "${SCRIPT_DIR}/03-ldap-bootstrap-job.yaml" --ignore-not-found=true
     
     # Also clean up any remaining resources
     kubectl delete all --all -n ldap-testing --ignore-not-found=true

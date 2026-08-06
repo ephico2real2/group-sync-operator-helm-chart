@@ -2,6 +2,9 @@
 
 set -e
 
+# Anchored to this script's directory: force_groupsync delegates to 60-force-groupsync.sh next to it.
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
 # 🎯 LDAP Operations Simulation and GroupSync Testing
 # 
 # This script simulates real-world LDAP operations to test GroupSync
@@ -103,16 +106,22 @@ show_group_members() {
 
 # Force GroupSync to sync immediately
 force_groupsync() {
-    # Optional $1 = GroupSync CR name (defaults to the primary CR). Patching any
-    # annotation triggers the operator to reconcile that CR immediately.
+    # Delegates to 60-force-groupsync.sh, which patches .SPEC and then polls lastSyncSuccessTime.
+    #
+    # This used to patch an ANNOTATION and sleep 10, then print success unconditionally. Three things wrong
+    # with that, and the second is the one that made every scenario in this script meaningless: the operator
+    # reconciles on GENERATION change, and generation only advances when .spec changes — measured on CRC and
+    # recorded in 60-force-groupsync.sh, where `oc annotate` left generation at 2 and lastSyncSuccessTime
+    # untouched. So the sync never happened, the errors were swallowed by >/dev/null 2>&1, and the
+    # BEFORE/AFTER group diff every caller prints compared a directory against itself.
     local cr_name="${1:-ldap-groupsync}"
     echo -e "${CYAN}🔄 Forcing GroupSync '${cr_name}' to sync...${NC}"
-    TIMESTAMP="manual-sync-$(date +%s)"
-    kubectl patch groupsync "$cr_name" -n group-sync-operator --type='merge' -p="{\"metadata\":{\"annotations\":{\"sync.redhatcop.redhat.io/sync-now\":\"$TIMESTAMP\"}}}" >/dev/null 2>&1
-
-    echo "⏳ Waiting for sync to complete (10 seconds)..."
-    sleep 10
-    echo -e "${GREEN}✅ GroupSync '${cr_name}' triggered${NC}"
+    if "${SCRIPT_DIR}/60-force-groupsync.sh" "$cr_name" group-sync-operator; then
+        echo -e "${GREEN}✅ GroupSync '${cr_name}' synced${NC}"
+    else
+        echo -e "${RED}❌ GroupSync '${cr_name}' did NOT sync — the group counts below are stale${NC}"
+        return 1
+    fi
 }
 
 # Check OpenShift groups before/after. Optional $2 = grep pattern (default app-ocp-rbac).
@@ -120,7 +129,9 @@ check_openshift_groups() {
     local operation="$1"
     local pattern="${2:-app-ocp-rbac}"
     echo -e "${BLUE}📊 OpenShift RBAC Groups $operation (matching '${pattern}'):${NC}"
-    oc get groups 2>/dev/null | grep -E "${pattern}|NAME" | head -20 || echo "   No RBAC groups found"
+    # grep decides, not head: `|| echo` bound to head, which practically never fails, so the fallback was
+    # unreachable and a grep miss showed as blank output.
+    oc get groups 2>/dev/null | grep -E "${pattern}|NAME" | head -20 || true
     echo
 }
 

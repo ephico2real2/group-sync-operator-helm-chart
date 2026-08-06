@@ -144,9 +144,15 @@ identical** to before (see §7). If it changed at all, we stop.
 
 ### 6.3 The values block
 
-The `customGroupSyncs` block from §4 is added to `values.yaml`, with comments and a default
-of `enabled: false` for the master switch (safe default — off until a team opts in). The demo
-values turn it on with the two example items.
+The `customGroupSyncs` block from §4 is added to `values.yaml`. Safety comes from an empty
+`items` list rather than from the master switch: `enabled` ships `true` and `items` ships `[]`, so a
+default install renders exactly one GroupSync CR — the primary — and every example item is commented out.
+
+The switch is deliberately NOT `false` by default. It reads safer, but it creates a silent trap: anyone
+who adds only `customGroupSyncs.items` to their own values file gets zero CRs and no error, because
+`templates/custom-groupsync.yaml` wraps the whole range in `{{- if .Values.customGroupSyncs.enabled }}`.
+An empty list cannot fail that way. Files that genuinely want the feature off — `sample-values.yaml` —
+set `enabled: false` explicitly, which is the right place for an opt-out.
 
 ## 7. How we prove it works (validation)
 
@@ -156,8 +162,8 @@ Run in order; each step must pass before the next.
 |---|---|---|---|
 | 1 | Primary CR unchanged | render with helper vs backup, diff the `ldap-groupsync` object | zero differences |
 | 2 | Chart is valid | `helm lint ../charts/group-sync-operator-helm` | 0 failed |
-| 3 | Renders cleanly | `helm template ../charts/group-sync-operator-helm -n group-sync-operator` | 3 GroupSync objects, valid YAML |
-| 4 | Filter is correct | inspect rendered `bda-rbac-groupsync` | `filter: "(&(objectClass=groupOfNames)(cn=bda-rbac-*))"` |
+| 3 | Renders cleanly | `helm template ../charts/group-sync-operator-helm -f ../charts/group-sync-operator-helm/crc-values.yaml -n group-sync-operator` | 2 GroupSync objects (`ldap-groupsync`, `bda-rbac-groupsync`), valid YAML. A values file is required: with `groupSync.url` empty the render fails closed by design. Under chart defaults the count is 1, since `items` ships empty |
+| 4 | Filter is correct | inspect `bda-rbac-groupsync` in the row-3 render (it comes from `crc-values.yaml`, not the defaults) | `filter: "(&(objectClass=groupOfNames)(cn=bda-rbac-*))"` |
 | 5 | Live sync works | `helm upgrade` on CRC, then `oc get groups -l ...` | `bda-rbac-*` groups appear, labelled `bda-rbac-groupsync_ldap` |
 | 6 | No cross-claim | check operator logs | no *"Did Not Match"* warnings for `bda-rbac-*` |
 

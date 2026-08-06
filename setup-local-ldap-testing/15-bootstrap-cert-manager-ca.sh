@@ -134,6 +134,9 @@ configmap_owner() {
 
 # Replacing a live CA breaks every client trusting it, so an unowned ConfigMap is replaced only
 # when its certificate has already expired — and its contents are saved first either way.
+# $4 = the data key to inspect, defaulting to ca.crt. The trust bundle uses ca-bundle.crt, so calling this
+# without a key parameter would find no ca.crt, fall through to the no-evidence branch and die on every run
+# against a cluster that has a real corporate bundle — the exact runs it exists to protect.
 guard_existing_configmap() {
   local ns="$1" name="$2" incoming="${3:-}" owner
   oc get configmap "$name" -n "$ns" >/dev/null 2>&1 || return 0
@@ -151,10 +154,11 @@ guard_existing_configmap() {
   # succeeds — so without this a leftover file from an earlier run is read below as though it were the
   # current cluster state, and the decision to replace a live CA gets made from a file on this laptop.
   # Every branch after this point depends on that distinction.
-  local pem="${BACKUP_DIR}/${ns}-${name}.ca.crt"
-  rm -f "$pem" "${BACKUP_DIR}/ca.crt"
-  oc extract "configmap/${name}" -n "$ns" --keys=ca.crt --to="$BACKUP_DIR" --confirm >/dev/null 2>&1 || true
-  [ -s "${BACKUP_DIR}/ca.crt" ] && mv "${BACKUP_DIR}/ca.crt" "$pem"
+  local key="${4:-ca.crt}"
+  local pem="${BACKUP_DIR}/${ns}-${name}.${key}"
+  rm -f "$pem" "${BACKUP_DIR}/${key}"
+  oc extract "configmap/${name}" -n "$ns" --keys="$key" --to="$BACKUP_DIR" --confirm >/dev/null 2>&1 || true
+  [ -s "${BACKUP_DIR}/${key}" ] && mv "${BACKUP_DIR}/${key}" "$pem"
 
   # Identical contents replace nothing, so apply stays idempotent. Without this, anything that
   # rewrites the ConfigMap and drops the ownership label — a plain oc apply, a GitOps sync — turns
@@ -191,11 +195,11 @@ guard_existing_configmap() {
   local keys
   keys=$(oc get configmap "$name" -n "$ns" -o go-template='{{range $k,$v := .data}}{{$k}} {{end}}' 2>/dev/null)
   if [ "${FORCE_REPLACE_UNOWNED:-false}" = "true" ]; then
-    log "existing ${ns}/${name} has no readable ca.crt (keys: ${keys:-none}) — replacing it anyway"
+    log "existing ${ns}/${name} has no readable ${key} (keys: ${keys:-none}) — replacing it anyway"
     log "  because FORCE_REPLACE_UNOWNED=true. Backup: ${backup}"
     return 0
   fi
-  die "ConfigMap ${ns}/${name} exists, was not created by this script, and has no readable ca.crt.
+  die "ConfigMap ${ns}/${name} exists, was not created by this script, and has no readable ${key}.
   Its keys are: ${keys:-<none>}
   Refusing to replace it, because there is no evidence that doing so is safe — a ConfigMap holding a
   trust bundle under another key looks exactly like this one. A full backup is at
@@ -344,7 +348,7 @@ YAML
   caSourceHash, so the next helm upgrade remakes the copy.
 
   Next: oc apply -f setup-local-ldap-testing/01-ldap-server.yaml   # mounts ${LEAF_SECRET}
-        helm upgrade group-sync ../charts/group-sync-operator-helm -n ${OPERATOR_NS}
+        helm upgrade group-sync charts/group-sync-operator-helm -n ${OPERATOR_NS}   # from the repo root
         ./15-bootstrap-cert-manager-ca.sh verify
 VALUES
 }
@@ -382,13 +386,9 @@ cmd_trust_cluster() {
   oc extract "secret/${ROOT_SECRET}" -n "$CM_NS" --keys=ca.crt --to="$tmp" --confirm >/dev/null 2>&1 || true
   [ -s "${tmp}/ca.crt" ] || die "root CA not found in ${CM_NS}/${ROOT_SECRET} — run apply first"
 
-  step "publishing the root to openshift-config/${TRUST_BUNDLE_CM}"
-  oc create configmap "$TRUST_BUNDLE_CM" -n openshift-config \
-     --from-file=ca-bundle.crt="${tmp}/ca.crt" --dry-run=client -o yaml \
-    | oc label --local -f - -o yaml "$OWNED" \
-    | oc apply -f - >/dev/null
-  log "key ca-bundle.crt, as proxy.spec.trustedCA requires"
-
+  # Check and back up BEFORE writing anything. The write used to come first, so on the abort path below
+  # the script had already overwritten openshift-config/${TRUST_BUNDLE_CM} — a cluster-wide object it then
+  # refuses to touch — with no copy of the previous contents anywhere.
   local current
   current=$(oc get proxy cluster -o jsonpath='{.spec.trustedCA.name}' 2>/dev/null)
   if [ -n "$current" ] && [ "$current" != "$TRUST_BUNDLE_CM" ]; then
@@ -401,6 +401,14 @@ cmd_trust_cluster() {
   mkdir -p "$BACKUP_DIR"
   oc get proxy cluster -o yaml > "${BACKUP_DIR}/proxy-cluster.yaml" 2>/dev/null \
     && log "backed up proxy/cluster to ${BACKUP_DIR}/proxy-cluster.yaml"
+
+  step "publishing the root to openshift-config/${TRUST_BUNDLE_CM}"
+  guard_existing_configmap openshift-config "$TRUST_BUNDLE_CM" "${tmp}/ca.crt" ca-bundle.crt
+  oc create configmap "$TRUST_BUNDLE_CM" -n openshift-config \
+     --from-file=ca-bundle.crt="${tmp}/ca.crt" --dry-run=client -o yaml \
+    | oc label --local -f - -o yaml "$OWNED" \
+    | oc apply -f - >/dev/null
+  log "key ca-bundle.crt, as proxy.spec.trustedCA requires"
 
   step "pointing proxy/cluster.spec.trustedCA at it"
   oc patch proxy cluster --type=merge \

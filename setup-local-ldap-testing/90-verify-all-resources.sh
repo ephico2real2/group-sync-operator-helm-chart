@@ -49,12 +49,18 @@ echo
 
 echo "🚀 GroupSync Operator Status:"
 echo "---------------------------"
-if oc get groupsync ldap-group-sync -n group-sync-operator &> /dev/null; then
-    echo "✅ GroupSync CR 'ldap-group-sync' exists"
-    echo "Current status:"
-    oc get groupsync ldap-group-sync -n group-sync-operator -o jsonpath='{.status.conditions[0].message}' 2>/dev/null || echo "No status message available"
+# Every CR in the namespace, not one hardcoded name. This used to look for "ldap-group-sync", which is
+# the SECRET's name — the CR is "ldap-groupsync" — so it printed "NOT found" on a perfectly healthy lab.
+# Listing also covers the customGroupSyncs tenants, which a single name never could.
+CRS=$(oc get groupsync -n group-sync-operator -o name 2>/dev/null | sed 's|.*/||')
+if [ -n "$CRS" ]; then
+    for cr in $CRS; do
+        SYNCED=$(oc get groupsync "$cr" -n group-sync-operator -o jsonpath='{.status.lastSyncSuccessTime}' 2>/dev/null)
+        echo "✅ GroupSync CR '$cr' exists — last successful sync: ${SYNCED:-never}"
+    done
 else
-    echo "❌ GroupSync CR 'ldap-group-sync' NOT found"
+    echo "❌ no GroupSync CRs found in group-sync-operator"
+    VERIFY_FAILED=1
 fi
 echo
 
@@ -63,7 +69,9 @@ echo "🔍 LDAP Server Content Validation:"
 echo "----------------------------------"
 
 # Check if LDAP server is running
-if kubectl get pods -n ldap-testing -l app=openldap-server --field-selector=status.phase=Running >/dev/null 2>&1; then
+# grep -q, not the exit status: `kubectl get` with zero matches still exits 0, so this guard always
+# passed and the jsonpath on the next line then aborted the script under set -e.
+if kubectl get pods -n ldap-testing -l app=openldap-server --field-selector=status.phase=Running -o name 2>/dev/null | grep -q openldap; then
     LDAP_POD=$(kubectl get pods -n ldap-testing -l app=openldap-server --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}')
     echo "✅ LDAP Server Pod: $LDAP_POD"
     
@@ -107,19 +115,21 @@ if kubectl get pods -n ldap-testing -l app=openldap-server --field-selector=stat
         echo
         
         # Count LDAP objects
-        TOTAL_USERS=$(kubectl exec -n ldap-testing $LDAP_POD -- ldapsearch -x -H ldap://localhost:389 -D "cn=admin,dc=ephico2real,dc=com" -w "admin123" -b "ou=People,dc=ephico2real,dc=com" "(objectClass=inetOrgPerson)" cn 2>/dev/null | grep -c "^cn:" || echo "0")
-        RBAC_GROUPS=$(kubectl exec -n ldap-testing $LDAP_POD -- ldapsearch -x -H ldap://localhost:389 -D "cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com" -w "bindpassword123" -b "ou=Groups,dc=ephico2real,dc=com" "(&(objectClass=groupOfNames)(cn=app-ocp-rbac-*))" cn 2>/dev/null | grep -c "^cn:" || echo "0")
-        OTHER_GROUPS=$(kubectl exec -n ldap-testing $LDAP_POD -- ldapsearch -x -H ldap://localhost:389 -D "cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com" -w "bindpassword123" -b "ou=Groups,dc=ephico2real,dc=com" "(&(objectClass=groupOfNames)(!(cn=app-ocp-rbac-*)))" cn 2>/dev/null | grep -c "^cn:" || echo "0")
+        TOTAL_USERS=$(kubectl exec -n ldap-testing $LDAP_POD -- ldapsearch -x -H ldap://localhost:389 -D "cn=admin,dc=ephico2real,dc=com" -w "admin123" -b "ou=People,dc=ephico2real,dc=com" "(objectClass=inetOrgPerson)" cn 2>/dev/null | grep -c "^cn:" || true)
+        RBAC_GROUPS=$(kubectl exec -n ldap-testing $LDAP_POD -- ldapsearch -x -H ldap://localhost:389 -D "cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com" -w "bindpassword123" -b "ou=Groups,dc=ephico2real,dc=com" "(&(objectClass=groupOfNames)(cn=app-ocp-rbac-*))" cn 2>/dev/null | grep -c "^cn:" || true)
+        OTHER_GROUPS=$(kubectl exec -n ldap-testing $LDAP_POD -- ldapsearch -x -H ldap://localhost:389 -D "cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com" -w "bindpassword123" -b "ou=Groups,dc=ephico2real,dc=com" "(&(objectClass=groupOfNames)(!(cn=app-ocp-rbac-*)))" cn 2>/dev/null | grep -c "^cn:" || true)
         
         echo "✅ Test Users: $TOTAL_USERS"
         echo "✅ RBAC Groups (will sync): $RBAC_GROUPS"
         echo "✅ Non-RBAC Groups (won't sync): $OTHER_GROUPS"
         
         # Team breakdown
-        PLATFORM_GROUPS=$(kubectl exec -n ldap-testing $LDAP_POD -- ldapsearch -x -H ldap://localhost:389 -D "cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com" -w "bindpassword123" -b "ou=Groups,dc=ephico2real,dc=com" "(cn=app-ocp-rbac-platform-*)" cn 2>/dev/null | grep -c "^cn:" || echo "0")
-        ALPHA_GROUPS=$(kubectl exec -n ldap-testing $LDAP_POD -- ldapsearch -x -H ldap://localhost:389 -D "cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com" -w "bindpassword123" -b "ou=Groups,dc=ephico2real,dc=com" "(cn=app-ocp-rbac-alpha-*)" cn 2>/dev/null | grep -c "^cn:" || echo "0")
-        DEMO_GROUPS=$(kubectl exec -n ldap-testing $LDAP_POD -- ldapsearch -x -H ldap://localhost:389 -D "cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com" -w "bindpassword123" -b "ou=Groups,dc=ephico2real,dc=com" "(cn=app-ocp-rbac-demo-*)" cn 2>/dev/null | grep -c "^cn:" || echo "0")
-        OTHER_TEAMS=$((RBAC_GROUPS - PLATFORM_GROUPS - ALPHA_GROUPS - DEMO_GROUPS))
+        PLATFORM_GROUPS=$(kubectl exec -n ldap-testing $LDAP_POD -- ldapsearch -x -H ldap://localhost:389 -D "cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com" -w "bindpassword123" -b "ou=Groups,dc=ephico2real,dc=com" "(cn=app-ocp-rbac-platform-*)" cn 2>/dev/null | grep -c "^cn:" || true)
+        ALPHA_GROUPS=$(kubectl exec -n ldap-testing $LDAP_POD -- ldapsearch -x -H ldap://localhost:389 -D "cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com" -w "bindpassword123" -b "ou=Groups,dc=ephico2real,dc=com" "(cn=app-ocp-rbac-alpha-*)" cn 2>/dev/null | grep -c "^cn:" || true)
+        DEMO_GROUPS=$(kubectl exec -n ldap-testing $LDAP_POD -- ldapsearch -x -H ldap://localhost:389 -D "cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com" -w "bindpassword123" -b "ou=Groups,dc=ephico2real,dc=com" "(cn=app-ocp-rbac-demo-*)" cn 2>/dev/null | grep -c "^cn:" || true)
+        # ${VAR:-0} because each count comes from a command substitution that can legitimately be empty, and
+        # bare arithmetic on an empty string is a fatal syntax error under set -e.
+        OTHER_TEAMS=$(( ${RBAC_GROUPS:-0} - ${PLATFORM_GROUPS:-0} - ${ALPHA_GROUPS:-0} - ${DEMO_GROUPS:-0} ))
         
         echo "   🏢 Platform: $PLATFORM_GROUPS groups"
         echo "   🅰️ Alpha: $ALPHA_GROUPS groups"
@@ -196,16 +206,27 @@ else
 fi
 echo
 
+# This used to print a ✓ for every line unconditionally — including a ✓ for the GroupSync CR it had
+# reported as NOT found fifteen lines earlier — and then exit 0 regardless. A verification script that
+# cannot fail is not a verification script. Each line now reflects what was actually observed, and the
+# exit status follows.
 echo "📄 Summary:"
 echo "----------"
-echo "Resources that should exist:"
-echo "  ✓ ConfigMap: ca-config-map-test (openshift-config)"
-echo "  ✓ Secret: ldap-group-sync (group-sync-operator)"
-echo "  ✓ Secret: ldap-secret (openshift-config) ← NEW REQUIREMENT"
-echo "  ✓ GroupSync CR: ldap-group-sync (group-sync-operator)"
-echo "  ✓ LDAP Server: Running with $RBAC_GROUPS RBAC groups"
-echo "  ✓ Service Account: Working with proper ACLs"
+sum() { # label, then the test
+    local label="$1"; shift
+    if "$@" >/dev/null 2>&1; then echo "  ✓ $label"; else echo "  ✗ $label"; VERIFY_FAILED=1; fi
+}
+sum "ConfigMap: ca-config-map-test (openshift-config)" oc get configmap ca-config-map-test -n openshift-config
+sum "Secret: ldap-group-sync (group-sync-operator)"    oc get secret ldap-group-sync -n group-sync-operator
+sum "Secret: ldap-secret (openshift-config)"           oc get secret ldap-secret -n openshift-config
+if [ -n "${CRS:-}" ]; then echo "  ✓ GroupSync CRs: $(echo $CRS | tr '\n' ' ')"; else echo "  ✗ GroupSync CRs: none"; VERIFY_FAILED=1; fi
+echo "  • LDAP Server: ${RBAC_GROUPS:-0} app-ocp-rbac groups in the directory"
+echo "  • OpenShift Groups synced: $(oc get groups --no-headers 2>/dev/null | wc -l | tr -d ' ')"
 echo
-echo "🎯 Expected Status: LDAP connection errors (not config errors)"
-echo "📚 For detailed status: oc describe groupsync ldap-group-sync -n group-sync-operator"
+if [ "${VERIFY_FAILED:-0}" -ne 0 ]; then
+    echo "❌ one or more checks FAILED — see the ✗ lines above"
+    exit 1
+fi
+echo "✅ all checks passed"
+echo "📚 For detailed status: oc describe groupsync -n group-sync-operator"
 

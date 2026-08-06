@@ -10,6 +10,12 @@
 
 set -e
 
+# Anchored to this script's directory, not the caller's — the same pattern as
+# 15-bootstrap-cert-manager-ca.sh. Every manifest and LDIF below used to be a bare relative path, so a run
+# from anywhere but this directory aborted partway with "the path ... does not exist" — after earlier steps
+# had already mutated the cluster.
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -56,11 +62,11 @@ function bootstrap_ldap() {
     echo -e "${GREEN}🚀 Running LDAP Bootstrap (Step 1)...${NC}"
     
     echo -e "${BLUE}Deploying bootstrap job and prerequisites...${NC}"
-    kubectl apply -f 03-ldap-bootstrap-job.yaml
+    kubectl apply -f "${SCRIPT_DIR}/03-ldap-bootstrap-job.yaml"
     
     echo -e "${BLUE}Creating ConfigMaps from standalone LDIF files...${NC}"
-    kubectl create configmap ldap-structure --from-file=ldap-structure-combined.ldif -n $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
-    kubectl create configmap ldap-acls --from-file=configure-acls.ldif -n $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
+    kubectl create configmap ldap-structure --from-file="${SCRIPT_DIR}/ldap-structure-combined.ldif" -n $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
+    kubectl create configmap ldap-acls --from-file="${SCRIPT_DIR}/configure-acls.ldif" -n $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
     echo -e "${GREEN}✅ ConfigMaps created from standalone files${NC}"
     
     echo -e "${YELLOW}⏳ Waiting for bootstrap job to complete...${NC}"
@@ -92,13 +98,13 @@ function deploy_ldap() {
     fi
     
     echo -e "${BLUE}Deploying LDAP server...${NC}"
-    kubectl apply -f 01-ldap-server.yaml
+    kubectl apply -f "${SCRIPT_DIR}/01-ldap-server.yaml"
     
     echo -e "${YELLOW}⏳ Waiting for LDAP server to be ready...${NC}"
     kubectl wait --for=condition=available --timeout=300s deployment/openldap-server -n $NAMESPACE
     
     echo -e "${BLUE}Deploying phpLDAPadmin web GUI...${NC}"
-    kubectl apply -f 02-phpldapadmin.yaml
+    kubectl apply -f "${SCRIPT_DIR}/02-phpldapadmin.yaml"
     
     echo -e "${GREEN}✅ LDAP Server and Web GUI deployed successfully!${NC}"
     echo ""
@@ -139,9 +145,10 @@ function deploy_all() {
 }
 
 function delete_ldap() {
+    confirm_destructive "This deletes the LDAP server and its PVC — the directory contents are lost."
     echo -e "${RED}🗑️  Deleting LDAP Server (preserving namespace)...${NC}"
-    kubectl delete -f 01-ldap-server.yaml --ignore-not-found=true
-    kubectl delete -f 02-phpldapadmin.yaml --ignore-not-found=true
+    kubectl delete -f "${SCRIPT_DIR}/01-ldap-server.yaml" --ignore-not-found=true
+    kubectl delete -f "${SCRIPT_DIR}/02-phpldapadmin.yaml" --ignore-not-found=true
     # Only delete bootstrap job components, not the namespace
     kubectl delete job ldap-bootstrap-job-combined -n $NAMESPACE --ignore-not-found=true
     kubectl delete pvc ldap-data-pvc -n $NAMESPACE --ignore-not-found=true
@@ -152,16 +159,26 @@ function delete_ldap() {
     echo -e "${YELLOW}💡 To delete everything including namespace, use: ./30-manage-ldap-server.sh delete-all${NC}"
 }
 
+# Prompted, like clean_restart. This deletes the namespace, which takes the directory and every synced
+# group with it — the same class of action, so the same confirmation.
+function confirm_destructive() {
+    echo -e "${RED}⚠️  $1${NC}"
+    read -p "Are you sure you want to continue? [y/N] " -n 1 -r
+    echo
+    [[ $REPLY =~ ^[Yy]$ ]] || { echo "aborted"; exit 0; }
+}
+
 function delete_all() {
+    confirm_destructive "This deletes namespace $NAMESPACE — the LDAP directory and all synced groups."
     echo -e "${RED}🗑️  Deleting Everything (including namespace)...${NC}"
     echo -e "${YELLOW}⚠️  This will completely remove the $NAMESPACE namespace and all resources!${NC}"
     echo ""
     
     # Delete all YAML resources first
     echo -e "${BLUE}Deleting LDAP resources...${NC}"
-    kubectl delete -f 01-ldap-server.yaml --ignore-not-found=true
-    kubectl delete -f 02-phpldapadmin.yaml --ignore-not-found=true
-    kubectl delete -f 03-ldap-bootstrap-job.yaml --ignore-not-found=true
+    kubectl delete -f "${SCRIPT_DIR}/01-ldap-server.yaml" --ignore-not-found=true
+    kubectl delete -f "${SCRIPT_DIR}/02-phpldapadmin.yaml" --ignore-not-found=true
+    kubectl delete -f "${SCRIPT_DIR}/03-ldap-bootstrap-job.yaml" --ignore-not-found=true
     
     # Delete any remaining resources in the namespace
     echo -e "${BLUE}Deleting remaining namespace resources...${NC}"
@@ -239,14 +256,19 @@ function test_connectivity() {
     
     # Test basic LDAP connection
     echo "Testing basic LDAP connection..."
+            # set +e around the probe: with errexit on, a failing kubectl exec killed the script at the command
+        # and the test below never ran — so every error branch in this function was dead code.
+        set +e
     kubectl exec -n $NAMESPACE deployment/openldap-server -- \
         ldapsearch -x -H ldap://localhost:389 \
         -D "$LDAP_ADMIN_DN" \
         -w "$LDAP_ADMIN_PASSWORD" \
         -b "dc=ephico2real,dc=com" \
         -s base "(objectclass=*)" dn
+    rc=$?
+    set -e
     
-    if [ $? -eq 0 ]; then
+    if [ "$rc" -eq 0 ]; then
         echo -e "${GREEN}✅ LDAP connection successful!${NC}"
     else
         echo -e "${RED}❌ LDAP connection failed${NC}"
@@ -257,24 +279,30 @@ function test_connectivity() {
     echo ""
     echo "Testing service account binding..."
     # Test with a simple bind operation followed by a who am I request
+    set +e
     kubectl exec -n $NAMESPACE deployment/openldap-server -- \
         ldapwhoami -x -H ldap://localhost:389 \
         -D "$LDAP_BIND_DN" \
         -w "$LDAP_BIND_PASSWORD"
+    rc=$?
+    set -e
     
-    if [ $? -eq 0 ]; then
+    if [ "$rc" -eq 0 ]; then
         echo -e "${GREEN}✅ Service account binding successful!${NC}"
         
         # Test service account can read organizational units
         echo "Testing service account read permissions..."
+        set +e
         kubectl exec -n $NAMESPACE deployment/openldap-server -- \
             ldapsearch -x -H ldap://localhost:389 \
             -D "$LDAP_BIND_DN" \
             -w "$LDAP_BIND_PASSWORD" \
             -b "ou=Groups,dc=ephico2real,dc=com" \
             -s base "(objectclass=*)" dn 2>/dev/null
+        rc=$?
+        set -e
         
-        if [ $? -eq 0 ]; then
+        if [ "$rc" -eq 0 ]; then
             echo -e "${GREEN}✅ Service account has read permissions!${NC}"
         else
             echo -e "${YELLOW}⚠️  Service account binding works but limited read permissions${NC}"
@@ -296,20 +324,24 @@ function test_ldaps_connectivity() {
     
     # Test LDAPS connection (with TLS)
     echo "Testing LDAPS connection (port 636)..."
+    set +e
     kubectl exec -n $NAMESPACE deployment/openldap-server -- \
         ldapsearch -x -H ldaps://localhost:636 \
         -D "$LDAP_ADMIN_DN" \
         -w "$LDAP_ADMIN_PASSWORD" \
         -b "dc=ephico2real,dc=com" \
         -s base "(objectclass=*)" dn
+    rc=$?
+    set -e
     
-    if [ $? -eq 0 ]; then
+    if [ "$rc" -eq 0 ]; then
         echo -e "${GREEN}✅ LDAPS connection successful!${NC}"
     else
         echo -e "${RED}❌ LDAPS connection failed${NC}"
         echo "Trying with certificate verification disabled..."
         
         # Try with certificate verification disabled
+        set +e
         kubectl exec -n $NAMESPACE deployment/openldap-server -- \
             ldapsearch -x -H ldaps://localhost:636 \
             -D "$LDAP_ADMIN_DN" \
@@ -318,8 +350,10 @@ function test_ldaps_connectivity() {
             -s base "(objectclass=*)" dn \
             -o ldif-wrap=no \
             -o tls_reqcert=never
+        rc=$?
+        set -e
         
-        if [ $? -eq 0 ]; then
+        if [ "$rc" -eq 0 ]; then
             echo -e "${YELLOW}⚠️  LDAPS works but with self-signed certificates${NC}"
         else
             echo -e "${RED}❌ LDAPS connection failed completely${NC}"
@@ -330,24 +364,30 @@ function test_ldaps_connectivity() {
     # Test service account binding over LDAPS
     echo ""
     echo "Testing service account binding over LDAPS..."
+    set +e
     kubectl exec -n $NAMESPACE deployment/openldap-server -- \
         ldapwhoami -x -H ldaps://localhost:636 \
         -D "$LDAP_BIND_DN" \
         -w "$LDAP_BIND_PASSWORD"
+    rc=$?
+    set -e
     
-    if [ $? -eq 0 ]; then
+    if [ "$rc" -eq 0 ]; then
         echo -e "${GREEN}✅ Service account LDAPS binding successful!${NC}"
         
         # Test reading data over LDAPS
         echo "Testing service account read permissions over LDAPS..."
+        set +e
         kubectl exec -n $NAMESPACE deployment/openldap-server -- \
             ldapsearch -x -H ldaps://localhost:636 \
             -D "$LDAP_BIND_DN" \
             -w "$LDAP_BIND_PASSWORD" \
             -b "ou=People,dc=ephico2real,dc=com" \
             "(cn=john.doe)" cn mail 2>/dev/null
+        rc=$?
+        set -e
         
-        if [ $? -eq 0 ]; then
+        if [ "$rc" -eq 0 ]; then
             echo -e "${GREEN}✅ Service account can read data over LDAPS!${NC}"
         else
             echo -e "${YELLOW}⚠️  Service account LDAPS binding works but limited read permissions${NC}"
@@ -384,10 +424,13 @@ function extract_ca_cert() {
     
     # Test LDAPS connectivity first
     echo "Testing LDAPS connectivity..."
+    set +e
     kubectl exec -n $NAMESPACE deployment/openldap-server -- \
         openssl s_client -connect localhost:636 -showcerts < /dev/null > /dev/null 2>&1
+    rc=$?
+    set -e
     
-    if [ $? -ne 0 ]; then
+    if [ "$rc" -ne 0 ]; then
         echo -e "${RED}❌ Cannot connect to LDAPS server${NC}"
         return 1
     fi
@@ -417,21 +460,19 @@ function extract_ca_cert() {
     echo ""
     echo "Creating ConfigMap 'ca-config-map-test' in 'openshift-config' namespace..."
     
-    # Check if openshift-config namespace exists
+    # One atomic apply, the same idiom this script already uses for the LDIF ConfigMaps. The old form
+    # deleted the ConfigMap and then created it, leaving a window in which openshift-config had no CA at
+    # all — during which anything reconciling against it fails with "ConfigMap ... not found". It also
+    # created the openshift-config namespace if absent, which on a real cluster means the script is
+    # running somewhere it should not be; that is now a hard stop instead.
     if ! kubectl get namespace openshift-config > /dev/null 2>&1; then
-        echo -e "${YELLOW}⚠️  openshift-config namespace not found, creating it...${NC}"
-        kubectl create namespace openshift-config
+        echo -e "${RED}❌ namespace openshift-config not found — is this an OpenShift cluster?${NC}"
+        return 1
     fi
-    
-    # Delete existing ConfigMap if it exists
-    kubectl delete configmap ca-config-map-test -n openshift-config --ignore-not-found=true
-    
-    # Create new ConfigMap with the certificate
-    kubectl create configmap ca-config-map-test \
+
+    if kubectl create configmap ca-config-map-test \
         --from-literal=ca.crt="$CERT_DATA" \
-        -n openshift-config
-    
-    if [ $? -eq 0 ]; then
+        -n openshift-config --dry-run=client -o yaml | kubectl apply -f -; then
         echo -e "${GREEN}✅ ConfigMap 'ca-config-map-test' created successfully!${NC}"
         
         # Show ConfigMap details
@@ -532,8 +573,9 @@ function port_forward() {
 
 function deploy_web() {
     echo -e "${GREEN}🌐 Deploying phpLDAPadmin Web Interface...${NC}"
-    kubectl apply -f ldap-rbac.yaml
-    kubectl apply -f phpldapadmin.yaml
+    # 02-phpldapadmin.yaml, and no separate RBAC manifest: `ldap-rbac.yaml` and `phpldapadmin.yaml` have
+    # never existed in this directory, so both of these aborted under set -e before printing anything.
+    kubectl apply -f "${SCRIPT_DIR}/02-phpldapadmin.yaml"
     
     echo -e "${YELLOW}⏳ Waiting for phpLDAPadmin to be ready...${NC}"
     kubectl wait --for=condition=available --timeout=300s deployment/phpldapadmin -n $NAMESPACE
@@ -568,7 +610,7 @@ function get_web_url() {
 
 function delete_web() {
     echo -e "${RED}🗑️  Deleting phpLDAPadmin Web Interface...${NC}"
-    kubectl delete -f phpldapadmin.yaml --ignore-not-found=true
+    kubectl delete -f "${SCRIPT_DIR}/02-phpldapadmin.yaml" --ignore-not-found=true
     echo -e "${GREEN}✅ phpLDAPadmin deleted!${NC}"
 }
 
@@ -613,8 +655,12 @@ spec:
       claimName: ldap-data-pvc
 EOF
     
-    # Wait for cleaner to complete
-    kubectl wait --for=condition=ready pod pvc-cleaner -n $NAMESPACE --timeout=60s
+    # Succeeded, NOT Ready. pvc-cleaner is restartPolicy: Never running a single `rm -rf`, so it goes
+    # straight to Succeeded and Ready never becomes true — the old --for=condition=ready burned the full
+    # 60s, exited 1, and set -e killed the script here, leaving the deployment scaled to 0 with a wiped
+    # PVC. The trap guarantees the scale-back happens even if the cleaner fails.
+    trap 'kubectl scale deployment openldap-server -n $NAMESPACE --replicas=1 >/dev/null 2>&1 || true' RETURN
+    kubectl wait --for=jsonpath='{.status.phase}'=Succeeded pod pvc-cleaner -n $NAMESPACE --timeout=60s
     kubectl logs pvc-cleaner -n $NAMESPACE
     kubectl delete pod pvc-cleaner -n $NAMESPACE
     
@@ -625,6 +671,8 @@ EOF
     kubectl wait --for=condition=available --timeout=300s deployment/openldap-server -n $NAMESPACE
     
     echo -e "${GREEN}✅ Clean restart completed successfully!${NC}"
+    echo -e "${YELLOW}⚠️  The directory is now EMPTY — this wiped the PVC and did not re-import.${NC}"
+    echo -e "${YELLOW}    Run ./20-import-ldap-data.sh to repopulate, or every synced group stays gone.${NC}"
     echo ""
     show_status
 }
