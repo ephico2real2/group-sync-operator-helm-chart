@@ -291,7 +291,11 @@ rules:
   verbs: ["create"]
 - apiGroups: [""]
   resources: [{{ if eq (.Values.oauthSecretExtraction.caCopy.destinationCa.kind | default "ConfigMap") "Secret" }}"secrets"{{ else }}"configmaps"{{ end }}]
-  verbs: ["get", "update", "patch"]
+  # delete is for the pre-delete cleanup Job (01.8), which removes this copy on uninstall — Helm cannot,
+  # because the CA Job creates it imperatively and it is therefore absent from the release manifest. Pinned
+  # by name, like the rest: the equivalent grant on the credentials Secret is already pinned in
+  # -oauth-target-create above.
+  verbs: ["get", "update", "patch", "delete"]
   resourceNames: ["{{ .Values.oauthSecretExtraction.caCopy.destinationCa.name }}"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

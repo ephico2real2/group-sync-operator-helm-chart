@@ -1,0 +1,117 @@
+# Deletes the two objects the other hook Jobs create with `oc apply`, on uninstall.
+#
+# WHY THIS EXISTS AT ALL. `helm uninstall` deletes what is recorded in the stored release manifest. The
+# credentials Secret (01.5) and the CA copy (01.6) are written imperatively from inside hook Job containers,
+# so they are not in that manifest and Helm has never known about them. Measured on a real uninstall: the
+# release went away and both objects stayed, along with the operator's CSV, and had to be removed by hand.
+#
+# Stamping them with meta.helm.sh/release-name — which 01.5 and 01.6 now do — does NOT fix this. Those
+# annotations govern ADOPTION, letting a later install take over an existing object rather than refusing it.
+# Nothing in Helm reads them at uninstall time. This Job is what actually removes the objects.
+#
+# Nor can either object become an ordinary template: both bodies are read from another namespace at run time,
+# so a template could only obtain them via `lookup`, which returns nothing in an offline render — the failure
+# mode that made the shipped ArgoCD Application unrenderable.
+#
+# pre-delete, not post-delete: Helm runs pre-delete hooks BEFORE it deletes the release's own resources, so
+# the ServiceAccount, Role and RoleBinding this Job authenticates and authorises with are all still present.
+# On post-delete they would already be gone and every `oc delete` would be Forbidden.
+{{- if include "group-sync-operator-helm.oauthJobsEnabled" . }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "group-sync-operator-helm.fullname" . }}-hook-object-cleanup
+  namespace: {{ .Values.groupSync.namespace }}
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: hook-object-cleanup
+  annotations:
+    helm.sh/hook: pre-delete
+    # Deletes itself once it succeeds. A pre-delete hook that lingered would be the very thing this Job
+    # exists to prevent — an untracked object left behind by an uninstall. Kept on failure, so a Forbidden
+    # or a timeout is still there to read.
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.oauthSecretExtraction.backoffLimit }}
+  # Bounded: an uninstall must not hang on this. Whatever is not deleted here is reported by the Job's own
+  # log and can be removed by hand; blocking `helm uninstall` indefinitely would be worse.
+  activeDeadlineSeconds: 120
+  template:
+    metadata:
+      labels:
+        {{- include "group-sync-operator-helm.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: hook-object-cleanup
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ .Values.oauthSecretExtraction.serviceAccount.name }}
+      containers:
+      - name: hook-object-cleanup
+        image: {{ .Values.oauthSecretExtraction.image.repository }}:{{ .Values.oauthSecretExtraction.image.tag }}
+        imagePullPolicy: {{ .Values.oauthSecretExtraction.image.pullPolicy }}
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -u
+
+          echo "🧹 Removing the objects the hook Jobs created"
+          echo "============================================="
+
+          # BY NAME, never by label selector. Selecting would need `list` on Secrets in this namespace, and
+          # RBAC does not honour resourceNames for list — so the grant could not be pinned and would cover
+          # every Secret here. Deleting by name needs only `delete` on these two names, which is what the
+          # -oauth-target-create and -oauth-ca-create Roles grant.
+          rc=0
+          drop() { # kind name namespace
+            if oc delete "$1" "$2" -n "$3" --ignore-not-found=true 2>/tmp/err; then
+              echo "✅ ${1}/${2} in ${3}"
+            else
+              echo "⚠️  could not delete ${1}/${2} in ${3}: $(tr -d '\n' </tmp/err)"
+              echo "    remove it by hand: oc delete $1 $2 -n $3"
+              rc=1
+            fi
+          }
+{{- if .Values.oauthSecretExtraction.enabled }}
+
+          # Written by the extraction Job. Holds the bind credentials, so leaving it behind after an
+          # uninstall leaves a credential behind.
+          drop secret {{ .Values.oauthSecretExtraction.targetSecret.name }} {{ .Values.oauthSecretExtraction.targetSecret.namespace }}
+{{- end }}
+{{- if and (include "group-sync-operator-helm.caJobEnabled" .) .Values.oauthSecretExtraction.caCopy.enabled }}
+
+          # Written by the CA Job. Public material, but it is named "-copy" precisely because nothing should
+          # treat it as durable.
+          drop {{ .Values.oauthSecretExtraction.caCopy.destinationCa.kind | default "ConfigMap" | lower }} {{ .Values.oauthSecretExtraction.caCopy.destinationCa.name }} {{ .Values.oauthSecretExtraction.caCopy.destinationCa.namespace | default .Values.groupSync.namespace }}
+{{- end }}
+
+          echo
+          if [ "$rc" -eq 0 ]; then
+            echo "🎉 nothing left behind by the hook Jobs"
+          else
+            echo "⚠️  finished with something still present — see above. The uninstall itself is unaffected."
+          fi
+          # Deliberately exit 0 even on a partial failure: a non-zero pre-delete hook fails the uninstall
+          # and leaves the release in a half-removed state, which is a worse outcome than an object needing
+          # one manual delete. The log above is the record.
+          exit 0
+        env:
+        - name: HOME
+          value: /tmp
+        resources:
+          requests:
+            cpu: {{ .Values.oauthSecretExtraction.resources.requests.cpu }}
+            memory: {{ .Values.oauthSecretExtraction.resources.requests.memory }}
+          limits:
+            cpu: {{ .Values.oauthSecretExtraction.resources.limits.cpu }}
+            memory: {{ .Values.oauthSecretExtraction.resources.limits.memory }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+      # runAsNonRoot deliberately unset, for the same reason as the other hook Jobs: the image declares
+      # USER 0, and asserting non-root without a runAsUser depends on the SCC injecting one.
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+{{- end }}

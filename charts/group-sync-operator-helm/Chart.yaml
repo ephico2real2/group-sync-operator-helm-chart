@@ -2,7 +2,7 @@ apiVersion: v2
 name: group-sync-operator-helm
 description: A Helm chart to deploy the GroupSync Operator and its configuration for LDAP synchronization in OpenShift
 type: application
-version: 0.8.0
+version: 0.9.0
 appVersion: "1.1"
 home: https://github.com/ephico2real2/group-sync-operator-helm-chart
 icon: https://raw.githubusercontent.com/redhat-cop/group-sync-operator/master/assets/logo.png
@@ -29,6 +29,8 @@ annotations:
   # discarded now take effect, and trustedCA.injected now wins over a custom groupSync.ca.name. Anyone
   # moving from 0.3.x or 0.4.x still needs to read them.
   artifacthub.io/changes: |
+    - kind: fixed
+      description: "helm uninstall no longer leaves the credentials Secret and the CA copy behind. Both are written imperatively from inside hook Job containers, so they never appear in the stored release manifest and Helm has never known about them - measured on a real uninstall, the release went away and both objects stayed. A pre-delete hook Job now removes them by name, using delete verbs pinned to those two names; pre-delete because Helm runs it before deleting the release's own resources, so the ServiceAccount and Roles the Job needs still exist. The Jobs also now stamp both objects with the release's labels and the meta.helm.sh annotations, which makes them selectable by release and lets a later chart version adopt them - but note those annotations govern adoption only and do NOT cause deletion, which is why the pre-delete Job is the mechanism."
     - kind: fixed
       description: "The shipped argocd-application.yaml could never render. It pointed valueFiles at the chart's own values.yaml, where groupSync.url is empty, and ArgoCD's repo-server renders offline with helm template so the chart's lookup-based discovery of the url resolves to nothing - every GroupSync CR then hit a fail. It also set targetRevision: HEAD, which is a git ref and meaningless for a Helm chart source, where ArgoCD resolves targetRevision as a chart semver. It is now a two-source Application: the chart from the Helm repository pinned to 0.8.x, and the values file from your own git repository via $values, which must set groupSync.url explicitly. Needs ArgoCD 2.6 or newer."
     - kind: changed

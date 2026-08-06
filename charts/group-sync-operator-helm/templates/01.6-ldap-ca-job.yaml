@@ -181,6 +181,8 @@ spec:
             --from-file="${CA_TGT_KEY}=/tmp/ca/${CA_SRC_KEY}" \
             -n "$CA_TGT_NS" \
             --dry-run=client -o yaml \
+            | oc label --local -f - -o yaml {{ include "group-sync-operator-helm.hookObjectLabels" . }} \
+            | oc annotate --local -f - -o yaml {{ include "group-sync-operator-helm.hookObjectAnnotations" . }} \
             | oc annotate --local -f - -o yaml \
                 "group-sync.redhat-cop.io/source=${CA_SRC_NS}/${CA_SRC}" \
                 "group-sync.redhat-cop.io/source-key=${CA_SRC_KEY}" \
@@ -192,6 +194,8 @@ spec:
             --from-file="${CA_TGT_KEY}=/tmp/ca/${CA_SRC_KEY}" \
             -n "$CA_TGT_NS" \
             --dry-run=client -o yaml \
+            | oc label --local -f - -o yaml {{ include "group-sync-operator-helm.hookObjectLabels" . }} \
+            | oc annotate --local -f - -o yaml {{ include "group-sync-operator-helm.hookObjectAnnotations" . }} \
             | oc annotate --local -f - -o yaml \
                 "group-sync.redhat-cop.io/source=${CA_SRC_NS}/${CA_SRC}" \
                 "group-sync.redhat-cop.io/source-key=${CA_SRC_KEY}" \
