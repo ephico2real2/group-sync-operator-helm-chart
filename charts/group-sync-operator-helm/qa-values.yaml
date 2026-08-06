@@ -47,7 +47,24 @@ groupSync:
       baseDN: "ou=Groups,dc=example,dc=com"
       filter: "(&(objectClass=groupOfNames)(cn=app-ocp-rbac-*))"
 
-# Off: the shipped example targets the local test directory's bda-rbac-* groups. Add tenants here when
-# QA needs a second naming pattern — see docs/DESIGN_custom_groupsync.md.
+# Off, and now for a plainer reason than before: as of 0.10.0 values.yaml ships customGroupSyncs.items
+# EMPTY, so nothing arrives unless a values file asks for it. Turning the switch on here without items would
+# create no CRs at all; turning it on WITH the lab's bda-rbac-* tenant would create a CR that matches nothing
+# on this cluster, since the groupsQuery above is app-ocp-rbac-* against dc=example,dc=com.
+#
+# One CR per naming pattern. The primary GroupSync already covers app-ocp-rbac-*, so QA needs a tenant here
+# only when a SECOND pattern appears. When it does, declare it like this — the same shape crc-values.yaml
+# uses for the lab's bda-rbac-* groups:
+#
+#   customGroupSyncs:
+#     enabled: true
+#     items:
+#       - name: bda-rbac-groupsync
+#         enabled: true
+#         groupCn: "bda-rbac-*"
+#         schedule: "0 * * * *"     # optional; inherits groupSync.schedule otherwise
+#
+# Patterns must not overlap between tenants — that is guaranteed by the org naming standard, not by the
+# chart. See docs/DESIGN_custom_groupsync.md.
 customGroupSyncs:
   enabled: false
