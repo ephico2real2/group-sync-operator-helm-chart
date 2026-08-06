@@ -304,6 +304,35 @@ that denies the read, or the copy was never created. Check the Job:
 oc logs -n group-sync-operator job/group-sync-operator-ldap-ca | grep -E '🔎|CA'
 ```
 
+**…seen exactly once on a fresh `helm install` in copy mode, then never again**
+
+That one is expected and clears itself. The GroupSync CR is an ordinary resource; the CA copy is written by
+a `post-install` hook. Helm applies every ordinary resource **first** and runs hooks afterwards, so the CR
+exists — naming `ca-config-map-copy` — a couple of minutes before anything creates it. The operator
+reconciles in that window and records the error. Measured on a clean install:
+
+```
+CR created                    05:16:25
+ReconcileError                05:18:26     <- copy does not exist yet
+copy first existed            05:18:45
+first successful sync         05:21:26
+```
+
+The `argocd.argoproj.io/sync-wave` annotations order this correctly under ArgoCD — the CA Job is wave 2 and
+the CR wave 3 — but **plain Helm ignores sync-waves entirely** and orders by hook phase instead. There is
+nothing to fix on the cluster; the next reconcile succeeds on its own.
+
+To tell this apart from a real failure, compare timestamps rather than reading the message. The error is
+stale if its transition time is **older** than the last successful sync, which is the same test `helm test`
+applies before it reports one:
+
+```bash
+oc get groupsync <name> -n group-sync-operator \
+  -o jsonpath='{.status.lastSyncSuccessTime}{"  "}{range .status.conditions[?(@.type=="ReconcileError")]}{.lastTransitionTime}{end}{"\n"}'
+```
+
+A `ReconcileError` newer than `lastSyncSuccessTime` is live and worth chasing. Older, and it is history.
+
 **`caSecret must be specified` even though the resource exists**
 
 `groupSync.ca.field` is set to `ca` rather than `caSecret`. The CRD carries both and marks `caSecret`
