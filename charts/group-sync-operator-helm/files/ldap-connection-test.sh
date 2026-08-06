@@ -39,13 +39,28 @@ if [ "$FAILED" -gt 0 ]; then
 fi
 
 section "Credentials from the mounted secret"
-if   [ -s /credentials/username ]; then BIND_DN=$(cat /credentials/username)
-elif [ -s /credentials/bindDN   ]; then BIND_DN=$(cat /credentials/bindDN)
-else echo "   ❌ no bind DN at /credentials/username or /credentials/bindDN"; exit 1; fi
+# username and password ONLY. The operator reads exactly these two keys — secretUsernameKey and
+# secretPasswordKey in its source — and a missing one is not an error to it: getLdapCredentialValue
+# substitutes an empty string, so the wrong key names give an anonymous bind rather than a failure.
+#
+# This used to fall back to bindDN/bindPassword. Those are the OAuth identity provider's names, on a
+# DIFFERENT Secret in openshift-config that this chart does not own, and the operator never reads them.
+# Accepting them here reported a Secret as usable that the operator cannot authenticate with.
+if [ -s /credentials/username ]; then BIND_DN=$(cat /credentials/username)
+else
+  echo "   ❌ no bind DN at /credentials/username"
+  echo "      The operator reads the keys username and password, and nothing else. bindDN belongs to the"
+  echo "      OAuth identity provider's Secret in openshift-config, not to this one."
+  exit 1
+fi
 
-if   [ -s /credentials/password     ]; then BIND_PW=$(cat /credentials/password)
-elif [ -s /credentials/bindPassword ]; then BIND_PW=$(cat /credentials/bindPassword)
-else echo "   ❌ no bind password at /credentials/password or /credentials/bindPassword"; exit 1; fi
+if [ -s /credentials/password ]; then BIND_PW=$(cat /credentials/password)
+else
+  echo "   ❌ no bind password at /credentials/password"
+  echo "      The operator reads the keys username and password, and nothing else. bindPassword belongs to"
+  echo "      the OAuth identity provider's Secret in openshift-config, not to this one."
+  exit 1
+fi
 
 pass "bind DN: ${BIND_DN}"
 pass "bind password: ${#BIND_PW} characters"
