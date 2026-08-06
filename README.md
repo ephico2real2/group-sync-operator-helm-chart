@@ -304,15 +304,48 @@ This section provides detailed guidance on configuring the GroupSync Operator fo
 
 ### LDAP Authentication
 
-The operator requires a bind account to authenticate with the LDAP server:
+The operator needs a bind account. **Two different secrets are involved, with different keys and
+different owners** — and mixing them up is quiet rather than loud, so it is worth getting straight first.
+
+| secret | keys | who owns it |
+|---|---|---|
+| `openshift-config/ldap-secret` | `bindPassword` | **not this chart.** The bind password for the cluster's OAuth LDAP identity provider. On a real cluster it already exists, placed there by whatever automation manages platform credentials, and it pre-dates this chart |
+| `group-sync-operator/ldap-group-sync` | `username`, `password` | **this chart**, when `oauthSecretExtraction.enabled` is true (the default) — the extraction Job writes it on every install and upgrade |
+
+The chart only ever **reads** the first one: it is granted no write verb on it anywhere, so it cannot
+change it even by accident — the same separation the chart keeps from `proxy/cluster.spec.trustedCA`. How
+narrowly that read is scoped depends on one value. With `oauthSecretExtraction.sourceSecret.name` set it is
+pinned to that one name. Left empty — the default — the name is discovered from the OAuth CR at runtime, so
+no `resourceNames` can cover it and the read spans Secrets in `openshift-config`. Read-only either way, but
+if that is too broad for your cluster, name the Secret explicitly.
+
+The OAuth provider's **bind DN is a field on the OAuth CR** (`.ldap.bindDN`), not a secret key. There is
+no `bindDN` key anywhere in this design.
+
+#### With `oauthSecretExtraction.enabled: true` (the default)
+
+Create nothing. The Job reads the bind DN from the OAuth CR and the password from
+`openshift-config/ldap-secret`, then writes `group-sync-operator/ldap-group-sync` with the keys the
+operator reads:
 
 ```bash
-# Create the LDAP credentials secret
+# What the Job produces — shown so you can recognise it, not so you run it
 oc create secret generic ldap-group-sync \
-  --from-literal=bindDN='cn=serviceaccount,ou=serviceaccounts,dc=example,dc=com' \
-  --from-literal=bindPassword='YOUR_SECURE_PASSWORD' \
+  --from-literal=username='cn=serviceaccount,ou=serviceaccounts,dc=example,dc=com' \
+  --from-literal=password='YOUR_SECURE_PASSWORD' \
   -n group-sync-operator
 ```
+
+Do not hand-edit that secret: the next `helm upgrade` overwrites it.
+
+#### With `oauthSecretExtraction.enabled: false`
+
+Then it is yours to create, and it must use `username` and `password` — exactly the command above. The
+operator reads those two keys and nothing else (`secretUsernameKey = "username"`,
+`secretPasswordKey = "password"` in the operator source). A missing key is **not** an error: the operator
+substitutes an empty string, which becomes an anonymous bind. A directory that refuses anonymous bind
+then reports *"unauthenticated bind disallowed"*, which points at the directory rather than at your
+secret, and a directory that permits it binds successfully and sees nothing.
 
 ### LDAP Schema Configuration
 
@@ -384,16 +417,33 @@ Follow these security best practices to ensure secure deployment and operation o
 
 ### Credentials Management
 
-- **Regularly rotate LDAP bind credentials**:
+- **Regularly rotate LDAP bind credentials.** Where you rotate depends on who owns the credential, and
+  writing to the wrong one is silent:
+
+  **Default (`oauthSecretExtraction.enabled: true`) — rotate at the source, not here.** The bind password
+  lives in `openshift-config/ldap-secret`, which this chart does not own and cannot write. Whoever manages
+  platform credentials rotates it there, exactly as they would for any other OAuth identity provider. Then
+  re-run the upgrade so the extraction Job re-reads it:
 
   ```bash
-  # Update the LDAP credentials secret
+  helm upgrade group-sync group-sync-operator/group-sync-operator-helm \
+    -n group-sync-operator --reset-values -f my-cluster-values.yaml
+  ```
+
+  **Only if `oauthSecretExtraction.enabled: false`** do you rotate `ldap-group-sync` yourself, and it must
+  use `username`/`password`:
+
+  ```bash
   oc create secret generic ldap-group-sync \
-    --from-literal=bindDN='cn=serviceaccount,ou=serviceaccounts,dc=example,dc=com' \
-    --from-literal=bindPassword='NEW_SECURE_PASSWORD' \
+    --from-literal=username='cn=serviceaccount,ou=serviceaccounts,dc=example,dc=com' \
+    --from-literal=password='NEW_SECURE_PASSWORD' \
     -n group-sync-operator \
     --dry-run=client -o yaml | oc replace -f -
   ```
+
+  Writing `ldap-group-sync` while extraction is enabled achieves nothing — the next upgrade overwrites it.
+  Writing it with `bindDN`/`bindPassword` is worse: those keys are the OAuth provider's, the operator does
+  not read them, and it will bind anonymously instead of failing.
 
 - **Use a dedicated service account** with minimal permissions in your LDAP directory
 - **Store secrets securely** and limit access to the namespace containing credentials
@@ -626,18 +676,18 @@ oc get secret ldap-group-sync -n group-sync-operator -o yaml > ldap-credentials-
 ## Installation
 
 ```bash
-# Create namespace
-oc create namespace group-sync-operator
-
-# Create LDAP credentials secret
-oc create secret generic ldap-group-sync \
-  --from-literal=bindDN='YOUR_BIND_DN' \
-  --from-literal=bindPassword='YOUR_BIND_PASSWORD' \
-  -n group-sync-operator
-
-# Install the chart
+# The chart creates the namespace, so --create-namespace is all that is needed.
+#
+# Do NOT create ldap-group-sync by hand. With oauthSecretExtraction.enabled (the default) the
+# post-install Job writes it from the cluster's OAuth LDAP provider, overwriting anything already
+# there — so a hand-made secret is discarded silently, and yours would have carried the wrong keys
+# anyway. See "LDAP Authentication" above for the two-secret model and for the
+# oauthSecretExtraction.enabled: false case, where you do own it.
 helm install group-sync group-sync-operator/group-sync-operator-helm \
-  -n group-sync-operator --create-namespace
+  -n group-sync-operator --create-namespace \
+  -f my-cluster-values.yaml
+
+helm test group-sync -n group-sync-operator --logs
 ```
 
 ## Configuration

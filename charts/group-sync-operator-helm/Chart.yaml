@@ -2,7 +2,7 @@ apiVersion: v2
 name: group-sync-operator-helm
 description: A Helm chart to deploy the GroupSync Operator and its configuration for LDAP synchronization in OpenShift
 type: application
-version: 0.6.0
+version: 0.6.1
 appVersion: "1.1"
 home: https://github.com/ephico2real2/group-sync-operator-helm-chart
 icon: https://raw.githubusercontent.com/redhat-cop/group-sync-operator/master/assets/logo.png
@@ -29,6 +29,8 @@ annotations:
   # discarded now take effect, and trustedCA.injected now wins over a custom groupSync.ca.name. Anyone
   # moving from 0.3.x or 0.4.x still needs to read them.
   artifacthub.io/changes: |
+    - kind: fixed
+      description: "The three credential procedures in README.md and the credentialsSecret documentation in values.yaml named the keys bindDN and bindPassword. The operator reads only username and password (secretUsernameKey/secretPasswordKey), and getLdapCredentialValue returns an empty string for a missing key with no error - so following those procedures produced an anonymous bind rather than a failure. The docs now name the keys the operator actually reads, say which of the two Secrets this chart does not own, and no longer claim the read of the OAuth Secret is pinned to one name when sourceSecret.name is left empty."
     - kind: added
       description: "The LDAP CA preflight and copy moved into their own hook Job (01.6-ldap-ca-job.yaml), gated by whether there is CA work to do rather than by oauthSecretExtraction.enabled. A cluster with no OAuth LDAP identity provider to extract a bind password from can now still have its CA copied into the operator's namespace: set oauthSecretExtraction.enabled=false and leave caCopy.enabled=true."
     - kind: changed
