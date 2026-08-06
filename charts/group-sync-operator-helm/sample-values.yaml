@@ -73,3 +73,12 @@ groupSync:
 # chart. See docs/DESIGN_custom_groupsync.md.
 customGroupSyncs:
   enabled: false
+
+# Operator pod sizing, stated explicitly rather than inherited. Raise these on a busy directory: requests
+# are a scheduling guarantee, and with no limits set the operator can still burst above them. Remember OLM
+# applies the block to BOTH containers, so the scheduler is asked for double what is written here.
+subscription:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 100Mi

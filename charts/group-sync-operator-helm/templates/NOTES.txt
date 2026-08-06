@@ -92,6 +92,22 @@ The deployment happens in the following order:
 4. Operator readiness wait Job (sync-wave: 2) — blocks until the CSV is Succeeded, the
    operator Deployment has a ready replica, and the GroupSync CRD is Established
 5. GroupSync custom resource (sync-wave: 3)
+{{- with .Values.subscription.resources }}
+
+OPERATOR POD SIZING — subscription.resources is set to:
+
+{{ toYaml . | indent 6 }}
+
+    OLM applies one block to EVERY container, so the scheduler is asked for DOUBLE the above — once for the
+    manager and once for the kube-rbac-proxy sidecar — and it REPLACES what the operator's own CSV declares
+    rather than merging with it.
+
+    Raising this is how you give a busy directory more headroom. But if the doubled total does not fit a
+    node, the new pod stays Pending with "Insufficient cpu" while the OLD pod keeps serving, and this
+    install still reports success — nothing turns red. After changing it, confirm the rollout finished:
+
+      oc rollout status deploy/{{ $.Values.subscription.name }}-controller-manager -n {{ $.Values.groupSync.namespace }}
+{{- end }}
 
 VERIFICATION STEPS:
 =================
