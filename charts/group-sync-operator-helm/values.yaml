@@ -443,6 +443,12 @@ operatorWait:
   # not per check. 300s covers a cold catalog pull on a slow cluster. A Manual
   # installPlanApproval with nobody to approve it will use the whole budget and then fail with
   # the command to run — which is the right outcome, since it genuinely is not installed.
+  #
+  # Enforced by one wall-clock deadline taken before the first check, so raising this raises the total and
+  # nothing else. It did NOT hold until 0.8.0: the retry count was computed once and used by each of the
+  # three loops, so every check got the full budget and the total could reach 3x this — except the pod's
+  # activeDeadlineSeconds (this + 120) killed it part-way, with no message of its own. If a slow cluster
+  # needs longer, raise this value; the pod deadline follows it automatically.
   waitSeconds: 300
 
   # 0, not the default 6. Retrying a timeout re-waits from zero and turns a 5-minute failure into

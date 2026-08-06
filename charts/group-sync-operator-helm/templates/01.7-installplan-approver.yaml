@@ -96,6 +96,12 @@ spec:
               ATTEMPTS={{ div .Values.installPlanApprover.waitSeconds 5 }}
               INTERVAL=5
 
+              # ONE budget for both loops. ATTEMPTS is computed once and used twice, so each wait used to
+              # get the full waitSeconds while activeDeadlineSeconds allows waitSeconds + 120 — the kubelet
+              # killed the pod part-way with no message of its own. Same fix as the operator-wait Job.
+              DEADLINE=$(( $(date +%s) + {{ .Values.installPlanApprover.waitSeconds }} ))
+              out_of_time() { [ "$(date +%s)" -ge "$DEADLINE" ]; }
+
               log()  { echo "[installplan-approver] $*"; }
               fail() { echo "[installplan-approver] FAILED: $*" >&2; exit 1; }
 
@@ -163,6 +169,7 @@ spec:
                   exit 1
                 fi
                 log "attempt ${i}/${ATTEMPTS}: no installPlanRef, csv=${CSV:-<none>}"
+                out_of_time && break
                 sleep "$INTERVAL"
               done
               # installPlanRef can lag or clear while a plan sits in RequiresApproval. The
@@ -213,6 +220,7 @@ spec:
                 PHASE="$(plan_field "$PLAN" .status.phase)"
                 [ "$PHASE" = "Complete" ] && { log "${PLAN} is Complete"; break; }
                 log "attempt ${i}/${ATTEMPTS}: phase=${PHASE:-<none>}"
+                out_of_time && break
                 sleep "$INTERVAL"
               done
               [ "$PHASE" = "Complete" ] || fail "${PLAN} is phase '${PHASE:-<none>}'.

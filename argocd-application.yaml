@@ -9,23 +9,42 @@ metadata:
     argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
     openshift-requirement: "true"
     openshift-version: "4.x"
+# TWO SOURCES, and both are required. The chart comes from the Helm repository; the values file comes from
+# YOUR git repository, so per-cluster configuration is versioned with your config rather than baked into a
+# published chart. Needs ArgoCD 2.6 or newer, which is where multiple sources landed.
+#
+# EDIT THE SECOND SOURCE BEFORE APPLYING THIS. The repoURL and the values path below are placeholders.
 spec:
   project: default
-  source:
-    repoURL: https://ephico2real2.github.io/group-sync-operator-helm-chart
-    targetRevision: HEAD
-    chart: group-sync-operator-helm
-    helm:
-      valueFiles:
-        - values.yaml
-      # ArgoCD renders Helm sources with `helm template --include-crds`, so the vendored
-      # crds/groupsyncs.redhatcop.redhat.io.yaml IS part of this Application unless it is skipped.
-      # Without this, Argo takes management of a CRD that OLM already owns through the Subscription and
-      # CSV, and with prune + selfHeal below it can delete or revert it. crds/ exists only so a plain
-      # `helm install` can resolve the GroupSync kind before rendering templates — see the README.
-      #
-      # Deleting that CRD cascades to every GroupSync CR, so leave this set.
-      skipCrds: true
+  sources:
+    - repoURL: https://ephico2real2.github.io/group-sync-operator-helm-chart
+      chart: group-sync-operator-helm
+      # A CHART VERSION, not a git ref. For a Helm source ArgoCD resolves targetRevision as a semver, so
+      # `HEAD` — which this used to say — is meaningless here and pins nothing. `0.8.x` takes patches
+      # automatically and holds the minor, so a behaviour change never arrives unannounced.
+      targetRevision: 0.8.x
+      helm:
+        # The values file, from the second source. `$values` is only valid at the START of the path, and it
+        # resolves relative to the root of the repo that carries `ref: values`.
+        #
+        # THAT FILE MUST SET groupSync.url EXPLICITLY. ArgoCD's repo-server renders with `helm template`,
+        # offline, so the chart's `lookup`-based discovery of the url from the cluster's OAuth CR resolves to
+        # nothing there — and every GroupSync CR the chart emits then hits a `fail`. This Application used to
+        # point at the chart's own values.yaml, where url is "", so it could never render at all.
+        valueFiles:
+          - $values/clusters/prod/group-sync-values.yaml
+        # ArgoCD renders Helm sources with `helm template --include-crds`, so the vendored
+        # crds/groupsyncs.redhatcop.redhat.io.yaml IS part of this Application unless it is skipped.
+        # Without this, Argo takes management of a CRD that OLM already owns through the Subscription and
+        # CSV, and with prune + selfHeal below it can delete or revert it. crds/ exists only so a plain
+        # `helm install` can resolve the GroupSync kind before rendering templates — see the README.
+        #
+        # Deleting that CRD cascades to every GroupSync CR, so leave this set.
+        skipCrds: true
+    # Values only: `ref` makes this source referenceable as $values and contributes no manifests of its own.
+    - repoURL: https://git.example.com/YOUR-ORG/YOUR-CONFIG-REPO.git
+      targetRevision: main
+      ref: values
   destination:
     server: https://kubernetes.default.svc
     namespace: group-sync-operator

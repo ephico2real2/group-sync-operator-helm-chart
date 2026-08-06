@@ -329,9 +329,31 @@ jobs:
                   cur = cur[key]
               return cur
 
-          rows = re.findall(
-              r'^\| ((?:groupSync|oauthSecretExtraction|test|trustedCA)\.[\w.]+) \|[^|]*\| ([^|]+)\|',
-              pathlib.Path('README.md').read_text(), re.M)
+          # Scoped by TABLE HEADER, not by a prefix allowlist. The allowlist was
+          # (?:groupSync|oauthSecretExtraction|test|trustedCA), so every subscription.*,
+          # installPlanApprover.*, operatorWait.* and customGroupSyncs.* row was invisible — which is how
+          # `subscription.installPlanApproval | Automatic` survived while values.yaml shipped Manual, a
+          # documented default that inverted a real control.
+          #
+          # Matching any dotted row anywhere in the file instead would produce FALSE POSITIVES: README also
+          # has a `| Left empty | Taken from | Notes |` table whose third column is prose, not a default.
+          # Measured, that naive form flagged 2 good rows as wrong. So: only rows inside a table headed
+          # `| Parameter | Description | Default... |`.
+          HEADER = re.compile(r'^\|\s*Parameter\s*\|\s*Description\s*\|\s*Default')
+          ROW = re.compile(r'^\|\s*`?([a-zA-Z][\w]*(?:\.[\w\[\]]+)+)`?\s*\|[^|]*\|([^|]*)\|')
+          rows, inside = [], False
+          for line in pathlib.Path('README.md').read_text().split('\n'):
+              if HEADER.match(line):
+                  inside = True
+                  continue
+              if inside:
+                  if not line.startswith('|'):
+                      inside = False
+                      continue
+                  m = ROW.match(line)
+                  # `[]` paths (customGroupSyncs.items[].*) describe a list element, which dig cannot resolve.
+                  if m and '[]' not in m.group(1):
+                      rows.append((m.group(1), m.group(2)))
           if not rows:
               print("::error::no parameter rows found in README.md — did the table format change?")
               sys.exit(1)
