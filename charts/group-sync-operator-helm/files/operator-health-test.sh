@@ -177,28 +177,42 @@ echo "---------------------------------"
 if oc get secret "$CREDENTIALS_SECRET_NAME" -n "$CREDENTIALS_SECRET_NAMESPACE" &> /dev/null; then
   require "LDAP credentials secret exists" 0
   
-  # Validate secret has required keys (OAuth extraction uses 'username'/'password', manual uses 'bindDN'/'bindPassword')
-  if oc get secret "$CREDENTIALS_SECRET_NAME" -n "$CREDENTIALS_SECRET_NAMESPACE" -o jsonpath='{.data.username}' | base64 -d &> /dev/null; then
-    BIND_DN=$(oc get secret "$CREDENTIALS_SECRET_NAME" -n "$CREDENTIALS_SECRET_NAMESPACE" -o jsonpath='{.data.username}' | base64 -d)
-    require "Secret contains valid bind DN (OAuth format): $BIND_DN" 0
-    SECRET_FORMAT="OAuth extraction"
-  elif oc get secret "$CREDENTIALS_SECRET_NAME" -n "$CREDENTIALS_SECRET_NAMESPACE" -o jsonpath='{.data.bindDN}' | base64 -d &> /dev/null; then
-    BIND_DN=$(oc get secret "$CREDENTIALS_SECRET_NAME" -n "$CREDENTIALS_SECRET_NAMESPACE" -o jsonpath='{.data.bindDN}' | base64 -d)
-    require "Secret contains valid bind DN (manual format): $BIND_DN" 0
-    SECRET_FORMAT="Manual secret"
+  # username and password ONLY. Those are the two keys the operator reads — secretUsernameKey and
+  # secretPasswordKey in its source — and a missing one is not an error to it: getLdapCredentialValue
+  # substitutes an empty string, so wrong key names give an anonymous bind rather than a failure.
+  #
+  # This used to accept bindDN/bindPassword as an alternative "manual format" and PASS on it. Those are
+  # the OAuth identity provider's key names, on a DIFFERENT Secret in openshift-config that this chart
+  # does not own; the operator never reads them. Passing on them told you a Secret was usable that the
+  # operator cannot authenticate with.
+  #
+  # Asserted on the decoded VALUE, not on a pipeline's exit status. `oc get -o jsonpath='{.data.KEY}' |
+  # base64 -d` exits 0 for a key that does not exist — jsonpath prints nothing and base64 decodes nothing
+  # successfully — so the old form could not detect a missing key at all. Measured against this cluster,
+  # it reported a key literally named definitely-not-a-key as present, which made the first branch always
+  # win, left the bindDN branch unreachable, and passed a Secret with no username at all as valid with an
+  # empty bind DN.
+  secret_key() {
+    oc get secret "$CREDENTIALS_SECRET_NAME" -n "$CREDENTIALS_SECRET_NAMESPACE" \
+      -o "jsonpath={.data.$1}" 2>/dev/null | base64 -d 2>/dev/null
+  }
+  WRONG_KEYS_HINT="The operator reads only username and password. bindDN and bindPassword are the OAuth
+     identity provider's key names, on its own Secret in openshift-config, and are never read from this one."
+
+  BIND_DN=$(secret_key username)
+  if [ -n "$BIND_DN" ]; then
+    require "Secret key username holds a bind DN: $BIND_DN" 0
   else
-    require "Secret contains valid bind DN (username or bindDN)" 1
-    SECRET_FORMAT="Unknown"
+    require "Secret key username is present and non-empty" 1
+    echo "   ${WRONG_KEYS_HINT}"
   fi
-  
-  if oc get secret "$CREDENTIALS_SECRET_NAME" -n "$CREDENTIALS_SECRET_NAMESPACE" -o jsonpath='{.data.password}' | base64 -d &> /dev/null; then
-    PASSWORD_LEN=$(oc get secret "$CREDENTIALS_SECRET_NAME" -n "$CREDENTIALS_SECRET_NAMESPACE" -o jsonpath='{.data.password}' | base64 -d | wc -c)
-    require "Secret contains password ($SECRET_FORMAT): ${PASSWORD_LEN} characters" 0
-  elif oc get secret "$CREDENTIALS_SECRET_NAME" -n "$CREDENTIALS_SECRET_NAMESPACE" -o jsonpath='{.data.bindPassword}' | base64 -d &> /dev/null; then
-    PASSWORD_LEN=$(oc get secret "$CREDENTIALS_SECRET_NAME" -n "$CREDENTIALS_SECRET_NAMESPACE" -o jsonpath='{.data.bindPassword}' | base64 -d | wc -c)
-    require "Secret contains password ($SECRET_FORMAT): ${PASSWORD_LEN} characters" 0
+
+  BIND_PW=$(secret_key password)
+  if [ -n "$BIND_PW" ]; then
+    require "Secret key password holds a password: ${#BIND_PW} characters" 0
   else
-    require "Secret contains password (password or bindPassword)" 1
+    require "Secret key password is present and non-empty" 1
+    echo "   ${WRONG_KEYS_HINT}"
   fi
 else
   require "LDAP credentials secret exists in ${CREDENTIALS_SECRET_NAMESPACE}" 1

@@ -2,7 +2,7 @@ apiVersion: v2
 name: group-sync-operator-helm
 description: A Helm chart to deploy the GroupSync Operator and its configuration for LDAP synchronization in OpenShift
 type: application
-version: 0.6.1
+version: 0.7.0
 appVersion: "1.1"
 home: https://github.com/ephico2real2/group-sync-operator-helm-chart
 icon: https://raw.githubusercontent.com/redhat-cop/group-sync-operator/master/assets/logo.png
@@ -29,6 +29,8 @@ annotations:
   # discarded now take effect, and trustedCA.injected now wins over a custom groupSync.ca.name. Anyone
   # moving from 0.3.x or 0.4.x still needs to read them.
   artifacthub.io/changes: |
+    - kind: changed
+      description: "BEHAVIOUR: helm test now requires the credentials Secret to carry non-empty username and password keys, and fails naming them otherwise. Test 4 of the health check previously asserted key presence with `oc get -o jsonpath={.data.KEY} | base64 -d` and tested only that pipeline's exit status - which is 0 for a key that does not exist, since jsonpath prints nothing and base64 decodes nothing successfully. Measured on a live cluster it reported a key named definitely-not-a-key as present, so the first branch always won, the bindDN/bindPassword branch was unreachable, and a Secret with no username passed as valid with an empty bind DN. Both scripts also no longer accept bindDN/bindPassword as an alternative spelling: those are the OAuth identity provider's key names on its own Secret in openshift-config, which this chart does not own and the operator never reads. A suite that was green against such a Secret now fails."
     - kind: fixed
       description: "The three credential procedures in README.md and the credentialsSecret documentation in values.yaml named the keys bindDN and bindPassword. The operator reads only username and password (secretUsernameKey/secretPasswordKey), and getLdapCredentialValue returns an empty string for a missing key with no error - so following those procedures produced an anonymous bind rather than a failure. The docs now name the keys the operator actually reads, say which of the two Secrets this chart does not own, and no longer claim the read of the OAuth Secret is pinned to one name when sourceSecret.name is left empty."
     - kind: added
