@@ -32,7 +32,7 @@ spec:
         #
         #   url     the CR takes it from ldapUrl, which falls back to the cluster's OAuth LDAP provider
         #           when groupSync.url is empty. Baking .Values.groupSync.url meant that on a
-        #           discovery-based install — the qa-values.yaml shape — this rendered "" while the CR
+        #           discovery-based install — the sample-values.yaml shape — this rendered "" while the CR
         #           held a real url, and both scripts treat an empty url as a hard failure. So
         #           `helm test` failed outright on the documented QA path.
         #   ca.key  the CR defaults it to ca.crt; without the same default an emptied ca.key gives the
