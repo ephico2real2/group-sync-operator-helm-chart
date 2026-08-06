@@ -115,6 +115,28 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- if or .Values.oauthSecretExtraction.enabled (include "group-sync-operator-helm.caJobEnabled" .) -}}true{{- end -}}
 {{- end }}
 
+# Metadata the hook Jobs stamp onto the two objects they create with `oc apply` — the credentials Secret and
+# the CA copy. Emitted as shell arguments for `oc label --local` / `oc annotate --local`, so one definition
+# serves both writers and stays in step with the labels Helm puts on ordinary templated resources.
+#
+# THIS DOES NOT MAKE HELM DELETE THEM. The meta.helm.sh annotations govern ADOPTION — whether a future
+# `helm install`/`upgrade` may take over an object that already exists, instead of refusing with "exists and
+# cannot be imported". `helm uninstall` deletes what is in the stored release manifest, and an object created
+# imperatively inside a hook Job is not in it, stamped or not. The pre-delete Job in
+# 01.8-hook-object-cleanup-job.yaml is what actually removes them; do not drop it believing this covers it.
+#
+# What the stamp does buy: the objects become selectable by release
+# (`oc get secret,configmap -l app.kubernetes.io/instance=<release>`), their provenance sits beside the
+# group-sync.redhat-cop.io/source annotations the CA copy already carries, and a later chart version can
+# adopt either into a real template.
+{{- define "group-sync-operator-helm.hookObjectLabels" -}}
+"app.kubernetes.io/managed-by=Helm" "app.kubernetes.io/name={{ include "group-sync-operator-helm.name" . }}" "app.kubernetes.io/instance={{ .Release.Name }}" "helm.sh/chart={{ include "group-sync-operator-helm.chart" . }}"
+{{- end }}
+
+{{- define "group-sync-operator-helm.hookObjectAnnotations" -}}
+"meta.helm.sh/release-name={{ .Release.Name }}" "meta.helm.sh/release-namespace={{ .Release.Namespace }}"
+{{- end }}
+
 # Both Jobs read the cluster OAuth CR, for different reasons, so the one cluster-scoped rule that grants it
 # has to follow whichever of them actually calls the API:
 #
