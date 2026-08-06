@@ -42,7 +42,7 @@ jobs:
       - name: Render every combination and assert coherence
         run: |
           set -uo pipefail
-          CHECKS="oauth-rbac source-secret-rbac ca-coherence ca-copy-kind test-env-matches-cr
+          CHECKS="oauth-rbac source-secret-rbac ca-coherence ca-copy-kind oauth-cr-read test-env-matches-cr
                   no-cluster-wide-secret-read no-cluster-wide-credential-write olm-name-consistent no-artifacts"
           fails=0
 
@@ -104,6 +104,25 @@ jobs:
           # They must never diverge: the CSV is "<package>.v<version>" and both hook Jobs match on it.
           must_render "subscription.name renamed, both names follow" -- \
             "$URL" --set subscription.name=some-mirrored-package
+
+          # The CA copy and the credential extraction are separately gated. Not one case here ran with
+          # oauthSecretExtraction.enabled=false before, which is how the two of them stayed welded together:
+          # turning extraction off silently took the CA copy, its RBAC and its preflight with it, while the
+          # CR went on naming a ConfigMap nothing created.
+          must_render "CA copy without extraction (no OAuth LDAP provider)" -- \
+            "$URL" --set oauthSecretExtraction.enabled=false
+          must_render "extraction without the CA copy (BYO CA, still preflighted)" -- \
+            "$URL" --set oauthSecretExtraction.caCopy.enabled=false
+          must_render "neither: CA and credentials both supplied out of band" -- \
+            "$URL" --set oauthSecretExtraction.enabled=false \
+            --set oauthSecretExtraction.caCopy.enabled=false --set groupSync.ca.name=corp-root-ca
+          must_render "injected CA with no extraction at all" -- \
+            "$URL" --set oauthSecretExtraction.enabled=false --set trustedCA.injected.enabled=true
+          # The copy's destination away from the target Secret: its Role used to grant create alone, so the
+          # first install worked and every upgrade failed on the read that `oc apply` does before patching.
+          must_render "CA copy into its own namespace" -- \
+            "$URL" --set oauthSecretExtraction.caCopy.destinationCa.namespace=corp-trust \
+            --set groupSync.ca.namespace=corp-trust
 
           # Incoherent inputs must be refused at render time, not silently mis-deployed.
           must_fail "CA written as ConfigMap, read as Secret" "reads it as a Secret" -- \

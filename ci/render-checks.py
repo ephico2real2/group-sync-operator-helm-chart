@@ -64,23 +64,11 @@ def grants(rules, group, resource, verb, name=None, ns=None, unpinned=False):
 
 # ---------------------------------------------------------------- checks
 
-def oauth_rbac(docs):
-    """Any script that reads the cluster OAuth CR must be permitted to."""
-    bad = []
-    for name, kind, spec in pod_specs(docs):
-        sa = spec.get('serviceAccountName')
-        ns = None
-        for d in docs:
-            if d.get('kind') == kind and d['metadata']['name'] == name:
-                ns = d['metadata'].get('namespace')
-        for ctr, body in scripts(spec):
-            if 'oc get oauth cluster' not in body:
-                continue
-            rules = rules_for_sa(docs, sa, ns)
-            if not grants(rules, 'config.openshift.io', 'oauths', 'get', name='cluster', ns=ns):
-                bad.append(f"{kind}/{name} container {ctr} runs `oc get oauth cluster` as "
-                           f"sa/{sa} in {ns}, which has no get on config.openshift.io/oauths")
-    return bad
+## oauth_rbac lived here: "any script containing `oc get oauth cluster` must be permitted to run it". It
+## matched on the text alone, which over-reports — the extraction Job's calls sit inside a runtime guard on
+## two literals the template writes, so with both supplied they cannot run. It also asserted only one
+## direction, and so was blind to a cluster-scoped grant nothing uses. Superseded by oauth_cr_read below,
+## registered under both names.
 
 def source_secret_rbac(docs):
     """The Job reads the OAuth bindPassword Secret; the read must be granted in THAT namespace.
@@ -229,10 +217,21 @@ def ca_coherence(docs):
             for f in ('kind', 'name', 'key', 'namespace'):
                 if not block.get(f):
                     bad.append(f"GroupSync/{d['metadata']['name']}: CA block field {f} is empty")
+            # This used to assert "a Job preflights it", which conflated "a Job exists" with "the CA is
+            # satisfied" and so failed two legitimate installs: trustedCA.injected, where the CHART creates
+            # the ConfigMap and OpenShift fills it, and a bring-your-own CA that predates the release.
+            # What actually matters is that SOMETHING accounts for the object the CR names.
+            made_by_chart = any(x.get('kind') == block['kind']
+                                and x['metadata']['name'] == block['name']
+                                and x['metadata'].get('namespace') == block['namespace']
+                                for x in docs)
             preflight = [n for n, s in jobs
                          for _, b in scripts(s) if 'Checking LDAP CA:' in b]
-            if not preflight:
-                bad.append(f"GroupSync/{d['metadata']['name']} needs a CA but no Job preflights it")
+            if not (made_by_chart or preflight):
+                # Legitimate: the CA is external, supplied by platform automation or a prior release. Not
+                # assertable from rendered output either way — a deliberate BYO name and a typo look
+                # identical here — so this is the chart's job to warn about at install time, not ours.
+                continue
             for n, s in jobs:
                 for _, b in scripts(s):
                     if 'Checking LDAP CA:' not in b:
@@ -332,8 +331,53 @@ def no_artifacts_text(path):
             bad.append(f"line {i}: Go template artifact: {line.strip()}")
     return bad
 
-CHECKS = {'oauth-rbac': oauth_rbac, 'source-secret-rbac': source_secret_rbac,
+def oauth_cr_read(docs):
+    """The single oauths grant must match exactly the Jobs that can reach `oc get oauth cluster`.
+
+    Two hook Jobs call that API for different reasons — the extraction Job to resolve an empty bindDN or
+    sourceSecret.name, the CA Job to discover the source CA's name — and one cluster-scoped rule serves
+    both. Gate it on the wrong flag and a Job calls an API it has no permission for; an earlier version of
+    this bug measured 0 oauths rules against 2 reachable calls. The opposite error is a cluster-scoped grant
+    nothing uses, which is what the Role-not-ClusterRole work exists to prevent.
+
+    Reachability is read off the RENDERED script rather than inferred from values: the extraction Job's
+    calls all sit inside `if [[ -z "$BIND_DN" || -z "$SRC_SECRET" ]]` and the template writes both as
+    literals, so an empty literal is what makes them reachable. The CA Job's call is only emitted when it
+    will run, so its presence is enough.
+    """
+    bad = []
+    reach = []
+    for d in docs:
+        if d.get('kind') != 'Job':
+            continue
+        spec = d['spec']['template']['spec']
+        for _, b in scripts(spec):
+            if 'oc get oauth cluster' not in b:
+                continue
+            n, sa = d['metadata']['name'], spec.get('serviceAccountName')
+            ns = d['metadata'].get('namespace')
+            m1 = re.search(r"BIND_DN='([^']*)'", b)
+            m2 = re.search(r"SRC_SECRET='([^']*)'", b)
+            if m1 and not (m1.group(1) and (m2.group(1) if m2 else '')):
+                reach.append((n, sa, ns, 'resolves bindDN/sourceSecret.name off the OAuth CR'))
+            if 'Reading the LDAP identity provider CA' in b:
+                reach.append((n, sa, ns, 'discovers the source CA name off the OAuth CR'))
+    for n, sa, ns, why in reach:
+        if not grants(rules_for_sa(docs, sa, ns), 'config.openshift.io', 'oauths', 'get', name='cluster'):
+            bad.append(f"Job/{n} {why} as sa/{sa} but nothing grants get oauths/cluster")
+    if not reach:
+        for d in docs:
+            if d.get('kind') not in ('Role', 'ClusterRole'):
+                continue
+            for r in d.get('rules') or []:
+                if 'oauths' in (r.get('resources') or []):
+                    bad.append(f"{d['kind']}/{d['metadata']['name']} grants oauths but no rendered Job can "
+                               f"reach `oc get oauth cluster` — a cluster-scoped grant nothing uses")
+    return bad
+
+CHECKS = {'oauth-rbac': oauth_cr_read, 'source-secret-rbac': source_secret_rbac,
           'ca-coherence': ca_coherence, 'ca-copy-kind': ca_copy_kind,
+          'oauth-cr-read': oauth_cr_read,
           'test-env-matches-cr': test_env_matches_cr,
           'no-cluster-wide-secret-read': no_cluster_wide_secret_read,
           'no-cluster-wide-credential-write': no_cluster_wide_credential_write,

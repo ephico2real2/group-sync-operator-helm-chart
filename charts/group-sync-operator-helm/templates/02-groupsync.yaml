@@ -1,9 +1,7 @@
 {{- if .Values.groupSync.enabled }}
-{{/*
-deepCopy before applyInjectedCa, which mutates what it is given. Passing .Values.groupSync straight in
-would rewrite the shared values, and every template rendered afterwards — the extraction Job's CA
-preflight, the RBAC, the test pods — would silently see the injected CA instead of what values.yaml says.
-*/}}
+# deepCopy before applyInjectedCa, which mutates what it is given. Passing .Values.groupSync straight in
+# would rewrite the shared values, and every template rendered afterwards — the extraction Job's CA
+# preflight, the RBAC, the test pods — would silently see the injected CA instead of what values.yaml says.
 {{- $cfg := deepCopy .Values.groupSync }}
 {{- include "group-sync-operator-helm.applyInjectedCa" (list $ $cfg) }}
 apiVersion: redhatcop.redhat.io/v1alpha1
