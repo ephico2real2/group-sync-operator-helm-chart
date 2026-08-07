@@ -3,6 +3,109 @@ entries:
   group-sync-operator-helm:
   - annotations:
       artifacthub.io/changes: |
+        - kind: added
+          description: "subscription.resources sizes the OPERATOR's own pod, passed through to the Subscription's spec.config.resources. Empty by default, so nothing changes unless you set it - the operator keeps what its CSV declares, measured as manager requesting 300m/200Mi and kube-rbac-proxy requesting nothing, with no limits. requests and limits are independent, so raising requests while leaving limits unset (guaranteed share, free to burst, pod stays Burstable) is expressible. Three measured caveats are documented in values.yaml and echoed in NOTES.txt when the key is set: OLM applies one block to EVERY container so the scheduler sees double what you write; it REPLACES the CSV's sizing rather than merging; and a total too large for the node leaves the new pod Pending while the old one keeps serving and helm upgrade still reports success. A render-time guard refuses any key other than requests/limits/claims, because the API server prunes the rest silently - a singular 'request' would apply cleanly and do nothing."
+        - kind: security
+          description: "The InstallPlan approver is a namespaced Role instead of a ClusterRole. It granted patch on installplans in EVERY namespace - measured yes in default, kube-system and openshift-monitoring - and approving an InstallPlan installs an operator, so that was the broadest grant this chart held. All eight of its API calls are namespace-scoped, so nothing was lost. It also now grants clusterserviceversions get/list, without which csv_phase() returned empty on every call (measured: list clusterserviceversions -> no) leaving two diagnostic escape paths dead, and it no longer discards stderr, so a Forbidden stops looking like 'OLM staged nothing'."
+        - kind: fixed
+          description: "The extraction Job no longer attempts oc create namespace, which was never authorised: the rule granting it carried resourceNames, and RBAC does not honour those for create - a create request carries its name in the body, not the path. Measured: create namespaces -> no, so pointing targetSecret.namespace at a namespace that does not exist killed the Job on a bare Forbidden. It now says which namespace is missing and how to create it. The grant is not widened instead, because on a cluster-scoped resource an unpinned create means 'any namespace on this cluster'."
+        - kind: changed
+          description: "BEHAVIOUR: customGroupSyncs.items ships EMPTY. It carried an enabled bda-rbac-groupsync item, so a default install created a second GroupSync CR nobody asked for - on the reference cluster it owned 21 of 64 synced groups. If you relied on that default, declare the item in your own values file before upgrading; otherwise its CR disappears and the groups it owned stop being refreshed. They are not deleted, since prune runs during a sync and there is no longer a CR to sync."
+        - kind: changed
+          description: "BEHAVIOUR: the helm-test ClusterRole and ClusterRoleBinding are named <release>-<namespace>-test-role/-binding. Cluster-scoped names built from the release name alone collide when the same release name is used in two namespaces, which is the normal way to run this chart twice. Not the fullname helper: values.yaml pins fullnameOverride, which discards the release name and would collide harder."
+        - kind: fixed
+          description: "Six inert or misleading items: waitSeconds below 5 rendered ATTEMPTS=0 so every wait loop was skipped and the Job failed instantly blaming OLM for a values typo; the ownership guards that refuse to approve a plan this chart did not cause matched the subscription name unanchored, so a different package starting with the same string satisfied them; list was dropped from five name-pinned RBAC rules where RBAC ignores it; the documented oauthSecretExtraction.ttlSecondsAfterFinished was inert because both consumers carry the field as a comment; six comment-only annotations blocks rendered annotations: null; and sample-values.yaml (renamed from qa-values.yaml in this release) documented an install passing -f against a file that only exists inside the tarball."
+        - kind: fixed
+          description: "argocd-application.yaml sets RespectIgnoreDifferences=true and now ships the ignoreDifferences entry it needs. Without it, Argo saw a permanent diff on the injected-CA ConfigMap the chart deliberately ships empty and, with selfHeal, emptied it on every sync - breaking LDAPS verification until OpenShift refilled it. The chart stated the requirement in two places and satisfied it in none."
+        - kind: fixed
+          description: "CI's bare-chart-path check covers *.txt and *.sh and no longer relies on a character class a templated release name defeats, so it finally sees the five commands in NOTES.txt and two in the local-setup scripts that pointed at a directory with no Chart.yaml. The render-check list also no longer registers one assertion twice under two names, which reported 10 checks where there are 9."
+        - kind: fixed
+          description: "helm uninstall no longer leaves the credentials Secret and the CA copy behind. Both are written imperatively from inside hook Job containers, so they never appear in the stored release manifest and Helm has never known about them - measured on a real uninstall, the release went away and both objects stayed. A pre-delete hook Job now removes them by name, using delete verbs pinned to those two names; pre-delete because Helm runs it before deleting the release's own resources, so the ServiceAccount and Roles the Job needs still exist. The Jobs also now stamp both objects with the release's labels and the meta.helm.sh annotations, which makes them selectable by release and lets a later chart version adopt them - but note those annotations govern adoption only and do NOT cause deletion, which is why the pre-delete Job is the mechanism."
+        - kind: fixed
+          description: "The shipped argocd-application.yaml could never render. It pointed valueFiles at the chart's own values.yaml, where groupSync.url is empty, and ArgoCD's repo-server renders offline with helm template so the chart's lookup-based discovery of the url resolves to nothing - every GroupSync CR then hit a fail. It also set targetRevision: HEAD, which is a git ref and meaningless for a Helm chart source, where ArgoCD resolves targetRevision as a chart semver. It is now a two-source Application: the chart from the Helm repository pinned to 0.8.x, and the values file from your own git repository via $values, which must set groupSync.url explicitly. Needs ArgoCD 2.6 or newer."
+        - kind: changed
+          description: "BEHAVIOUR: operatorWait.waitSeconds and installPlanApprover.waitSeconds are now the TOTAL budget across their checks, which is what values.yaml has always documented. The retry count was computed once and reused by each loop, so every check got the full budget and the total could reach 3x the documented value - unreachable anyway, because activeDeadlineSeconds (waitSeconds + 120) killed the pod part-way with no message of its own. Both Jobs now take one wall-clock deadline before the first check. The effective ceiling drops from about waitSeconds + 120 to waitSeconds; raise the value if a slow cluster needs longer."
+        - kind: fixed
+          description: "README's Quick start offered a minimal values file for a directory the cluster does not authenticate against, without saying that exactly that scenario requires two objects to pre-exist in openshift-config: the bind password Secret, and the CA ConfigMap the caCopy source falls back to when there is no OAuth LDAP provider to discover one from. Both are now shown as oc create commands, with the sourceCa.name override that ties them together."
+        - kind: fixed
+          description: "README documented subscription.installPlanApproval as Automatic while values.yaml ships Manual - a documented default that inverted a real control, and one contradicted by README's own prose about the installplan-approver Job. The CI check that should have caught it matched only four value prefixes, so every subscription.*, installPlanApprover.*, operatorWait.* and customGroupSyncs.* row was invisible; it is now scoped by table header instead, raising coverage from 26 to 32 rows."
+        - kind: changed
+          description: "BEHAVIOUR: helm test now requires the credentials Secret to carry non-empty username and password keys, and fails naming them otherwise. Test 4 of the health check previously asserted key presence with `oc get -o jsonpath={.data.KEY} | base64 -d` and tested only that pipeline's exit status - which is 0 for a key that does not exist, since jsonpath prints nothing and base64 decodes nothing successfully. Measured on a live cluster it reported a key named definitely-not-a-key as present, so the first branch always won, the bindDN/bindPassword branch was unreachable, and a Secret with no username passed as valid with an empty bind DN. Both scripts also no longer accept bindDN/bindPassword as an alternative spelling: those are the OAuth identity provider's key names on its own Secret in openshift-config, which this chart does not own and the operator never reads. A suite that was green against such a Secret now fails."
+        - kind: fixed
+          description: "The three credential procedures in README.md and the credentialsSecret documentation in values.yaml named the keys bindDN and bindPassword. The operator reads only username and password (secretUsernameKey/secretPasswordKey), and getLdapCredentialValue returns an empty string for a missing key with no error - so following those procedures produced an anonymous bind rather than a failure. The docs now name the keys the operator actually reads, say which of the two Secrets this chart does not own, and no longer claim the read of the OAuth Secret is pinned to one name when sourceSecret.name is left empty."
+        - kind: added
+          description: "The LDAP CA preflight and copy moved into their own hook Job (01.6-ldap-ca-job.yaml), gated by whether there is CA work to do rather than by oauthSecretExtraction.enabled. A cluster with no OAuth LDAP identity provider to extract a bind password from can now still have its CA copied into the operator's namespace: set oauthSecretExtraction.enabled=false and leave caCopy.enabled=true."
+        - kind: changed
+          description: "BEHAVIOUR: oauthSecretExtraction.enabled=false no longer silently removes the CA copy, its preflight and its RBAC. caCopy.enabled read like a peer flag and behaved like a subordinate one - with extraction off the copy vanished while the GroupSync CR went on naming ca-config-map-copy, so the operator reconciled forever on an object nothing created. With extraction off the bind Secret is yours to create, with the keys username and password; NOTES.txt now says so, and warns when groupSync.ca still names the copy that no longer runs."
+        - kind: fixed
+          description: "A CA copy whose destination is outside the target Secret's namespace now survives an upgrade. Its Role granted create alone, while the Job writes with `oc create --dry-run=client | oc apply` and apply reads the object before patching it - so the first install succeeded and every upgrade after it failed on the read."
+        - kind: security
+          description: "The cluster-scoped get on oauths/cluster is now granted only to the Jobs that can actually reach `oc get oauth cluster`. It was granted whenever caCopy.discoverFromOAuth was set, which is about the CA rather than the credentials, so a cluster supplying both bindDN and sourceSecret.name and not copying a CA carried a cluster-scoped grant nothing used. The render check asserts both directions and is verified against the empty-bindDN case the previous rule existed to protect."
+        - kind: changed
+          description: "BEHAVIOUR: the guard refusing a CA copy written as one kind and read as another now fires with oauthSecretExtraction.enabled=false too. That combination previously rendered happily and produced a CR pointing at an object of the wrong kind that nothing creates."
+        - kind: fixed
+          description: "The ca-coherence render check no longer fails two legitimate installs. It asserted that a Job preflights the CA, which conflated 'a Job exists' with 'the CA is satisfied' - so trustedCA.injected, where the chart itself creates the ConfigMap, and a bring-your-own CA that predates the release were both reported broken."
+        - kind: fixed
+          description: "subscription.name now supplies both the Subscription object's name and its spec.name (the OLM package), from one value, so they cannot diverge. spec.name was hardcoded while the object name was templated, and both hook Jobs match CSV and Deployment names - which derive from the package - using subscription.name. Renaming it sent them waiting for a CSV that never appears."
+        - kind: security
+          description: "The extraction ServiceAccount no longer has create on secrets and configmaps in every namespace. RBAC ignores resourceNames for create so those rules could not be pinned by name; they are now Roles in the namespaces the Job actually writes to. Verified live: create secrets in default and kube-system are now denied, in the release namespace still allowed."
+        - kind: changed
+          description: "BEHAVIOUR: trustedCA.injected.enabled=true now resolves the CA for the GroupSync CR, the extraction Job's preflight, the RBAC that grants read on it, and both test pods - previously it only created a labelled empty ConfigMap that nothing read. If you set injected.enabled=true AND a custom groupSync.ca.name, the injected ConfigMap now wins where your name used to; unset injected.enabled to keep a custom CA."
+        - kind: fixed
+          description: "A CA copy written as one kind and read as another is now refused at render time. Setting only groupSync.ca.kind=Secret left the extraction Job creating a ConfigMap while the GroupSync CR asked for a Secret, so the operator looked for an object nobody created."
+        - kind: fixed
+          description: "A customGroupSyncs item with neither groupCn nor filter is now refused. It previously rendered the literal %!s(<nil>) into the CR's LDAP filter, which the operator uses verbatim - it matches nothing, and the only symptom is a tenant that syncs no groups."
+        - kind: fixed
+          description: "NOTES.txt's LDAP verification command pointed at ldapsearch in the operator image (which is distroless and has no shell utilities), read bindDN/bindPassword from a Secret that holds username/password, and printed the raw groupSync.url so a discovered url came out blank. It now points at helm test."
+        - kind: fixed
+          description: "helm test now verifies the endpoint the GroupSync CR actually uses. The test pods baked groupSync.url, so on a discovery-based install (empty url derived from the cluster OAuth CR) they received an empty url and the suite failed outright - the sample-values.yaml path could never pass."
+        - kind: fixed
+          description: The test pods default CA_KEY to ca.crt exactly as the CR does, so an emptied groupSync.ca.key no longer makes the suite report an unreadable CA on a ConfigMap that is fine.
+        - kind: fixed
+          description: The Role granting read on the discovered bind Secret is created in oauthSecretExtraction.sourceSecret.namespace instead of caCopy.sourceCa.namespace. They default to the same namespace, so this only mattered once they differed - then the extraction Job read a Secret nothing had granted it.
+        - kind: security
+          description: The helm test ServiceAccount no longer has cluster-wide get/list on secrets, configmaps, pods, namespaces and events. Reads are scoped to the release namespace, with secrets pinned to the credentials secret by name.
+        - kind: changed
+          description: "BEHAVIOUR: helm test can now fail. Both test scripts previously routed every failure through a counter and ended in an unconditional exit 0 - measured against a live cluster, 7 of 8 broken configurations reported success."
+        - kind: changed
+          description: "BEHAVIOUR: the seven rfc2307 attribute and error-tolerance settings under groupSync.rfc2307 are now honoured. They were declared in values.yaml but the template emitted fixed literals, so any override was silently discarded."
+        - kind: fixed
+          description: Whether a CA is needed is now decided from the resolved LDAP url rather than the raw values field, so a url discovered from the cluster OAuth CR no longer loses its caSecret when insecure is true.
+        - kind: fixed
+          description: The TLS check in ldap-connection-test.sh asserts success from curl's ssl_verify_result and time_appconnect instead of negating one exit code, which reported a verified chain for five of six failure modes.
+        - kind: fixed
+          description: Test 5 of the operator health check reads the CA with oc extract instead of jsonpath, which cannot address a key containing a dot and so reported a valid 149-certificate bundle as unreadable.
+        - kind: fixed
+          description: The OAuth read is granted whenever the extraction Job needs it, rather than only when a CA copy is also enabled.
+        - kind: changed
+          description: ArgoCD renders Helm sources with --include-crds, so crds/ IS part of an Application. argocd-application.yaml now sets skipCrds true to leave the GroupSync CRD owned by OLM. Adding it to an existing Application needs care - see the README, as prune can delete the CRD and cascade to every GroupSync CR.
+      artifacthub.io/operator: "true"
+      artifacthub.io/operatorCapabilities: Basic Install
+    apiVersion: v2
+    appVersion: "1.1"
+    created: "2026-08-07T02:14:27.910888365Z"
+    description: A Helm chart to deploy the GroupSync Operator and its configuration
+      for LDAP synchronization in OpenShift
+    digest: c727d98b2c8f6c220afcf75f656bd4fcb2dbbeb9ea92c79ad7bdecf7b479f29b
+    home: https://github.com/ephico2real2/group-sync-operator-helm-chart
+    icon: https://raw.githubusercontent.com/redhat-cop/group-sync-operator/master/assets/logo.png
+    keywords:
+    - openshift
+    - ldap
+    - group-sync
+    - operator
+    maintainers:
+    - name: ephico2real2
+    name: group-sync-operator-helm
+    sources:
+    - https://github.com/ephico2real2/group-sync-operator-helm-chart
+    - https://github.com/redhat-cop/group-sync-operator
+    type: application
+    urls:
+    - group-sync-operator-helm-0.11.0.tgz
+    version: 0.11.0
+  - annotations:
+      artifacthub.io/changes: |
         - kind: security
           description: "The InstallPlan approver is a namespaced Role instead of a ClusterRole. It granted patch on installplans in EVERY namespace - measured yes in default, kube-system and openshift-monitoring - and approving an InstallPlan installs an operator, so that was the broadest grant this chart held. All eight of its API calls are namespace-scoped, so nothing was lost. It also now grants clusterserviceversions get/list, without which csv_phase() returned empty on every call (measured: list clusterserviceversions -> no) leaving two diagnostic escape paths dead, and it no longer discards stderr, so a Forbidden stops looking like 'OLM staged nothing'."
         - kind: fixed
@@ -792,4 +895,4 @@ entries:
     urls:
     - group-sync-operator-helm-0.3.0.tgz
     version: 0.3.0
-generated: "2026-08-06T14:46:11.97698217Z"
+generated: "2026-08-07T02:14:27.910982146Z"
