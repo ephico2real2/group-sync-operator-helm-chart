@@ -1,7 +1,13 @@
 # Final review — findings, solutions, and adjudication
 
-Status: **arbitration in progress.** Findings **1, 3, 4, 5, 6, 7 APPLIED**. **2 and 8 outstanding** —
-both FIX-INADEQUATE, and both need more than the remediation written below.
+Status: **7 of 8 applied.** Findings **1, 2, 3, 4, 5, 6, 7 APPLIED**. **8 outstanding.**
+
+Finding 8 is FIX-INADEQUATE and deliberately left: Codex showed the proposed regex does not close the
+bypass class — `{{ index .Values.groupSync "url" }}` and `{{ get $gs "url" }}` both pass it, and
+`ci/url-guard.py`'s `actions()` matches `{{(.*?)}}` ONE LINE AT A TIME, so a multi-line action containing
+even the original raw read yields zero parsed actions. Fixing it means changing how that guard parses,
+not adding an alternative, and it needs the three bypasses as regression cases. It is a low-severity
+tripwire gap in a check that still catches the direct form.
 
 Codex marked all 8: **2 CONFIRMED-and-applied, 1 CONFIRMED-outstanding (6), 5 FIX-INADEQUATE** (2, 3,
 4, 7, 8 — the defect is real but the remediation as written is wrong, so each needs re-deriving from

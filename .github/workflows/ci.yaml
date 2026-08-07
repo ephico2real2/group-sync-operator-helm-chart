@@ -175,6 +175,26 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha }}
         run: |
           set -uo pipefail
+
+          # VALIDATE THE BASE BEFORE USING IT: both bad values fail in ways that look like a pass, or like an
+          # unrelated crash. Measured on this repo —
+          #
+          #   BASE empty        `git diff "" HEAD` prints `fatal: bad revision ''` and falls into the
+          #                     `|| true` below, so `changed` is empty and this reports "no chart content
+          #                     changed": a VACUOUS PASS. Worse, `git show ":$CHART/..."` with an empty base
+          #                     reads the INDEX, so `was` comes back as the WORKING version and the
+          #                     comparison compares a value to itself.
+          #   BASE unresolvable `git show` exits 128 and, under the `-e` GitHub gives every `run:` block,
+          #                     kills the step at the `was=` assignment with no explanation of why.
+          #
+          # A base we cannot resolve is a BROKEN CHECK, not a passing one.
+          if [ -z "$BASE" ] || ! git rev-parse --verify --quiet "${BASE}^{commit}" >/dev/null; then
+            echo "::error file=.github/workflows/ci.yaml::the base commit is '${BASE}' and cannot be resolved,"
+            echo "::error file=.github/workflows/ci.yaml::so this check has nothing to compare the chart against."
+            echo "::error file=.github/workflows/ci.yaml::On a PR it comes from github.event.pull_request.base.sha"
+            echo "::error file=.github/workflows/ci.yaml::and needs actions/checkout fetch-depth: 0, set by this job."
+            exit 1
+          fi
           changed=$(git diff --name-only "$BASE" HEAD -- "$CHART" | grep -v '/Chart.yaml$' || true)
           if [ -z "$changed" ]; then
             echo "no chart content changed — nothing to publish, no bump needed"
@@ -182,7 +202,17 @@ jobs:
           fi
           echo "chart content changed:"; printf '  %s\n' $changed
 
-          was=$(git show "$BASE:$CHART/Chart.yaml" 2>/dev/null | awk '/^version:/{print $2; exit}')
+          # Chart.yaml absent at the base means this PR CREATES the chart: no previous version to compare, and
+          # every version is new. Handled before the read rather than by swallowing its error, because
+          # `git show` on a missing path exits 128 and would take the step down right here — measured against
+          # this repo's root commit, where this Chart.yaml does not exist.
+          if ! git cat-file -e "$BASE:$CHART/Chart.yaml" 2>/dev/null; then
+            echo "Chart.yaml does not exist at the base — this PR creates the chart, so there is no previous"
+            echo "version to bump. Nothing to check."
+            exit 0
+          fi
+          # No 2>/dev/null here: the absent-file case is handled above, so any error now is real.
+          was=$(git show "$BASE:$CHART/Chart.yaml" | awk '/^version:/{print $2; exit}')
           now=$(awk '/^version:/{print $2; exit}' "$CHART/Chart.yaml")
           echo "version: $was -> $now"
 
