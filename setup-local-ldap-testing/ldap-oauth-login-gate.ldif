@@ -49,7 +49,11 @@
 # exactly what a real production config does. For several groups, OR them.
 #
 # Membership below is a deliberate SUBSET of the directory's users. A gate that everybody is inside
-# proves nothing, so half are left out to make the denial path testable too.
+# proves nothing, so bob.wilson and charlie.brown are held out to keep the denial path testable —
+# 7 of the 9 ou=People entries are in. It used to be 4 of 9 ("half are left out", as this line said
+# for a while); dana.lee, sarah.jones and jeff were added so the dashboard has enough users with an
+# OpenShift display name to be worth looking at. Two is the floor, not a target: see the note on the
+# gate group itself for why those two specifically must stay out.
 
 # ── Bind service account for the identity provider ───────────────────────────────────────────────
 # Separate from cn=ocp-ldap-bind-serviceid, which the group-sync operator uses. Two consumers, two
@@ -87,6 +91,34 @@ userPassword: oauthbindpassword123
 # ── The login gate group ─────────────────────────────────────────────────────────────────────────
 # Same name as production. Being in this group is what makes you able to log in to OpenShift at all;
 # what you can do afterwards comes from the app-ocp-rbac-* groups the operator syncs.
+#
+# ── Who is in, and why it is not everybody ───────────────────────────────────────────────────────
+#
+# LOGGING IN IS WHAT CREATES THE OpenShift User OBJECT, and its fullName comes from the provider's
+# `attributes.name: ["displayName", "cn"]` mapping. So this membership list decides which test users
+# the group-sync-dashboard can show a display name for — nothing else populates it, and group
+# membership alone populates nothing. Measured after adding dana.lee, sarah.jones and jeff and
+# logging in as each: 7 of the 10 distinct group members now carry a fullName, 3 do not.
+#
+# The cn fallback is live and worth knowing: dana.lee, sarah.jones and jeff have NO displayName in
+# this directory, and OpenShift filled fullName from cn — "Dana Lee", "Sarah Jones", "jeff bush".
+# So a fullName here may be a tidy display name, a login-shaped one, or (ocp-oauth-bind-serviceid)
+# just the uid again.
+#
+# STILL DELIBERATELY OUT, and do not "fix" this:
+#   bob.wilson, charlie.brown   the denial-path fixtures. Both are group members with no User
+#                               object, which is what keeps the dashboard's "no display name" state
+#                               reachable — add them and every member is named, and the case stops
+#                               being testable. bob.wilson is also the better GATE-denial subject
+#                               specifically because his LDAP password is unusable-then-fixable by
+#                               hand (see the passwords note below), which is how you tell a gate
+#                               refusal from a bad credential.
+#   hello1                      a group member with no ou=People entry at all, so it cannot be
+#                               added here and can never acquire a name. A third distinct state
+#                               from "has not logged in yet".
+#
+# dana.lee, sarah.jones and jeff needed no ldappasswd: all three already carry cleartext
+# `newuser123` from the later LDIFs, unlike the five with the malformed {SSHA} value below.
 dn: cn=app-ssb-autobahnusers,ou=Groups,dc=ephico2real,dc=com
 changetype: add
 objectClass: groupOfUniqueNames
@@ -96,6 +128,9 @@ uniqueMember: uid=john.doe,ou=People,dc=ephico2real,dc=com
 uniqueMember: uid=jane.smith,ou=People,dc=ephico2real,dc=com
 uniqueMember: uid=alice.cooper,ou=People,dc=ephico2real,dc=com
 uniqueMember: uid=lateef.o,ou=People,dc=ephico2real,dc=com
+uniqueMember: uid=dana.lee,ou=People,dc=ephico2real,dc=com
+uniqueMember: uid=sarah.jones,ou=People,dc=ephico2real,dc=com
+uniqueMember: uid=jeff,ou=People,dc=ephico2real,dc=com
 uniqueMember: cn=ocp-oauth-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com
 
 # ── Re-run safety ────────────────────────────────────────────────────────────────────────────────
@@ -121,6 +156,9 @@ uniqueMember: uid=john.doe,ou=People,dc=ephico2real,dc=com
 uniqueMember: uid=jane.smith,ou=People,dc=ephico2real,dc=com
 uniqueMember: uid=alice.cooper,ou=People,dc=ephico2real,dc=com
 uniqueMember: uid=lateef.o,ou=People,dc=ephico2real,dc=com
+uniqueMember: uid=dana.lee,ou=People,dc=ephico2real,dc=com
+uniqueMember: uid=sarah.jones,ou=People,dc=ephico2real,dc=com
+uniqueMember: uid=jeff,ou=People,dc=ephico2real,dc=com
 uniqueMember: cn=ocp-oauth-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com
 
 # ── Usable passwords for the human gate members ──────────────────────────────────────────────────
