@@ -2,7 +2,23 @@ name: CI
 
 # Runs on every PR, on every push to main, and — via workflow_call — as the gate in front of
 # publishing. See .github/workflows/helm.yaml, which calls this and will not release unless it passes.
-# That keeps the checks defined once, and means a release can never skip them even on a direct push.
+# That keeps the checks defined once.
+#
+# ONE JOB IS THE EXCEPTION, and the sentence that used to be here — "a release can never skip them even
+# on a direct push" — was false because of it. `version-bump` is gated on
+# `if: github.event_name == 'pull_request'`, and under `workflow_call` the github context is the
+# CALLER's, so in the release path (helm.yaml, triggered by push or workflow_dispatch) that condition is
+# false and the job is skipped. Measured across all three events: pull_request runs it, push skips it,
+# workflow_dispatch skips it.
+#
+# That is DELIBERATE, and it is safe because of where the enforcement actually lives: `main` is branch
+# protected with PRs required, admins included, and `Chart changes bump the chart version` as a required
+# status check — verified by a rejected direct push (GH006). So nothing reaches main without the bump
+# check having run on a PR, and `strict` means a second PR that chose the same version must update and
+# re-run it rather than racing through. Extending the job to `push` would only add a post-merge repeat of
+# a check that already passed, with extra base-ref edge cases to get wrong.
+#
+# Revisit that only if the PR requirement, admin enforcement, or the required check is relaxed.
 on:
   pull_request:
   push:
@@ -383,8 +399,14 @@ jobs:
           # {{ .Release.Name }} contains spaces and braces, so the old character class did not reach the
           # path. Adding the includes alone still found only 2 of the 7; widening the pattern finds all
           # seven, with zero false positives on this repo.
+          # FINAL_REVIEW.md is excluded because it is a REVIEW ARTIFACT: it reports this very check's
+          # blind spots, so it necessarily quotes the bad patterns as evidence — `helm lint .` appears
+          # there as the thing that should be caught, not as a command anyone should run. Scanning it
+          # makes the check fail on its own findings. Every file that documents commands to RUN is still
+          # scanned; add to this list only for a file whose purpose is to quote what is wrong.
           hits=$(grep -rnE 'helm (install|upgrade|template|lint) .*[[:space:]]\.{1,2}([[:space:]]|\\|$)' \
                    --include='*.md' --include='*.yaml' --include='*.txt' --include='*.sh' . \
+                   --exclude='FINAL_REVIEW.md' \
                    | grep -v '^\./\.git' || true)
           if [ -n "$hits" ]; then
             echo "::error::helm commands with a bare . or .. chart path — they no longer resolve to a chart:"

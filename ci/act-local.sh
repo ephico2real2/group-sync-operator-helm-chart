@@ -86,9 +86,18 @@ podman_socket() {
   command -v podman >/dev/null 2>&1 || return 0
   pod_machine="$(podman machine list --format '{{.Name}}|{{.Running}}' 2>/dev/null | awk -F'|' '$2=="true"{print $1; exit}')"
   if [ -n "$pod_machine" ]; then
-    podman machine inspect --format '{{.ConnectionInfo.PodmanSocket.Path}}' "${pod_machine%\*}" 2>/dev/null | head -1
+    # `|| true` on BOTH branches, and it is load-bearing. A podman that cannot answer must read as
+    # "no socket found" — empty output, status 0 — not as a failing exit status. Under `set -o
+    # pipefail` that status becomes the pipeline's, escapes this command substitution, and kills the
+    # script at the caller's plain assignment BEFORE its own no-socket diagnostics can run.
+    #
+    # Measured with a stopped machine, which is the ordinary state after a reboot since podman
+    # machines do not autostart: exit 125 with ZERO bytes of output, and the two `die` messages
+    # written for exactly that state unreachable. A verification tool that exits mute is the worst
+    # failure it can have.
+    podman machine inspect --format '{{.ConnectionInfo.PodmanSocket.Path}}' "${pod_machine%\*}" 2>/dev/null | head -1 || true
   else
-    podman info --format '{{.Host.RemoteSocket.Path}}' 2>/dev/null | sed 's|^unix://||'
+    podman info --format '{{.Host.RemoteSocket.Path}}' 2>/dev/null | sed 's|^unix://||' || true
   fi
 }
 
