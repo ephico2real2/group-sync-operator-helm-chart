@@ -135,13 +135,61 @@ always that `Chart.yaml` was not bumped.
 
 ---
 
+## When the version is merged but not published: republishing
+
+The release run and the merge are separate things. A merge can land on `main` while the release run
+fails, or never starts — a GitHub Actions incident, a runner that dies in `Set up job`, an expired token.
+`main` then carries a version that no consumer can install, and nothing on the PR or on `main` says so.
+
+**This does not need a commit, an empty commit, or a re-bump.** `helm.yaml` carries a
+`workflow_dispatch` trigger for exactly this:
+
+```bash
+gh workflow run helm.yaml --ref main
+```
+
+It re-runs `validate` (the whole of `ci.yaml`) and then `chart-releaser` against whatever `Chart.yaml`
+on `main` currently says. Because `skip_existing: true` is set, running it when nothing is outstanding is
+harmless — it publishes nothing and exits 0. So it is safe to reach for whenever you are unsure.
+
+Then **verify, rather than trusting the green tick** — the same discipline as step 4, and for the same
+reason. A release run reports success both when it published and when it skipped:
+
+```bash
+gh run list --workflow helm.yaml --limit 1
+
+# what a CONSUMER sees, which is the only thing that matters
+helm repo add gso https://ephico2real2.github.io/group-sync-operator-helm-chart
+helm repo update gso
+helm search repo gso/group-sync-operator-helm --versions | head -3
+helm pull gso/group-sync-operator-helm --version <the-version>
+```
+
+Two checks worth doing beyond "the version appears":
+
+- **`index.yaml` is served from `gh-pages` via GitHub Pages, so there is a second run after the release
+  one.** The release can succeed while the `pages build and deployment` run is still going, and until it
+  finishes `helm repo update` keeps serving the old index. Wait for it before concluding anything failed.
+- **Compare the digest.** `index.yaml`'s `digest` for the version against `shasum -a 256` of the tarball
+  you pulled. Equal means the index and the artifact agree; that is the end-to-end proof, and it is the
+  one check that would catch a half-written index.
+
+Recorded because it happened: `0.11.0` was merged on 2026-08-06 during a GitHub Actions `major_outage`.
+The `Release Charts` run died in `Set up job`, `index.yaml` stayed at `0.10.0`, and the cluster ran a
+chart no one else could install. `gh workflow run helm.yaml --ref main` published it once Actions
+recovered — no commit, no version change.
+
+---
+
 ## What the automation does, and does not
 
 `.github/workflows/helm.yaml`:
 
-- triggers on push to `main`, filtered to `paths: ['charts/**']`
+- triggers on push to `main`, filtered to `paths: ['charts/**']` — so a docs- or script-only merge
+  correctly does not attempt a release
+- also on `workflow_dispatch`, which is how you republish without a commit — see the section above
 - runs `validate`, which *calls* `ci.yaml` rather than duplicating it, so a release cannot skip the
-  checks even on a direct push
+  checks even on a direct push. One job is the exception, and it matters — see the version-bump note below
 - then `chart-releaser-action@v1.6.0` with `skip_existing: true` and `packages_with_index: true`
 
 Things worth knowing:
@@ -156,9 +204,23 @@ Things worth knowing:
   `gh-pages`; an ignore rule makes the release fail. The repo ignores `.cr-release-packages/` instead.
 - **A release can be forced without a commit** via `workflow_dispatch`, which is useful after bumping
   only `Chart.yaml` or retrying a transient failure.
-- **Nothing yet fails a build for a missing version bump.** That check is the obvious fix for the two
-  incidents above and is tracked as adversarial-review finding #20; until it exists, step 4 is the only
-  thing standing between a merged fix and a silently unpublished one.
+- **A build DOES now fail for a missing version bump — but only on a pull request.** `ci.yaml`'s
+  `version-bump` job (the fix for the two incidents above, adversarial-review finding #20) is gated on
+  `if: github.event_name == 'pull_request'`, and it diffs against
+  `github.event.pull_request.base.sha` — a value that exists in no other event. Measured across the three
+  events on 2026-08-06:
+
+  | event | `version-bump` |
+  |---|---|
+  | `pull_request` | **runs** — chart content changed with no bump fails the check |
+  | `push` (a merge landing on `main`) | skipped |
+  | `workflow_dispatch` (republishing) | skipped |
+
+  So the real guarantee is: **nothing reaches `main` through a PR without a bump.** A direct push to
+  `main`, or a `workflow_dispatch` republish, is not checked — for the republish that is correct, since
+  the version is deliberately unchanged. What this means in practice: if branch protection is ever off and
+  someone pushes to `main` directly, step 4 is again the only thing standing between a merged fix and a
+  silently unpublished one.
 
 ## Quick checklist
 
@@ -171,4 +233,5 @@ Things worth knowing:
 [ ] previous release's entries retained on a patch
 [ ] annotation parses, kinds valid
 [ ] merged, and the new version CONFIRMED present in `helm search repo` and index.yaml
+[ ] if it is absent: `gh workflow run helm.yaml --ref main`, then confirm again — no commit needed
 ```
