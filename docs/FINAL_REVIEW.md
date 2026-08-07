@@ -1,7 +1,11 @@
 # Final review — findings, solutions, and adjudication
 
-Status: **arbitration in progress.** Findings **1, 3, 4, 5, 6, 7 APPLIED**. **2 and 8 outstanding** —
-both FIX-INADEQUATE, and both need more than the remediation written below.
+Status: **CLOSED — all 8 findings applied.**
+
+All eight are applied. Five were marked FIX-INADEQUATE by Codex, meaning the defect was real but the
+remediation written below was not sufficient — in every one of those five the real defect was larger than
+the finding, and the applied fix differs from what this document originally proposed. Read the
+`> **Codex:**` marker under a finding before treating its Solution block as what shipped.
 
 Codex marked all 8: **2 CONFIRMED-and-applied, 1 CONFIRMED-outstanding (6), 5 FIX-INADEQUATE** (2, 3,
 4, 7, 8 — the defect is real but the remediation as written is wrong, so each needs re-deriving from
