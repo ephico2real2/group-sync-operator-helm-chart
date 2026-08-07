@@ -299,7 +299,11 @@ jobs:
         run: |
           set -euo pipefail
           for f in "$CHART"/files/*.sh; do
-            bash -n "$f" && echo "  ok  $f"
+            # NOT `bash -n "$f" && echo ...`. The left side of `&&` is EXEMPT from errexit, so a
+            # syntactically broken script printed its error, the loop carried on, and this step
+            # GREEN-TICKED. Measured: an invalid script followed by a valid one exited 0.
+            bash -n "$f"
+            echo "  ok  $f"
           done
           python3 - <<'PY' > /tmp/scripts.txt
           import yaml
@@ -318,8 +322,18 @@ jobs:
               open(f"/tmp/{name}--{ctr}.sh", "w").write(body)
               print(f"{name}--{ctr}.sh")
           PY
+          # Zero extracted scripts is not a pass: it means the extraction no longer matches how
+          # the chart writes container commands, and NOTHING would be checked. The guard is here
+          # and not in the python because that block's stdout is redirected into the file, so an
+          # ::error:: printed there would land in the file rather than the log.
+          if ! [ -s /tmp/scripts.txt ]; then
+            echo "::error::no rendered Job/Pod script matched the extraction — the syntax"
+            echo "::error::check ran against nothing. Update the command-matching in this step."
+            exit 1
+          fi
           while read -r s; do
-            bash -n "/tmp/$s" && echo "  ok  rendered: $s"
+            bash -n "/tmp/$s"
+            echo "  ok  rendered: $s"
           done < /tmp/scripts.txt
 
   docs:
@@ -399,14 +413,18 @@ jobs:
           # {{ .Release.Name }} contains spaces and braces, so the old character class did not reach the
           # path. Adding the includes alone still found only 2 of the 7; widening the pattern finds all
           # seven, with zero false positives on this repo.
-          # FINAL_REVIEW.md is excluded because it is a REVIEW ARTIFACT: it reports this very check's
-          # blind spots, so it necessarily quotes the bad patterns as evidence — `helm lint .` appears
-          # there as the thing that should be caught, not as a command anyone should run. Scanning it
-          # makes the check fail on its own findings. Every file that documents commands to RUN is still
-          # scanned; add to this list only for a file whose purpose is to quote what is wrong.
-          hits=$(grep -rnE 'helm (install|upgrade|template|lint) .*[[:space:]]\.{1,2}([[:space:]]|\\|$)' \
+          # [[:space:]]+ around the subcommand, and the argument segment OPTIONAL. Both matter, and
+          # both were measured: with literal single spaces and a mandatory segment, `helm lint .` —
+          # the canonical lint invocation, which takes no release name — was structurally unmatchable,
+          # and so were `helm  lint .` (two spaces) and a tab-separated `helm<TAB>lint .`.
+          #
+          # NO FILE IS EXCLUDED. An earlier version of this excluded FINAL_REVIEW.md because that
+          # report quotes bad commands as evidence and so failed the check on its own findings — but
+          # excluding a whole file to silence it creates a blind spot in the one document most likely
+          # to grow more helm commands. The report's illustrative bad commands are written so the
+          # subcommand and the path are not one executable-looking string instead.
+          hits=$(grep -rnE 'helm[[:space:]]+(install|upgrade|template|lint)[[:space:]]+(.*[[:space:]])?\.{1,2}([[:space:]]|\\|$)' \
                    --include='*.md' --include='*.yaml' --include='*.txt' --include='*.sh' . \
-                   --exclude='FINAL_REVIEW.md' \
                    | grep -v '^\./\.git' || true)
           if [ -n "$hits" ]; then
             echo "::error::helm commands with a bare . or .. chart path — they no longer resolve to a chart:"

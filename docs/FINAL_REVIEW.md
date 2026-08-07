@@ -1,6 +1,7 @@
 # Final review — findings, solutions, and adjudication
 
-Status: **arbitration in progress.** Findings 1 and 5 APPLIED. 2, 3, 4, 6, 7, 8 outstanding.
+Status: **arbitration in progress.** Findings **1, 3, 4, 5, 6, 7 APPLIED**. **2 and 8 outstanding** —
+both FIX-INADEQUATE, and both need more than the remediation written below.
 
 Codex marked all 8: **2 CONFIRMED-and-applied, 1 CONFIRMED-outstanding (6), 5 FIX-INADEQUATE** (2, 3,
 4, 7, 8 — the defect is real but the remediation as written is wrong, so each needs re-deriving from
@@ -35,7 +36,7 @@ quoting, architectural redesigns, and new CI jobs/frameworks.
 | [4](#4) | medium | `ci.yaml:305` | confirmed structurally | fix |
 | [5](#5) | medium | `ci.yaml:151`, `ci.yaml:3-5` | **confirmed** — measured on 3 events | partly done (#40); decision needed |
 | [6](#6) | medium | `ci/act-local.sh:377` | **confirmed** — remedy never printed | fix |
-| [7](#7) | low | `ci.yaml:386` | **confirmed** — `helm lint .` unmatchable | fix |
+| [7](#7) | low | `ci.yaml:386` | **confirmed** — `helm <lint> .` unmatchable | fix |
 | [8](#8) | low | `ci/url-guard.py:13` | **confirmed** — alias bypasses | fix |
 
 ---
@@ -459,31 +460,31 @@ is empty.
 ---
 
 <a id="7"></a>
-## 7. The bare-chart-path check cannot match the barest forms: `helm lint .`, `helm template . -f …`
+## 7. The bare-chart-path check cannot match the barest forms: `helm <lint> .`, `helm <template> . -f …`
 
 - **Severity**: low
 - **Location**: `.github/workflows/ci.yaml:386`
 
 **Claim.** The pattern requires a `[[:space:]]` before the dot *in addition to* the space after the
-subcommand — i.e. at least one argument between them. `helm lint .` (the canonical lint invocation; lint
-takes no release name), `helm template .`, and `helm template . -f values.yaml` are structurally
+subcommand — i.e. at least one argument between them. `helm <lint> .` (the canonical lint invocation; lint
+takes no release name), `helm <template> .`, and `helm <template> . -f values.yaml` are structurally
 unmatchable. So a doc could reacquire a bare chart path in precisely the form most likely to be written,
 with green CI.
 
 **Arbiter verification** — control table, old pattern vs proposed:
 
 ```
-  helm lint .                        old=0 new=1
-  helm template .                    old=0 new=1
-  helm template . -f values.yaml     old=0 new=1
-  helm install rel .                 old=1 new=1
-  helm upgrade rel ..                old=1 new=1
+  helm <lint> .                        old=0 new=1
+  helm <template> .                    old=0 new=1
+  helm <template> . -f values.yaml     old=0 new=1
+  helm <install> rel .                 old=1 new=1
+  helm <upgrade> rel ..                old=1 new=1
 ```
 
 **Solution.** Make the segment between subcommand and path optional (`ci.yaml:386`):
 
 ```yaml
-          # The segment between the subcommand and the path is OPTIONAL: `helm lint .` has no
+          # The segment between the subcommand and the path is OPTIONAL: `helm <lint> .` has no
           # release-name argument at all, and the old mandatory `.*[[:space:]]` made that form — the
           # likeliest way a bare path comes back — structurally unmatchable.
           hits=$(grep -rnE 'helm (install|upgrade|template|lint) (.*[[:space:]])?\.{1,2}([[:space:]]|\\|$)' \
@@ -499,7 +500,7 @@ that repo-wide check — it must still hold after PR #40 added new `helm` comman
 > all in this document at lines 382, 389, and 396-400 before this markup; excluding only the currently
 > untracked `docs/FINAL_REVIEW.md` produced 0, so PR #40's `RELEASING.md` commands add no hit. Thus “zero
 > repo-wide” is no longer true, although GitHub CI sees the seven only if this report is committed. The
-> regex also still misses ordinary whitespace variants: tested results were `helm lint .`=1,
+> regex also still misses ordinary whitespace variants: tested results were `helm <lint> .`=1,
 > `helm  lint .`=0, tab-separated `helm<TAB>lint .`=0, and a backslash-newline split=0. Use
 > `[[:space:]]+` around the subcommand instead of literal single spaces, and before committing this report
 > rewrite its illustrative bad commands so the subcommand and `.` are not one executable-looking string

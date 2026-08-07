@@ -229,6 +229,11 @@ BASE_REF="${ACT_BASE_REF:-$(git symbolic-ref --quiet --short refs/remotes/origin
 BASE_SHA="$(git merge-base "$BASE_REF" HEAD 2>/dev/null || true)"
 HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
 VACUOUS_REASON=""
+# The header's FIRST stated weakness, detected so the summary can actually call it out as promised:
+# version-bump compares COMMITS, so a chart edit still sitting in the working tree is invisible to it.
+# CONTRIBUTING.md and this script's own header both claimed the script warns about this; nothing did.
+# --porcelain includes untracked files, which are equally invisible to a commit diff.
+UNCOMMITTED_CHART="$(git status --porcelain -- charts/ 2>/dev/null || true)"
 DANGLING_HEAD=""
 
 if [ -z "$BASE_SHA" ]; then
@@ -364,6 +369,34 @@ for job in "${JOBS[@]}"; do
 done
 
 echo
+# ── BOTH CAVEATS PRINT BEFORE THE OUTCOME IS DECIDED ──────────────────────────────────────────────
+# They used to sit after the "all passed" line, which the failure branch below never reaches — so the
+# one state that GUARANTEES a failure was the one state whose explanation was discarded. An empty base
+# sha makes version-bump's `git diff` die on `fatal: bad revision ''`, the fatal-detector correctly
+# fails the job, and the reason — computed at payload time, naming ACT_BASE_REF as the remedy — was
+# never shown. A reader then debugs git-in-a-container instead of reading the one line that says why.
+#
+# Printed here, unconditionally, rather than mirrored into both branches: two copies of the same notice
+# is how they drift apart, and the notices are about the RUN, not about its outcome.
+if [ -n "$VACUOUS_REASON" ]; then
+  case " ${JOBS[*]} " in
+    *" version-bump "*) echo; echo "⚠️  $VACUOUS_REASON" ;;
+  esac
+fi
+
+if [ -n "$UNCOMMITTED_CHART" ]; then
+  case " ${JOBS[*]} " in
+    *" version-bump "*)
+      echo
+      echo "⚠️  uncommitted changes under charts/ — version-bump compares COMMITS, so these were"
+      echo "    invisible to it:"
+      # `printf '%s\n' "$var" | sed` and NOT `printf '      %s\n' "$var"`. The one-argument form
+      # indents only the FIRST line: measured under macOS /bin/bash 3.2.57, lines 2 and 3 of a
+      # three-line porcelain came back in column 1. This form indents every line on both bashes.
+      printf '%s\n' "$UNCOMMITTED_CHART" | sed 's/^/      /' ;;
+  esac
+fi
+
 if [ "${#FAILED[@]}" -gt 0 ]; then
   echo "❌ ${#FAILED[@]} of ${#JOBS[@]} job(s) failed: ${FAILED[*]}"
   for job in "${FAILED[@]}"; do
@@ -383,8 +416,3 @@ if [ "${#FAILED[@]}" -gt 0 ]; then
 fi
 
 echo "✅ all ${#JOBS[@]} job(s) passed"
-if [ -n "$VACUOUS_REASON" ]; then
-  case " ${JOBS[*]} " in
-    *" version-bump "*) echo; echo "⚠️  $VACUOUS_REASON" ;;
-  esac
-fi
