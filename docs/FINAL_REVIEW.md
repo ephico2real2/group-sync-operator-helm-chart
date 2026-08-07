@@ -2,14 +2,28 @@
 
 Status: **CLOSED — all 8 findings applied.**
 
-All eight are applied. Five were marked FIX-INADEQUATE by Codex, meaning the defect was real but the
-remediation written below was not sufficient — in every one of those five the real defect was larger than
-the finding, and the applied fix differs from what this document originally proposed. Read the
-`> **Codex:**` marker under a finding before treating its Solution block as what shipped.
+## READ THIS BEFORE USING ANY `Solution` BLOCK BELOW
 
-Codex marked all 8: **2 CONFIRMED-and-applied, 1 CONFIRMED-outstanding (6), 5 FIX-INADEQUATE** (2, 3,
-4, 7, 8 — the defect is real but the remediation as written is wrong, so each needs re-deriving from
-Codex's marker rather than applying).
+Every finding here has a **Solution** block, and those were written by the arbiter *before* Codex
+reviewed them. Codex then marked all 8:
+
+| verdict | findings | what it means for the Solution block |
+|---|---|---|
+| CONFIRMED | 1, 5, 6 | the block is what shipped |
+| **FIX-INADEQUATE** | **2, 3, 4, 7, 8** | **the block is NOT what shipped — it was refuted** |
+
+For those five the defect was real but the proposed remediation was wrong or incomplete, and in every
+one of them the real defect turned out to be *larger* than the finding described. Examples: #4's block
+fixed a vacuous pass on an empty extraction while missing that `bash -n X && echo` is exempt from
+errexit, so a broken script green-ticked; #8's block added one regex alternative while the parser was
+matching `{{...}}` one line at a time and so was blind to any multi-line action.
+
+**So: read the `> **Codex:**` marker under a finding before treating its Solution block as either what
+shipped or as something to reuse.** The blocks are kept unedited on purpose — this is the record of what
+was proposed and why it was wrong, which is worth more than a tidied file — but taken at face value they
+would lead somebody to apply a fix that was already refuted.
+
+What actually shipped: PR #42 (findings 1, 3, 4, 5, 6, 7) and PR #43 (findings 2, 8).
 
 A finalization review of the work landed on 2026-08-06/07 (chart `0.11.0` published; PRs #30–#40). Two
 Fable reviewers ran at high effort over deliberately narrow scopes, each with a 12-item ignore list of
