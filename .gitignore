@@ -45,3 +45,9 @@ setup-local-ldap-testing/.ca-configmap-backup/
 # published chart repo.
 setup-local-ldap-testing/.oauth-backup/
 .oauth-backup/
+
+# Python bytecode. A .pyc for ci/url-guard.py was committed by accident — `python3 ci/url-guard.py`
+# writes it, and a `git add -A` afterwards picks it up. It is build output for one interpreter version
+# (cpython-313 here), so it is both noise and wrong for anyone on another version.
+__pycache__/
+*.pyc
