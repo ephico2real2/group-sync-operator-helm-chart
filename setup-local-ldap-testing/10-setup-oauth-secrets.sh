@@ -10,6 +10,12 @@
 
 set -e
 
+# Anchored to this script's directory, not the caller's — the same pattern as
+# 15-bootstrap-cert-manager-ca.sh. Every manifest and LDIF below used to be a bare relative path, so a run
+# from anywhere but this directory aborted partway with "the path ... does not exist" — after earlier steps
+# had already mutated the cluster.
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
 echo "🎉 GroupSync Operator Test Environment Setup"
 echo "============================================="
 echo
@@ -37,16 +43,16 @@ echo
 
 # Generate demo CA certificate
 echo "🔒 Generating demo CA certificate..."
-if [[ ! -f ca-cert.pem ]]; then
+if [[ ! -f "${SCRIPT_DIR}/ca-cert.pem" ]]; then
     openssl req -x509 -newkey rsa:4096 \
-        -keyout ca-key.pem \
-        -out ca-cert.pem \
+        -keyout "${SCRIPT_DIR}/ca-key.pem" \
+        -out "${SCRIPT_DIR}/ca-cert.pem" \
         -days 365 \
         -nodes \
         -subj "/CN=Demo LDAP CA/O=Demo Organization/C=US"
     
     # Validate certificate was generated successfully
-    if ! openssl x509 -in ca-cert.pem -noout -text >/dev/null 2>&1; then
+    if ! openssl x509 -in "${SCRIPT_DIR}/ca-cert.pem" -noout -text >/dev/null 2>&1; then
         echo "❌ Error: Certificate generation failed or produced invalid certificate"
         exit 1
     fi
@@ -54,7 +60,7 @@ if [[ ! -f ca-cert.pem ]]; then
 else
     echo "ℹ️ Demo CA certificate already exists: ca-cert.pem"
     # Validate existing certificate
-    if ! openssl x509 -in ca-cert.pem -noout -text >/dev/null 2>&1; then
+    if ! openssl x509 -in "${SCRIPT_DIR}/ca-cert.pem" -noout -text >/dev/null 2>&1; then
         echo "❌ Error: Existing certificate file is invalid"
         echo "Please remove ca-cert.pem and regenerate, or fix the certificate file"
         exit 1
@@ -70,11 +76,11 @@ if oc get configmap ca-config-map-test -n openshift-config &> /dev/null; then
     read -p "Do you want to replace it? (y/N): " replace_ca
     if [[ $replace_ca =~ ^[Yy]$ ]]; then
         oc delete configmap ca-config-map-test -n openshift-config
-        oc create configmap ca-config-map-test --from-file=ca.crt=./ca-cert.pem -n openshift-config
+        oc create configmap ca-config-map-test --from-file=ca.crt="${SCRIPT_DIR}/ca-cert.pem" -n openshift-config
         echo "✅ ConfigMap ca-config-map-test replaced in openshift-config"
     fi
 else
-    oc create configmap ca-config-map-test --from-file=ca.crt=./ca-cert.pem -n openshift-config
+    oc create configmap ca-config-map-test --from-file=ca.crt="${SCRIPT_DIR}/ca-cert.pem" -n openshift-config
     echo "✅ ConfigMap ca-config-map-test created in openshift-config"
 fi
 echo
@@ -111,7 +117,7 @@ echo "ConfigMap status:"
 if oc get configmap ca-config-map-test -n openshift-config &> /dev/null; then
     oc get configmap ca-config-map-test -n openshift-config
     # Verify ConfigMap contains the certificate
-    if oc get configmap ca-config-map-test -n openshift-config -o jsonpath='{.data.ca\.crt}' | base64 -d 2>/dev/null | openssl x509 -noout -text >/dev/null 2>&1; then
+    if oc get configmap ca-config-map-test -n openshift-config -o jsonpath='{.data.ca\.crt}' | openssl x509 -noout -text >/dev/null 2>&1; then
         echo "✅ ConfigMap contains valid CA certificate"
     else
         echo "⚠️ Warning: ConfigMap exists but certificate validation failed"

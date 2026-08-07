@@ -709,11 +709,11 @@ The following tables list the configurable parameters and their default values.
 
 ### GroupSync Configuration
 
-> **Note:** the shipped `values.yaml` is a **fast-track demo/testing** configuration —
-> an in-cluster test LDAP over plain `ldap://`, a `*/2` schedule, and `insecure: true`.
-> Re-point these at your real LDAP (and use `ldaps://` + a CA) for production.
+The shipped defaults are deliberately incomplete rather than a demo: `groupSync.url` is empty so each
+cluster supplies its own, `insecure` is `false` so the chain is verified, and the schedule is every 30
+minutes. See [Sync schedule](#sync-schedule) for the demo-speed alternative.
 
-| Parameter | Description | Default (demo) |
+| Parameter | Description | Default |
 |-----------|-------------|---------|
 | groupSync.name | Name of the primary GroupSync resource | ldap-groupsync |
 | groupSync.namespace | Target namespace | group-sync-operator |
@@ -825,8 +825,13 @@ helm install group-sync group-sync-operator/group-sync-operator-helm \
 
 ## Notes
 
-- The chart focuses on deploying only the essential components: GroupSync CR, OperatorGroup, and Subscription
-- Deployment order is managed via ArgoCD sync waves
+- A render is 35-38 objects across 11 kinds, depending on the values file. Besides the GroupSync CR,
+  OperatorGroup and Subscription, the chart ships the namespace-scoped RBAC the hook Jobs need, five hook
+  Jobs (InstallPlan approval, operator readiness, credential extraction, the CA copy, and pre-delete
+  cleanup), the two `helm test` Pods, and the test-scripts ConfigMap
+- Ordering is done twice over, because the two tools honour different mechanisms: `helm.sh/hook` plus
+  hook weights make plain `helm install` block on the wait Jobs, and `argocd.argoproj.io/sync-wave` does the
+  same under ArgoCD, which ignores Helm hooks
 - Labels follow Kubernetes recommended standards
 - LDAP queries use RFC2307 schema
 - The primary CR filters for `app-ocp-rbac-*`; additional per-tenant patterns (e.g.
@@ -920,7 +925,7 @@ oc get groupsync -n group-sync-operator
 1. View sync logs:
 
 ```bash
-oc logs -l app.kubernetes.io/name=group-sync-operator-helm -n group-sync-operator
+oc logs -n group-sync-operator deployment/group-sync-operator-controller-manager -c manager --tail=100
 ```
 
 1. Monitor real-time sync activity:
@@ -932,12 +937,6 @@ kubectl logs -n group-sync-operator deployment/group-sync-operator-controller-ma
 # Using oc command
 oc logs -n group-sync-operator deployment/group-sync-operator-controller-manager -c manager --tail=5 -f
 ```
-
-## Related Learning Materials
-
-For learning about Helm hooks and advanced deployment patterns:
-- **Helm Hooks Demo**: Check `/Users/olasumbo/gitRepos/hooks-demo/` for complete working examples and comprehensive documentation
-- **Why This Chart Doesn't Use Hooks**: We chose proper resource ordering and ArgoCD sync waves for better maintainability and production use
 
 ## Source Code
 
