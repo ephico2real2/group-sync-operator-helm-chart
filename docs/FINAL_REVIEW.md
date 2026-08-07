@@ -1,13 +1,11 @@
 # Final review — findings, solutions, and adjudication
 
-Status: **7 of 8 applied.** Findings **1, 2, 3, 4, 5, 6, 7 APPLIED**. **8 outstanding.**
+Status: **CLOSED — all 8 findings applied.**
 
-Finding 8 is FIX-INADEQUATE and deliberately left: Codex showed the proposed regex does not close the
-bypass class — `{{ index .Values.groupSync "url" }}` and `{{ get $gs "url" }}` both pass it, and
-`ci/url-guard.py`'s `actions()` matches `{{(.*?)}}` ONE LINE AT A TIME, so a multi-line action containing
-even the original raw read yields zero parsed actions. Fixing it means changing how that guard parses,
-not adding an alternative, and it needs the three bypasses as regression cases. It is a low-severity
-tripwire gap in a check that still catches the direct form.
+All eight are applied. Five were marked FIX-INADEQUATE by Codex, meaning the defect was real but the
+remediation written below was not sufficient — in every one of those five the real defect was larger than
+the finding, and the applied fix differs from what this document originally proposed. Read the
+`> **Codex:**` marker under a finding before treating its Solution block as what shipped.
 
 Codex marked all 8: **2 CONFIRMED-and-applied, 1 CONFIRMED-outstanding (6), 5 FIX-INADEQUATE** (2, 3,
 4, 7, 8 — the defect is real but the remediation as written is wrong, so each needs re-deriving from
