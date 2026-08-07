@@ -220,6 +220,7 @@ BASE_REF="${ACT_BASE_REF:-$(git symbolic-ref --quiet --short refs/remotes/origin
 BASE_SHA="$(git merge-base "$BASE_REF" HEAD 2>/dev/null || true)"
 HEAD_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
 VACUOUS_REASON=""
+DANGLING_HEAD=""
 
 if [ -z "$BASE_SHA" ]; then
   VACUOUS_REASON="no merge-base with '$BASE_REF' — version-bump had nothing to diff against.
@@ -228,8 +229,40 @@ elif [ "$BASE_SHA" = "$HEAD_SHA" ]; then
   VACUOUS_REASON="HEAD is the merge-base with '$BASE_REF', so version-bump saw an empty diff and
     passed without comparing anything. That is expected on the default branch."
 fi
+
+# A branch whose ref path .gitignore matches breaks git INSIDE the container, and version-bump then
+# passes having compared nothing. act copies the repo with --use-gitignore true by default, so the
+# ignore rules are applied to .git as well: on `tmp/demo`, .git/refs/heads/tmp/ is excluded, .git/HEAD
+# is copied still pointing at it, and `git diff` dies with "fatal: bad revision 'HEAD'" — straight into
+# the job's own `|| true`, which reports "no chart content changed" and succeeds.
+#
+# Measured on this repo, whose .gitignore carries tmp/, temp/ and *.log: one commit, one unbumped chart
+# change, branch renamed from tmp/demo-branch-behaviour to demo/branch-behaviour and nothing else — the
+# run went from ✅ pass to the correct ❌ with the ::error:: annotation.
+#
+# Only loose refs are affected. A packed ref lives in .git/packed-refs, which no rule here matches.
+HEAD_REF="$(git symbolic-ref --quiet HEAD 2>/dev/null || true)"
+if [ -n "$HEAD_REF" ] && [ -f ".git/$HEAD_REF" ] \
+   && git check-ignore -q ".git/$HEAD_REF" 2>/dev/null \
+   && ! grep -q " $HEAD_REF\$" .git/packed-refs 2>/dev/null; then
+  ignore_rule="$(git check-ignore -v ".git/$HEAD_REF" 2>/dev/null | awk '{print $1}')"
+  DANGLING_HEAD="the current branch's ref (.git/$HEAD_REF) is excluded by ${ignore_rule:-.gitignore}, so
+    act copies a .git whose HEAD points at a ref that is not there. Every git command in a job fails
+    with \"fatal: bad revision 'HEAD'\", and version-bump passes having compared NOTHING.
+    Rename the branch off that path — git branch -m <new-name> — or pass --use-gitignore=false to act."
+fi
 printf '{"pull_request":{"base":{"sha":"%s"}}}\n' "$BASE_SHA" > "$WORK_DIR/event.json"
 echo "🌿 diffing against $BASE_REF (${BASE_SHA:-none}) for version-bump"
+
+# Refused rather than warned when version-bump is in scope: its whole value is telling you the chart
+# needs a version bump, and under a dangling HEAD it says the opposite with a green tick. The other jobs
+# touch no git history, so they are allowed through with a warning.
+if [ -n "$DANGLING_HEAD" ]; then
+  case " ${JOBS[*]} " in
+    *" version-bump "*) die "$DANGLING_HEAD" ;;
+    *)                  echo "⚠️  $DANGLING_HEAD" ;;
+  esac
+fi
 
 # ---------------------------------------------------------------------------------------------------
 # Runner image
@@ -304,7 +337,17 @@ for job in "${JOBS[@]}"; do
        --container-architecture "$PLATFORM" \
        --container-daemon-socket - \
        > "$LOG_DIR/$job.log" 2>&1; then
-    echo "✅ pass"
+    # A pass is not accepted at face value if git died inside the job. Every git failure in these
+    # workflows lands in a `|| true` or a `2>/dev/null` — that is deliberate on GitHub, where the git
+    # context is always sound — so a broken context turns a real comparison into a vacuous success with
+    # a green tick. The preflight above catches the cause known to occur here (a gitignored branch ref);
+    # this catches the symptom whatever the cause.
+    if grep -q '^\[.*\]   | fatal: ' "$LOG_DIR/$job.log"; then
+      echo "❌ FAIL   $LOG_DIR/$job.log   (act exited 0, but git failed inside the job)"
+      FAILED+=("$job")
+    else
+      echo "✅ pass"
+    fi
   else
     echo "❌ FAIL   $LOG_DIR/$job.log"
     FAILED+=("$job")
