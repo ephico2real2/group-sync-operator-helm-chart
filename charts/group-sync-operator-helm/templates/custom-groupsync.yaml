@@ -56,9 +56,20 @@
 # exists, and it is empty. That failure is silent, which is why this override exists rather than
 # being left to `filter` alone — a filter fixes which groups are FOUND, not which members are READ.
 #
-# Naming both attributes is safe and is what the shipped cluster-access item does: the operator reads
-# every attribute listed, so a group with only one of them is unaffected. Verified on the reference
-# directory — ["member","uniqueMember"] against a groupOfUniqueNames group still syncs all 8 members.
+# NAMING BOTH IS SAFE WHEN AT MOST ONE IS POPULATED, which is the normal case and the only
+# schema-valid one without a custom auxiliary class: groupOfNames and groupOfUniqueNames are sibling
+# STRUCTURAL classes (RFC 4519) and RFC 4512 allows an entry only one structural chain, so OpenLDAP
+# rejects an entry carrying both with error 65, "invalid structural object class chain". Measured.
+#
+# Where both ARE populated — reachable by adding an AUXILIARY class such as extensibleObject — the
+# operator CONCATENATES: its ExtractMembers appends the values of each configured attribute and
+# deduplicates nothing, and nothing downstream does either. Measured on the reference lab with a probe
+# group holding member=[john.doe,jane.smith] and uniqueMember=[john.doe,bob.wilson]: the Group synced
+# as ["john.doe","jane.smith","john.doe","bob.wilson"] — john.doe TWICE, in the Group object itself.
+#
+# So this is the right default for a directory whose groups use one schema OR the other, which is what
+# it is for. It is not a way to merge two membership lists on one entry.
+# Verified: ["member","uniqueMember"] against the groupOfUniqueNames gate group syncs all 8 members.
 {{- if $item.groupMembershipAttributes }}
 {{- $_ := set $cfg.rfc2307 "groupMembershipAttributes" $item.groupMembershipAttributes }}
 {{- end }}

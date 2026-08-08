@@ -233,8 +233,14 @@ customGroupSyncs:
   # groupMembershipAttributes IS THE ONE THAT FAILS SILENTLY. A `filter` decides which groups are
   # FOUND; this decides which members are READ. Point a groupOfUniqueNames group at the inherited
   # ["member"] and it syncs with ZERO MEMBERS while reporting success — the CR is healthy, the Group
-  # object exists, and it is empty. Naming both attributes is safe: the operator reads every one
-  # listed, so a group carrying only one of them is unaffected.
+  # object exists, and it is empty.
+  #
+  # NAMING BOTH IS SAFE WHEN AT MOST ONE IS POPULATED — the normal case, and the only schema-valid one
+  # without a custom auxiliary class, because OpenLDAP rejects an entry carrying both groupOfNames and
+  # groupOfUniqueNames (sibling STRUCTURAL classes, one chain per entry) with error 65. Where both are
+  # populated the operator CONCATENATES and deduplicates nothing: measured, a probe group with
+  # member=[a,b] and uniqueMember=[a,c] synced as [a,b,a,c] — `a` twice, in the Group object itself.
+  # See docs/LDAP_GROUP_FILTER_AND_MEMBERSHIP.md.
   items:
     # ── THE OAUTH LOGIN-GATE GROUP ────────────────────────────────────────────────────────────────
     # Shipped out of the box, DISABLED, because a chart must not create a GroupSync CR nobody asked
@@ -257,10 +263,13 @@ customGroupSyncs:
     # <cr-name>_<provider-name>, so a separate CR keeps this group distinguishable from the RBAC
     # groups everywhere, and lets `prune` apply to it independently.
     #
-    # BOTH OBJECTCLASSES AND BOTH MEMBERSHIP ATTRIBUTES, deliberately. A gate group is commonly
-    # groupOfUniqueNames/uniqueMember while RBAC groups are groupOfNames/member, and naming both means
-    # this item works either way with nothing to change. Verified on the reference directory, whose
-    # gate group is groupOfUniqueNames: all 8 members sync.
+    # BOTH OBJECTCLASSES AND BOTH MEMBERSHIP ATTRIBUTES, deliberately — so this item works whichever
+    # schema YOUR gate group uses, with nothing to change. A gate group is commonly
+    # groupOfUniqueNames/uniqueMember while RBAC groups are groupOfNames/member. Verified on the
+    # reference directory, whose gate group is groupOfUniqueNames: all 8 members sync.
+    #
+    # This is "either schema", not "merge both attributes on one entry" — see the note above and
+    # docs/LDAP_GROUP_FILTER_AND_MEMBERSHIP.md for what happens when both are genuinely populated.
     #
     # THE DIRECTORY SIDE IS NOT FREE TO CHANGE. On that directory the memberof overlay is configured
     # for `uniqueMember` only — measured: a user who is a `member` of 17 groupOfNames groups carries

@@ -89,9 +89,13 @@ reference lab the `app-ocp-rbac-*` groups are the first and the OAuth login-gate
 something you are trusted to get right via `filter`.** A filter decides which groups are *found*; this
 decides which members are *read*. Point a `groupOfUniqueNames` group at the inherited `["member"]` and
 it syncs with **zero members** while reporting success — the CR is healthy, the Group object exists,
-and it is empty. Naming both attributes is safe and costs nothing: the operator reads every attribute
-listed, so a group carrying only one of them is unaffected. Verified on the reference directory, whose
-gate group is `groupOfUniqueNames`: `["member","uniqueMember"]` syncs all 8 members.
+and it is empty.
+
+Naming both attributes is safe **when at most one of them is populated** — the normal case, and the only
+schema-valid one without a custom auxiliary class. Verified on the reference directory, whose gate group
+is `groupOfUniqueNames`: `["member","uniqueMember"]` syncs all 8 members. Where both are genuinely
+populated the operator concatenates and deduplicates nothing, so a member listed under both appears
+twice. Full measurements in [LDAP_GROUP_FILTER_AND_MEMBERSHIP.md](LDAP_GROUP_FILTER_AND_MEMBERSHIP.md).
 
 A single-item list renders without the `(|...)` wrapper, because `(|(objectClass=x))` is legal LDAP but
 reads as a mistake to anyone auditing the CR.
