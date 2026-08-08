@@ -3,7 +3,8 @@
 # One CR per enabled item in .Values.customGroupSyncs.items:
 #   name     = item.name (unique -> unique ownership label)
 #   provider = "ldap" (fixed)
-#   filter   = built from item.groupCn, or item.filter to override
+#   filter   = built from item.groupCn (+ item.objectClass), or item.filter to override
+#   members  = item.groupMembershipAttributes, else inherited
 #   conn     = inherited from .Values.groupSync
 #
 # One naming pattern = one CR. Non-overlap is guaranteed by the org naming standard, not here.
@@ -18,10 +19,60 @@
 {{- $cfg := deepCopy $root.Values.groupSync }}
 {{- include "group-sync-operator-helm.applyInjectedCa" (list $root $cfg) }}
 {{- if not (or $item.filter $item.groupCn) }}
-{{- fail (printf "customGroupSyncs item %q has neither groupCn nor filter.\n  groupCn builds the filter (&(objectClass=groupOfNames)(cn=<groupCn>)); filter overrides it wholesale.\n  With neither, printf renders the missing value as the literal %%!s(<nil>) INTO the CR's filter, which\n  the operator then uses verbatim — it matches nothing, and the only symptom is a tenant that syncs no\n  groups. Set one of them." ($item.name | default "<unnamed>")) }}
+{{- fail (printf "customGroupSyncs item %q has neither groupCn nor filter.\n  groupCn builds the filter (&(objectClass=<objectClass|groupOfNames>)(cn=<groupCn>)); filter overrides it wholesale.\n  With neither, printf renders the missing value as the literal %%!s(<nil>) INTO the CR's filter, which\n  the operator then uses verbatim — it matches nothing, and the only symptom is a tenant that syncs no\n  groups. Set one of them." ($item.name | default "<unnamed>")) }}
 {{- end }}
-{{- $filter := $item.filter | default (printf "(&(objectClass=groupOfNames)(cn=%s))" $item.groupCn) }}
+# objectClass accepts a STRING or A LIST, and a list becomes an OR clause. Both spellings of a group
+# exist — groupOfNames with `member`, groupOfUniqueNames with `uniqueMember` — and one directory
+# routinely has both, so a pattern that must match either would otherwise need the raw `filter`
+# escape hatch and lose the declarative groupCn.
+#
+#   objectClass: groupOfNames                              -> (objectClass=groupOfNames)
+#   objectClass: ["groupOfNames","groupOfUniqueNames"]     -> (|(objectClass=groupOfNames)(objectClass=groupOfUniqueNames))
+#
+# Naming both costs nothing on a directory that has one of them: an OR clause simply does not match
+# what is not there. A single-item list renders WITHOUT the `(|...)` wrapper, because `(|(x))` is legal
+# but reads as a mistake to anyone auditing the CR.
+{{- $objectClass := $item.objectClass | default "groupOfNames" }}
+{{- $ocClause := "" }}
+{{- if kindIs "slice" $objectClass }}
+{{- if eq (len $objectClass) 1 }}
+{{- $ocClause = printf "(objectClass=%s)" (index $objectClass 0) }}
+{{- else }}
+{{- $parts := list }}
+{{- range $objectClass }}{{- $parts = append $parts (printf "(objectClass=%s)" .) }}{{- end }}
+{{- $ocClause = printf "(|%s)" (join "" $parts) }}
+{{- end }}
+{{- else }}
+{{- $ocClause = printf "(objectClass=%s)" $objectClass }}
+{{- end }}
+{{- $filter := $item.filter | default (printf "(&%s(cn=%s))" $ocClause $item.groupCn) }}
 {{- $_ := set $cfg.rfc2307.groupsQuery "filter" $filter }}
+# WHICH ATTRIBUTE HOLDS THE MEMBERS, overridable per item because it is not the same on every group.
+#
+# A group is groupOfNames with `member` or groupOfUniqueNames with `uniqueMember`, and one directory
+# routinely has both — on the reference lab the app-ocp-rbac-* groups are groupOfNames while the
+# OAuth login-gate group is groupOfUniqueNames. Inheriting the base `["member"]` for such a group
+# syncs it with ZERO MEMBERS and looks like a working sync: the CR reports success, the Group object
+# exists, and it is empty. That failure is silent, which is why this override exists rather than
+# being left to `filter` alone — a filter fixes which groups are FOUND, not which members are READ.
+#
+# NAMING BOTH IS SAFE WHEN AT MOST ONE IS POPULATED, which is the normal case and the only
+# schema-valid one without a custom auxiliary class: groupOfNames and groupOfUniqueNames are sibling
+# STRUCTURAL classes (RFC 4519) and RFC 4512 allows an entry only one structural chain, so OpenLDAP
+# rejects an entry carrying both with error 65, "invalid structural object class chain". Measured.
+#
+# Where both ARE populated — reachable by adding an AUXILIARY class such as extensibleObject — the
+# operator CONCATENATES: its ExtractMembers appends the values of each configured attribute and
+# deduplicates nothing, and nothing downstream does either. Measured on the reference lab with a probe
+# group holding member=[john.doe,jane.smith] and uniqueMember=[john.doe,bob.wilson]: the Group synced
+# as ["john.doe","jane.smith","john.doe","bob.wilson"] — john.doe TWICE, in the Group object itself.
+#
+# So this is the right default for a directory whose groups use one schema OR the other, which is what
+# it is for. It is not a way to merge two membership lists on one entry.
+# Verified: ["member","uniqueMember"] against the groupOfUniqueNames gate group syncs all 8 members.
+{{- if $item.groupMembershipAttributes }}
+{{- $_ := set $cfg.rfc2307 "groupMembershipAttributes" $item.groupMembershipAttributes }}
+{{- end }}
 {{- $_ := set $cfg "providerName" "ldap" }}
 {{- if $item.schedule }}{{- $_ := set $cfg "schedule" $item.schedule }}{{- end }}
 ---
