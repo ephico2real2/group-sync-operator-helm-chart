@@ -53,6 +53,20 @@ customGroupSyncs:
       groupCn: "bda-rbac-*"
       schedule: "0 * * * *"
 
+    # The OAuth login-gate group, ON in this lab. values.yaml ships this item disabled and carries the
+    # full reasoning; enabling it here is what makes it MANAGED rather than hand-applied.
+    #
+    # The lab's gate group is objectClass groupOfUniqueNames with `uniqueMember`, and the item names
+    # both spellings so it does not depend on that. Verified: 8 members, including the oauth bind
+    # service account — which carries a `uid` because its entry is extensibleObject, so it syncs like a
+    # person. That is a finding worth seeing rather than filtering out, and the dashboard shows it
+    # under "allowed to log in, holds no access".
+    - name: ldap-clusteraccess-groupsync
+      enabled: true
+      groupCn: "app-ssb-autobahnusers"
+      objectClass: ["groupOfNames", "groupOfUniqueNames"]
+      groupMembershipAttributes: ["member", "uniqueMember"]
+
 # Operator pod sizing. Kept here as well as in values.yaml so this environment states what it wants rather
 # than inheriting it — and 100m per container is what fits a single-node CRC, where the node runs the whole
 # control plane and leaves only a few hundred millicores spare.

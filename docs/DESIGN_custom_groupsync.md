@@ -78,6 +78,58 @@ That is the entire interface a support engineer needs to learn:
 | `items[].name` | The resource's name (must be unique) | `bda-rbac-groupsync` |
 | `items[].enabled` | On/off for **this one** CR | `true` |
 | `items[].groupCn` | The LDAP group name pattern to sync | `"bda-rbac-*"` |
+| `items[].objectClass` | Which objectClass(es) the groups are. A **list** becomes an OR clause | `"groupOfNames"` (default) |
+| `items[].groupMembershipAttributes` | Which attribute(s) hold the members | inherits `["member"]` |
+
+`objectClass` and `groupMembershipAttributes` exist because **one directory routinely has both group
+spellings**: `groupOfNames` with `member`, and `groupOfUniqueNames` with `uniqueMember`. On the
+reference lab the `app-ocp-rbac-*` groups are the first and the OAuth login-gate group is the second.
+
+**`groupMembershipAttributes` is the one that fails silently, and that is why it is a key rather than
+something you are trusted to get right via `filter`.** A filter decides which groups are *found*; this
+decides which members are *read*. Point a `groupOfUniqueNames` group at the inherited `["member"]` and
+it syncs with **zero members** while reporting success — the CR is healthy, the Group object exists,
+and it is empty. Naming both attributes is safe and costs nothing: the operator reads every attribute
+listed, so a group carrying only one of them is unaffected. Verified on the reference directory, whose
+gate group is `groupOfUniqueNames`: `["member","uniqueMember"]` syncs all 8 members.
+
+A single-item list renders without the `(|...)` wrapper, because `(|(objectClass=x))` is legal LDAP but
+reads as a mistake to anyone auditing the CR.
+
+### The OAuth login-gate group
+
+`values.yaml` ships an item named `ldap-clusteraccess-groupsync`, **disabled**, for the group whose
+membership an identity provider requires before anybody can authenticate:
+
+```
+ldaps://.../dc=example,dc=com?uid?sub?(&(uid=*)(memberOf=cn=<this group>,ou=Groups,...))
+```
+
+Nothing on the cluster can otherwise see who is allowed to log in — that group lives only in the
+directory. Syncing it makes the membership a first-class OpenShift Group, which is what lets
+group-sync-dashboard answer two questions it cannot otherwise: **who holds access they cannot use** (a
+role granted to somebody the gate refuses), and **whether a refused login was a real person outside the
+group or a username that does not exist** — the oauth log cannot separate those, because the filter
+carries the group and both produce the same `no entries matching` line.
+
+Shipped **disabled** deliberately, for the same reason `items` used to ship empty: `groupCn` names a
+group that exists on the reference lab and nowhere else, so an enabled default would create a CR that
+matches nothing, reports success, and looks configured. Enable it in your own values file — the lab does,
+in `crc-values.yaml`.
+
+It gets its **own CR** rather than a widened tenant pattern because the ownership label is
+`<cr-name>_<provider-name>`: a separate CR keeps the gate group distinguishable from the RBAC groups
+everywhere, and lets `prune` apply to it independently.
+
+**The directory side is not free to change.** On the reference directory the `memberof` overlay is
+configured for `uniqueMember` only — measured: a user who is a `member` of **17** `groupOfNames` groups
+carries exactly **one** `memberOf` value, the gate group. So rewriting that group as `groupOfNames` "for
+consistency" would produce no `memberOf`, match nobody, and **refuse every LDAP login**. Check yours
+before changing it:
+
+```bash
+ldapsearch -x -H ldap://<host> -D "<bind>" -w "<pw>" -b "<gate group DN>" objectClass
+```
 
 ### What you do NOT set (and why)
 
@@ -85,7 +137,8 @@ To keep it mistake-proof, everything else is filled in for you:
 
 - **The LDAP filter.** You give a simple pattern `bda-rbac-*`; the chart builds the correct
   LDAP filter `(&(objectClass=groupOfNames)(cn=bda-rbac-*))`. You cannot break the filter
-  syntax (unbalanced brackets are the #1 LDAP mistake).
+  syntax (unbalanced brackets are the #1 LDAP mistake). `objectClass` shapes what it builds;
+  `filter` still overrides it wholesale for the rare case neither covers.
 - **The provider name.** Always `ldap` internally — you never type it, so it is never wrong.
 - **The connection** (LDAP URL, credentials, CA, user query). These are the **same for the
   whole company**, so they are taken from the existing `groupSync` block. One place to set,
