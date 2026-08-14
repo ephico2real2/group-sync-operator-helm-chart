@@ -1,0 +1,60 @@
+# =============================================================================
+# Custom-tier RBAC group: app-ocp-rbac-alpha-database-admin
+# =============================================================================
+# Seeds the ONE group needed to exercise the chart's customGroupConfig stanza
+# (openshift-rbac-automation, chart/templates/13-custom-groupconfig-rbac.yaml).
+# That stanza binds ClusterRoles the platform does NOT ship, keyed on a group-name
+# suffix — here `-database-admin` -> ClusterRole/database-admin. Until a group with
+# that suffix exists, the GroupConfig is live and correct but produces 0 bindings.
+#
+# Synced by GroupSync/ldap-groupsync, whose filter is (cn=app-ocp-rbac-*). No new
+# GroupSync CR is needed: this name already falls inside that filter. That is also
+# why the name keeps the app-ocp-rbac- prefix rather than inventing a new family.
+#
+# ── EXPECT ONE KYVERNO AUDIT VIOLATION, BY DESIGN ────────────────────────────
+# ClusterPolicy/group-naming-app-ocp-rbac matches names ["app-ocp-rbac-*"] and
+# requires ^app-ocp-rbac-[a-z]{3,4}-(ns|cluster)-(admin|developer|audit)$. This name
+# fails it twice over: `alpha` is 5 letters, and `database-admin` is not
+# (ns|cluster)-(admin|developer|audit).
+#
+# The policy is validationFailureAction: Audit, verified on the cluster, so the group
+# is created and synced normally and the finding lands in a PolicyReport. That is the
+# honest state of things: the baseline naming standard describes the three built-in
+# tiers, and a custom tier is by definition outside it. Two clean ways to resolve it,
+# both a deliberate decision rather than a cleanup:
+#   a) widen the regex to allow a custom tier, e.g.
+#      ^app-ocp-rbac-[a-z]{3,4}-(ns|cluster)-(admin|developer|audit)$ plus an
+#      alternation for approved custom suffixes; or
+#   b) give custom tiers their own family prefix (app-dba-*), their own GroupSync
+#      provider, and their own naming policy — the path the policy file's own
+#      "Adding a new group family" section describes.
+# Neither is done here, because picking one is a governance call.
+#
+# ── THE CLUSTERROLE MUST EXIST SEPARATELY ────────────────────────────────────
+# A ClusterRoleBinding whose roleRef names a nonexistent ClusterRole is created
+# SUCCESSFULLY, reports healthy, and grants NOTHING. See
+# openshift-rbac-automation/working-sessions/policies/database-admin-clusterrole.yaml.
+#
+# Members are existing users from ldap-structure-combined.ldif. Every DN in that
+# directory is the uid= form (verified by ldapsearch, not assumed — this directory has
+# historically mixed cn= and uid=, which is what ldap-normalize-user-dns.ldif exists to
+# fix). groupOfNames requires at least one member.
+#
+# Import (test LDAP already running):
+#   POD=$(oc get pods -n ldap-testing -l app=openldap-server \
+#         --field-selector=status.phase=Running -o jsonpath='{.items[0].metadata.name}')
+#   oc cp ldap-rbac-groups-database-admin.ldif ldap-testing/$POD:/tmp/
+#   oc exec -n ldap-testing $POD -- ldapadd -x -H ldap://localhost:389 \
+#       -D "cn=admin,dc=ephico2real,dc=com" -w admin123 \
+#       -f /tmp/ldap-rbac-groups-database-admin.ldif
+#
+# Then force the sync rather than waiting out the */30 schedule:
+#   ./60-force-groupsync.sh ldap-groupsync
+# =============================================================================
+
+dn: cn=app-ocp-rbac-alpha-database-admin,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-alpha-database-admin
+description: Custom tier - database administrators (binds ClusterRole/database-admin cluster-wide)
+member: uid=alice.cooper,ou=People,dc=ephico2real,dc=com
+member: uid=dana.lee,ou=People,dc=ephico2real,dc=com
