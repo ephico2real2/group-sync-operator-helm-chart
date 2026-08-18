@@ -9,6 +9,12 @@ validate the adoption fix for
 mistakes are documented too, because each one cost time and will cost you the same time if you rediscover
 them.
 
+**This lives here, not upstream, deliberately.** These are *our* local steps — a fork, our quay namespace,
+our cluster, our chart overlay. A maintainer would reasonably decline to carry them in the operator repo, so
+they belong with the chart that consumes the operator. Read it as three things at once: how to build an
+operator image and bundle, how to import a catalog into a running cluster, and how to test a change locally
+before proposing it upstream.
+
 **Why this exists.** OLM gives no supported way to override an operator's own image: `Subscription.spec.config`
 has no image field (checked against the CRD schema), and `RELATED_IMAGE_*` is an *operand* hint read by the
 already-running operator, so it cannot change the image OLM launched. Patching the installed CSV works but
@@ -333,6 +339,85 @@ Also revert any rename you made for the test, and re-check the RBAC uid-hash mat
 
 **Do not leave behind:** the CatalogSource, the fork Subscription/CSV, any `BuildConfig`/`ImageStream` if you
 experimented with in-cluster builds, and the multi-hundred-MB `bin/manager` in the fork worktree.
+
+---
+
+## 8. The evidence this produced
+
+What the fix was measured to do, on CRC 4.18, with the fork installed through OLM from our own catalog.
+Recorded here because a PR is only as good as what can be shown, and because it is the template for the next
+change you test this way.
+
+**The bug, before the fix** — a rename left Groups pointing at a CR that no longer existed, and a forced sync
+did not touch them:
+
+```
+22 of 66 Groups labelled <deleted-cr>_ldap
+resourceVersion 29956737 -> 29956737   unchanged across a forced sync = no Update was ever issued
+sync-time frozen at the pre-rename value
+"Group Provider Label Did Not Match Expected Provider Label"  x22 per sync, at Info, no error
+status.lastSyncSuccessTime advanced anyway, and group_sync_error stayed 0
+```
+
+**The fix, both directions.** Rename A→B, then B→A, each repaired on the first reconcile after the old CR
+disappeared:
+
+```
+19:34:42   21x "Group Provider Label Did Not Match"          <- CORRECT: both CRs briefly existed, so the
+                                                                old owner was still live and the guard held
+19:39:58   21x "Adopting Group Whose GroupSync No Longer Exists"
+19:47:36   21x adoptions again, on the rename back (42 total)
+
+sample Group   before: bdp-oud-group-rbac-groupsync_ldap | 19:34:39 | rv 30093707
+               after : bdp-oud-rbac-groupsync_ldap       | 19:39:56 | rv 30096049
+               back  : bdp-oud-group-rbac-groupsync_ldap |          | rv 30099444
+```
+
+The `resourceVersion` **changing** is the point — it is the same field that stayed frozen in the bug report,
+read with the same command. And the skips at 19:34:42 are worth keeping in the record rather than hiding:
+they show the contention guard still refuses a Group whose owner is live, which is the behaviour the fix must
+not break.
+
+**What was checked besides the label**, because a label alone proves little:
+
+| check | result |
+|---|---|
+Groups before / after | 66 / 66 |
+Values naming a dead CR | 0 |
+`sync-time` on adopted Groups | advanced |
+`resourceVersion` | changed — a real write |
+Policy-made ClusterRoleBindings, by **UID** | unchanged (a count cannot see a delete-and-recreate) |
+`oc auth can-i`, both directions | identical, including prod audit `delete pods` = no |
+Login-gate group members | 8, unchanged |
+Second forced sync | adopted 0 more — idempotent |
+
+## 9. Proposing it upstream
+
+Once it works locally, the change goes to the operator repo — not this one.
+
+```bash
+cd ~/gitRepos/group-sync-operator
+git push -u origin fix/<your-change>
+gh pr create --repo redhat-cop/group-sync-operator \
+  --base main --head <you>:fix/<your-change> \
+  --title "<sentence-case imperative>" --body-file /tmp/pr-body.md
+```
+
+What that repo expects, checked rather than assumed:
+
+- **No PR or issue template**, no `CONTRIBUTING.md`, and no org-level `redhat-cop/.github` — so the body is
+  free-form. Match the house style: sentence-case imperative title, prose body, affected version, measured
+  numbers.
+- **Sign off** — `git commit -s`. No DCO bot enforces it, but every maintainer commit has it.
+- **CI runs `make test`** on every PR via a shared reusable workflow. There is **no** `make lint` target and
+  no golangci-lint in the repo, so do not claim a lint step that does not exist.
+- **`CODEOWNERS` is `* @sabre1041 @raffaelespazzoli`**, so reviewers are assigned automatically.
+- File the issue **first** and link it (`Fixes #<n>`); a maintainer reading a PR wants the problem stated
+  before the diff.
+
+Include the evidence from section 8 in the PR body, and be explicit about what you could *not* test — for
+this change, that the LDAP provider was the only one exercised, even though the fix is provider-agnostic
+because nothing in any syncer reads the label back.
 
 ---
 
