@@ -151,6 +151,11 @@ claims above did not ask about.
 
 ## Fable — pass 1
 
+_Note (Claude): the two `helm template` proof commands below were quoted with a bare `.` chart path, which
+was correct in the scratch chart copy they ran in but fails this repo's own "No bare chart paths in
+documented helm commands" CI check — a doc quoting a bare-path command is still a command someone pastes.
+Both now name `charts/group-sync-operator-helm` explicitly; the flags, output and conclusions are unchanged._
+
 _(Fable writes below this line.)_
 
 > **Fable:** S1 — REFUTED, then superseded by the operator's ruling (recorded so the history reads right)
@@ -249,7 +254,7 @@ _(Fable writes below this line.)_
 > **Proof:**
 >
 > ```
-> $ helm template gs . --set groupSync.url=ldaps://x:636 --set 'groupSync.previousNames[0]=old=new' | grep -A1 "name: RENAMES"
+> $ helm template gs charts/group-sync-operator-helm --set groupSync.url=ldaps://x:636 --set 'groupSync.previousNames[0]=old=new' | grep -A1 "name: RENAMES"
 >               value: "old=new=ldap-groupsync"                      <- the helper emits the triple happily
 > $ STUB_LIVE_CRS="new current" STUB_PROVIDERS=ldap STUB_GROUPS="g1:old_ldap" RENAMES="old=new=current" bash relabel-provenance.sh
 > [provenance-relabel] relabelled g1: old_ldap -> new_ldap           <- declared successor was "current"; rc=0
@@ -309,7 +314,7 @@ _(Fable writes below this line.)_
 > **Where:** the shared gate `provenanceRelabelEnabled` in all three `01.9-*` templates (`configmap.yaml:9`, `rbac.yaml:19`, `job.yaml:15`)
 > **Checked:** (1) all five objects render together or not at all — one helper gates them; measured: default render emits 0 objects from the 01.9 templates, crc-values renders all five (SA, ClusterRole, ClusterRoleBinding, ConfigMap, Job). (2) Ordering under plain Helm: the ConfigMap/SA/RBAC are ordinary release resources, applied in the main sync; the Job is a `post-install,post-upgrade` hook, which Helm runs only after the main apply succeeds — including the upgrade that first introduces the feature. (3) Under ArgoCD: CM/SA/RBAC are tracked resources at wave 2, the CRs sit at wave 3, the Job is a Sync-phase hook at wave 4; waves run in order within the sync, so the mount and the RBAC exist before the pod starts. `prune`/`selfHeal` act on the tracked wave-2 objects only when the rename is removed from values, at which point the Job (deleted at HookSucceeded) is already gone — nothing orphans. (4) The comment-only documents emitted when the gate is closed (`helm template` shows `# Source:` plus header comments, zero `kind:`) match this chart's existing comments-outside-the-gate convention (01.8, 02.2) and parse as empty documents.
 > **Fix:** none — refuted.
-> **Proof:** `helm template gs . --set groupSync.url=... | awk 'BEGIN{RS="---"} /01\.9-provenance/ && /kind:/ {n++} END{print n+0}'` -> `0`; same with `-f crc-values.yaml` -> 5 objects and `RENAMES="bda-rbac-groupsync=bdp-oud-group-rbac-groupsync,ldap-clusteraccess-groupsync=autobahnusers-onboarding-groupsync"`; gate variants (`provenanceRelabel.enabled=false`, `groupSync.enabled=false`, `customGroupSyncs.enabled=false`, item `enabled: false`) each render 0 objects.
+> **Proof:** `helm template gs charts/group-sync-operator-helm --set groupSync.url=... | awk 'BEGIN{RS="---"} /01\.9-provenance/ && /kind:/ {n++} END{print n+0}'` -> `0`; same with `-f crc-values.yaml` -> 5 objects and `RENAMES="bda-rbac-groupsync=bdp-oud-group-rbac-groupsync,ldap-clusteraccess-groupsync=autobahnusers-onboarding-groupsync"`; gate variants (`provenanceRelabel.enabled=false`, `groupSync.enabled=false`, `customGroupSyncs.enabled=false`, item `enabled: false`) each render 0 objects.
 
 > **Fable:** T2 — REFUTED (one wording nit deferred to V1)
 > **Where:** `01.9-provenance-relabel-job.yaml:23-31` (annotations), `:8-11` (the weight-7 comment)
