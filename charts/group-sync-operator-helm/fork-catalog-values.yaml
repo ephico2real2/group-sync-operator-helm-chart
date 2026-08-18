@@ -1,8 +1,11 @@
-# TEMPORARY overlay: run the fork build of the operator from our own catalog, to test the
-# provenance-adoption fix (redhat-cop/group-sync-operator#466) before it exists upstream.
+# EXAMPLE overlay: run a SELF-BUILT operator image from your own catalog instead of the published one.
 #
-# Not for merging. Revert by dropping this file from the helm command; the chart's defaults point back
-# at community-operators.
+# Written while testing the provenance-adoption fix (redhat-cop/group-sync-operator#466) before it existed
+# upstream. It ships in the chart package as a worked example and does nothing unless you pass it with -f.
+# The chart's own defaults always point at community-operators.
+#
+# THE IMAGES BELOW ARE ONE PERSON'S — replace the catalog and CSV with your own before using this, and read
+# docs/TESTING_A_FORK_OPERATOR_BUILD.md for how to build them.
 operatorGroup:
   # v0.0.37 from our catalog declares only the AllNamespaces install mode.
   allNamespaces: true

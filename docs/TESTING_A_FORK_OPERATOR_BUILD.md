@@ -192,7 +192,9 @@ oc get packagemanifest -n openshift-marketplace -l catalog=group-sync-operator-f
 
 ## 5. Install it through this chart
 
-The chart carries a temporary overlay for exactly this, on branch `test/fork-catalog-0.0.37`:
+The chart ships an example overlay for exactly this — `charts/group-sync-operator-helm/fork-catalog-values.yaml`.
+It is inert unless you pass it with `-f`, and it names one person's registry, so replace those references with
+your own:
 
 ```yaml
 # charts/group-sync-operator-helm/fork-catalog-values.yaml

@@ -330,10 +330,12 @@ customGroupSyncs:
     #   filter: "(&(objectClass=groupOfNames)(cn=foo-*)(cn=bar-*))"  # raw LDAP filter (advanced)
 
 # -------------------- OperatorGroup --------------------
-# TEMPORARY (test/fork-catalog-0.0.37): allNamespaces exists so this chart can subscribe to a CSV that
-# declares ONLY the AllNamespaces install mode, which is what `make bundle` produces from this operator's
-# own config/manifests base. The published community bundle for v0.0.36 declares OwnNamespace/
-# SingleNamespace instead, so the shipped default here stays single-namespace.
+# allNamespaces exists so this chart can subscribe to a CSV that declares ONLY the AllNamespaces install
+# mode. That is what `make bundle` produces from the operator's own config/manifests base, while the
+# published community bundle for v0.0.36 declares OwnNamespace/SingleNamespace — so the default here stays
+# single-namespace, and you only need this when installing a self-built bundle or catalog.
+#
+# See docs/TESTING_A_FORK_OPERATOR_BUILD.md for the whole procedure.
 #
 # Measured: with a single-namespace OperatorGroup, an AllNamespaces-only CSV fails to install; and with a
 # global OperatorGroup in another namespace covering this one while a second CSV provides the same API,
