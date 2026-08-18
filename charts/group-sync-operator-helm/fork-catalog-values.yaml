@@ -1,0 +1,25 @@
+# requires-cluster: true
+#
+# It sets no groupSync.url, so `helm template` with this file alone cannot resolve one and fails with
+# "no LDAP url could be derived" — exactly as the base values do. CI asserts that failure by name, so this
+# marker cannot rot into a silent pass. Use it alongside a cluster values file:
+#     helm upgrade ... -f crc-values.yaml -f fork-catalog-values.yaml
+#
+# EXAMPLE overlay: run a SELF-BUILT operator image from your own catalog instead of the published one.
+#
+# Written while testing the provenance-adoption fix (redhat-cop/group-sync-operator#466) before it existed
+# upstream. It ships in the chart package as a worked example and does nothing unless you pass it with -f.
+# The chart's own defaults always point at community-operators.
+#
+# THE IMAGES BELOW ARE ONE PERSON'S — replace the catalog and CSV with your own before using this, and read
+# docs/TESTING_A_FORK_OPERATOR_BUILD.md for how to build them.
+operatorGroup:
+  # v0.0.37 from our catalog declares only the AllNamespaces install mode.
+  allNamespaces: true
+
+subscription:
+  source: group-sync-operator-fork
+  sourceNamespace: openshift-marketplace
+  # Pin the exact CSV, so "which code is running" has one answer.
+  startingCSV: group-sync-operator.v0.0.37
+  installPlanApproval: Automatic

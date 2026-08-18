@@ -9,6 +9,15 @@ metadata:
     argocd.argoproj.io/sync-wave: "-1"
     olm.providedAPIs: GroupSync.v1alpha1.redhatcop.redhat.io
 spec:
+  {{- if .Values.operatorGroup.allNamespaces }}
+  # AllNamespaces (global) scope: targetNamespaces is omitted entirely, which is how OLM expresses
+  # "every namespace". Required when the subscribed CSV declares only the AllNamespaces install mode —
+  # a single-namespace OperatorGroup makes OLM refuse it with an unsupported-install-mode error.
+  #
+  # This does NOT widen what the operator watches: subscription.watchNamespaces sets WATCH_NAMESPACE
+  # explicitly on the deployment, which overrides the CSV's fieldRef to olm.targetNamespaces.
+  {{- else }}
   targetNamespaces:
     - {{ .Values.groupSync.namespace }}
+  {{- end }}
   upgradeStrategy: Default

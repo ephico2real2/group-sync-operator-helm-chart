@@ -802,6 +802,17 @@ filter matters.
 | subscription.resources.requests.cpu | CPU request for the operator pod, via the Subscription's `spec.config.resources`. **OLM applies it to every container**, so the scheduler is asked for double this, and it **replaces** the sizing the operator's CSV declares rather than merging | 100m |
 | subscription.resources.requests.memory | Memory request, same caveats as above | 100Mi |
 
+### Self-built Operator Image (advanced)
+
+Install a self-built operator bundle or catalog instead of the published one — see
+`docs/TESTING_A_FORK_OPERATOR_BUILD.md`. Both default to the published behaviour, so leaving them alone
+changes nothing.
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| operatorGroup.allNamespaces | Omit targetNamespaces, giving OLM an AllNamespaces OperatorGroup — required for a CSV that declares only that install mode | false |
+| subscription.startingCSV | Pin the exact CSV instead of taking the channel head; empty means channel head | "" |
+
 ### Provenance Relabel Configuration
 
 Repairs the `sync-provider` label on Groups whose GroupSync CR was **renamed**. The operator rewrites a
