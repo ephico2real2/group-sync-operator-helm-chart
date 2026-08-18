@@ -48,7 +48,7 @@ oauthSecretExtraction:
 customGroupSyncs:
   enabled: true
   items:
-    - name: bda-rbac-groupsync
+    - name: bdp-oud-group-rbac-groupsync
       enabled: true
       groupCn: "bda-rbac-*"
       schedule: "0 * * * *"
@@ -61,7 +61,7 @@ customGroupSyncs:
     # service account — which carries a `uid` because its entry is extensibleObject, so it syncs like a
     # person. That is a finding worth seeing rather than filtering out, and the dashboard shows it
     # under "allowed to log in, holds no access".
-    - name: ldap-clusteraccess-groupsync
+    - name: autobahnusers-onboarding-groupsync
       enabled: true
       groupCn: "app-ssb-autobahnusers"
       objectClass: ["groupOfNames", "groupOfUniqueNames"]
