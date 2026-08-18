@@ -52,6 +52,11 @@ customGroupSyncs:
       enabled: true
       groupCn: "bda-rbac-*"
       schedule: "0 * * * *"
+      # Renamed from bda-rbac-groupsync in 0.12.1. Declaring it lets the provenance-relabel Job correct the
+      # 21 Groups that kept the old owner in their sync-provider label — the operator never rewrites them,
+      # because their LDAP membership did not change. Harmless to leave in place afterwards: a name that is
+      # no longer stale matches no Group.
+      previousNames: ["bda-rbac-groupsync"]
 
     # The OAuth login-gate group, ON in this lab. values.yaml ships this item disabled and carries the
     # full reasoning; enabling it here is what makes it MANAGED rather than hand-applied.
@@ -64,6 +69,8 @@ customGroupSyncs:
     - name: autobahnusers-onboarding-groupsync
       enabled: true
       groupCn: "app-ssb-autobahnusers"
+      # Renamed from ldap-clusteraccess-groupsync in 0.12.1 — one Group to correct, the login-gate group.
+      previousNames: ["ldap-clusteraccess-groupsync"]
       objectClass: ["groupOfNames", "groupOfUniqueNames"]
       groupMembershipAttributes: ["member", "uniqueMember"]
 

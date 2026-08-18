@@ -650,7 +650,7 @@ oc annotate groupsync bda-rbac-groupsync -n group-sync-operator \
   sync.redhatcop.redhat.io/sync-now="$(date)" --overwrite
 
 # Confirm the groups landed, owned by the new CR (label <cr-name>_ldap):
-oc get groups -l group-sync-operator.redhat-cop.io/sync-provider=bda-rbac-groupsync_ldap
+oc get groups -l group-sync-operator.redhat-cop.io/sync-provider=bdp-oud-group-rbac-groupsync_ldap
 ```
 
 ### Removing a tenant

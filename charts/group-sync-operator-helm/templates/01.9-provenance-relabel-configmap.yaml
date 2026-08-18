@@ -1,0 +1,23 @@
+# The script the provenance-relabel Job runs, shipped from files/relabel-provenance.sh.
+#
+# Not a hook. An ordinary release resource exists before post-install/post-upgrade hooks run, so the Job
+# can mount it, and it is removed with the release instead of accumulating — the same reasoning as the
+# test-scripts ConfigMap and the RBAC in 02.1.
+#
+# Renders only when a rename is actually declared, so a cluster that has never renamed a GroupSync gets
+# nothing from this feature at all.
+{{- if include "group-sync-operator-helm.provenanceRelabelEnabled" . }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "group-sync-operator-helm.fullname" . }}-provenance-relabel
+  namespace: {{ .Values.groupSync.namespace }}
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+  annotations:
+    # Before the Job in wave 4, which mounts this.
+    argocd.argoproj.io/sync-wave: "2"
+data:
+  relabel-provenance.sh: |
+{{ .Files.Get "files/relabel-provenance.sh" | indent 4 }}
+{{- end }}

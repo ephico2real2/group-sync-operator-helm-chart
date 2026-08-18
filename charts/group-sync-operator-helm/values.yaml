@@ -26,12 +26,32 @@ groupSync:
   # Enable or disable the GroupSync CR creation (set to false for initial operator installation)
   enabled: true
   # Name of the GroupSync resource
+  #
+  # RENAMING THIS IS NOT FREE. The name is cluster identity, so Helm deletes the old CR and creates the new
+  # one, and every Group this CR synced keeps the OLD name in its sync-provider label — the operator
+  # rewrites a Group only when that Group's LDAP membership changes, and a forced sync does not move it.
+  # The Groups are not deleted and RBAC is unaffected, but they are credited to no CR until repaired.
+  # Declare the old name in previousNames below and the provenance-relabel Job fixes them on the upgrade.
   name: ldap-groupsync
+
+  # Names this CR used to have, so the provenance-relabel Job can correct the Groups it left behind.
+  # Optional, and only useful for one upgrade after a rename — although leaving it in place is harmless,
+  # since a name that is no longer stale matches no Group. Example:
+  #   previousNames: ["ldap-groupsync-old"]
+  previousNames: []
   # Namespace where the GroupSync CR will be created
   namespace: group-sync-operator
   # Schedule in cron format (every 30 minutes)
   schedule: "*/30 * * * *"
-  # Name of the LDAP provider in the GroupSync configuration
+  # Name of the LDAP provider in the GroupSync configuration.
+  #
+  # RENAMING THIS HAS THE SAME COST AS RENAMING THE CR — the ownership label's value is
+  # <cr-name>_<provider-name>, so a new provider name orphans every synced Group's value exactly like a
+  # CR rename does (measured there: 22 of 66 Groups). Worse, previousNames CANNOT repair it: the relabel
+  # Job derives the stale value from the live CR's provider names, and the old provider name is recorded
+  # nowhere once the CR is rewritten — the Job finds nothing to fix and exits 0. If you must rename it,
+  # plan on relabelling by hand. (customGroupSyncs items pin their provider name to "ldap" in the
+  # template, so this knob affects the primary CR only.)
   providerName: ldap
 
   # CA for LDAPS. Required whenever the url is ldaps://, even with insecure true — insecure relaxes
@@ -290,6 +310,14 @@ customGroupSyncs:
     #   # "0 * * * *" not "*/60 * * * *" — the minute field only spans 0-59, so */60 is
     #   # non-idiomatic and rejected by some cron parsers.
     #   schedule: "0 * * * *"
+    #   # Names this item used to have. RENAMING AN ITEM RENAMES ITS CR, so Helm deletes the old one
+    #   # and creates the new one — and every Group it synced keeps the OLD name in its sync-provider
+    #   # label, because the operator rewrites a Group only when that Group's LDAP membership changes.
+    #   # Measured: 22 of 66 Groups, and a forced sync did not move them. RBAC is unaffected (the
+    #   # GroupConfig policies match that label with Exists), but the Groups are credited to no CR and
+    #   # their stale-group alert cannot fire until repaired. Declare the old name and the
+    #   # provenance-relabel Job corrects them on the next upgrade.
+    #   previousNames: ["bda-rbac-groupsync-old"]
 
     # Example second tenant (left disabled — enable once its groups exist in LDAP):
     # - name: xyz-ocp-rbac-groupsync
@@ -593,6 +621,57 @@ operatorWait:
     tag: v4.14
     pullPolicy: IfNotPresent
 
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
+# -------------------- Provenance relabel --------------------
+# Repairs the sync-provider label on Groups whose GroupSync CR was RENAMED.
+#
+# THE PROBLEM IT SOLVES, measured on this chart's own renames. The operator stamps each Group it syncs with
+# group-sync-operator.redhat-cop.io/sync-provider=<cr-name>_<provider-name>, and it rewrites a Group only
+# when that Group's LDAP membership changes. Rename an item and Helm deletes the old CR and creates the new
+# one — but 22 of 66 Groups kept the old name in that label, and a forced sync via
+# setup-local-ldap-testing/60-force-groupsync.sh did not move them either.
+#
+# WHAT THAT COSTS: not RBAC — the GroupConfig policies that grant access match this label with
+# `operator: Exists` and narrow by the GROUP NAME, never by its value. What breaks is attribution and
+# ALERTING: the dashboard rebuilds `<cr>_<provider>` and compares, so a Group with a mismatched value is
+# credited to no CR and its stale-group alert cannot fire.
+#
+# IT ONLY ACTS ON A DECLARED RENAME. Spotting an orphaned value is easy; knowing what it SHOULD be is not,
+# because nothing on the cluster records that one CR succeeded another. So you write the old name down in
+# previousNames (on groupSync, or on a customGroupSyncs item) and the Job repairs exactly those Groups.
+# Declare nothing and this whole feature renders nothing — no Job, no ServiceAccount, and no ClusterRole
+# holding patch on groups.
+provenanceRelabel:
+  enabled: true
+
+  # true reports what it would change and exits without touching anything. Worth one upgrade before the
+  # real run on a cluster whose provenance you have not audited — the Job log lists every Group and its
+  # before -> after.
+  dryRun: false
+
+  # Abort a run that would relabel more than this many Groups. 0 disables the cap.
+  #
+  # A BLAST-RADIUS GUARD, not a tuning knob. A large count means previousNames is wrong for this cluster
+  # far more often than it means that many Groups genuinely changed owner. 25 is above the largest real
+  # repair seen here (22) and well below the group count (66), so a wrong declaration aborts loudly
+  # instead of rewriting provenance across the cluster.
+  limit: 25
+
+  # 0: this Job has no wait loop, so a retry would repeat the same API calls against the same state.
+  backoffLimit: 0
+  activeDeadlineSeconds: 300
+  ttlSecondsAfterFinished: 300
+  image:
+    repository: registry.redhat.io/openshift4/ose-cli
+    tag: v4.14
+    pullPolicy: IfNotPresent
   resources:
     requests:
       cpu: 50m

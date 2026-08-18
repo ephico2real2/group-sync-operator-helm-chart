@@ -1,0 +1,79 @@
+# RBAC for the provenance-relabel Job.
+#
+# Ordinary resources, not hooks — only the Job is a hook. Hooks are untracked by the release and survive
+# helm uninstall, so a hooked ServiceAccount and cluster binding would accumulate (see 02.1).
+#
+# A CLUSTERROLE, AND NOT BY CHOICE. Groups are cluster-scoped — `user.openshift.io Group NAMESPACED=false`
+# — so this cannot be narrowed to a namespace, the same constraint the test RBAC documents. `list` cannot
+# be pinned with resourceNames either: RBAC does not honour them for list.
+#
+# WHAT NARROWS IT IS THE SCRIPT, NOT THE RBAC, which is the same bargain the InstallPlan approver makes
+# with its `patch installplans`. The Job may patch any Group, and it only ever patches one that satisfies
+# BOTH conditions together: its sync-provider value is exactly `<old>_<provider>` for an old name a human
+# declared in previousNames, AND that old GroupSync CR no longer exists. A Group owned by a live CR is
+# never touched, and provenanceRelabel.limit caps a single run.
+#
+# NO `delete`, ON ANYTHING. This Job repairs a label; it must not be able to remove a Group, and it must
+# not be able to remove the label either — dropping the sync-provider key REVOKES ACCESS, because its
+# presence is the only thing narrowing the GroupConfig policies to synced groups.
+{{- if include "group-sync-operator-helm.provenanceRelabelEnabled" . }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "group-sync-operator-helm.fullname" . }}-provenance-relabel
+  namespace: {{ .Values.groupSync.namespace }}
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "group-sync-operator-helm.fullname" . }}-{{ .Release.Namespace }}-provenance-relabel
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+rules:
+# list to find the Groups carrying a stale value, patch to correct it — and `get`, which is NOT optional
+# even though nothing in the script fetches a Group by name. `oc label` reads the object before it writes:
+# measured with -v=6 against this cluster, one `oc label group … --overwrite` issues
+#   GET   /apis/user.openshift.io/v1/groups/<name>
+#   PATCH /apis/user.openshift.io/v1/groups/<name>
+# so a rule without `get` fails Forbidden on the GET and relabels nothing. A sibling chart shipped exactly
+# this omission — list+delete on roles while the script ran `oc get role <name>` — and the resulting
+# Forbidden was read as "the Role is gone", which deleted healthy RoleBindings. Do not tighten this to
+# list+patch without re-running the -v=6 check.
+- apiGroups: ["user.openshift.io"]
+  resources: ["groups"]
+  verbs: ["get", "list", "patch"]
+# Read-only, and the whole basis of the decision: a rename is only credible when the OLD CR is absent
+# from the list, and the replacement value is built from the NEW CR's provider names — both taken from
+# the SAME single `oc get groupsync -A` read, so `list` is the only verb the script exercises on
+# groupsyncs. The per-CR `oc get groupsync <name>` lookup that needed `get` was folded into that read;
+# if a named lookup ever returns, re-add `get` and re-verify with -v=6, exactly as the groups rule
+# above demands.
+- apiGroups: ["redhatcop.redhat.io"]
+  resources: ["groupsyncs"]
+  verbs: ["list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  # Namespace in the name: a cluster-scoped name built from the release name alone collides when the same
+  # release name is used in two namespaces, which is the normal way to run this chart twice.
+  name: {{ include "group-sync-operator-helm.fullname" . }}-{{ .Release.Namespace }}-provenance-relabel
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "group-sync-operator-helm.fullname" . }}-{{ .Release.Namespace }}-provenance-relabel
+subjects:
+- kind: ServiceAccount
+  name: {{ include "group-sync-operator-helm.fullname" . }}-provenance-relabel
+  namespace: {{ .Values.groupSync.namespace }}
+{{- end }}
