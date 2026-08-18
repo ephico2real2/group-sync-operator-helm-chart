@@ -1,3 +1,10 @@
+# requires-cluster: true
+#
+# It sets no groupSync.url, so `helm template` with this file alone cannot resolve one and fails with
+# "no LDAP url could be derived" — exactly as the base values do. CI asserts that failure by name, so this
+# marker cannot rot into a silent pass. Use it alongside a cluster values file:
+#     helm upgrade ... -f crc-values.yaml -f fork-catalog-values.yaml
+#
 # EXAMPLE overlay: run a SELF-BUILT operator image from your own catalog instead of the published one.
 #
 # Written while testing the provenance-adoption fix (redhat-cop/group-sync-operator#466) before it existed
