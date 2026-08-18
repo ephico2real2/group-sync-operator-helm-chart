@@ -657,7 +657,7 @@ Full design, validation steps, and glossary:
 oc get groupsync -n group-sync-operator
 
 # Its groups are synced and owned by that CR (label <cr-name>_ldap)
-oc get groups -l group-sync-operator.redhat-cop.io/sync-provider=bda-rbac-groupsync_ldap
+oc get groups -l group-sync-operator.redhat-cop.io/sync-provider=bdp-oud-group-rbac-groupsync_ldap
 ```
 
 ### Upgrading the Operator
@@ -801,6 +801,32 @@ filter matters.
 | subscription.sourceNamespace | Source namespace | openshift-marketplace |
 | subscription.resources.requests.cpu | CPU request for the operator pod, via the Subscription's `spec.config.resources`. **OLM applies it to every container**, so the scheduler is asked for double this, and it **replaces** the sizing the operator's CSV declares rather than merging | 100m |
 | subscription.resources.requests.memory | Memory request, same caveats as above | 100Mi |
+
+### Provenance Relabel Configuration
+
+Repairs the `sync-provider` label on Groups whose GroupSync CR was **renamed**. The operator rewrites a
+Group only when that Group's LDAP membership changes, so a rename leaves every Group it synced carrying the
+old CR name — measured at 22 of 66 Groups on the reference cluster, and a forced sync does not move them.
+RBAC is unaffected, because the GroupConfig policies that grant access match that label with
+`operator: Exists` and narrow by the group name; what breaks is attribution and stale-group alerting.
+
+Nothing renders unless a rename is declared in `groupSync.previousNames` or an item's `previousNames`, so a
+cluster that has never renamed a GroupSync gets no Job, no ServiceAccount and no ClusterRole.
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| provenanceRelabel.enabled | Enable the repair Job (still needs a declared rename to render) | true |
+| provenanceRelabel.dryRun | Report every Group and its before -> after, change nothing | false |
+| provenanceRelabel.limit | Abort a run that would relabel more than this many Groups; 0 disables | 25 |
+| provenanceRelabel.backoffLimit | No wait loop, so a retry repeats the same calls against the same state | 0 |
+| provenanceRelabel.activeDeadlineSeconds | Pod deadline | 300 |
+| provenanceRelabel.ttlSecondsAfterFinished | How long the finished Job is kept for its log | 300 |
+| provenanceRelabel.image.repository | Needs `oc` | registry.redhat.io/openshift4/ose-cli |
+| provenanceRelabel.image.tag | Pinned, not `latest` | v4.14 |
+| provenanceRelabel.image.pullPolicy | Image pull policy | IfNotPresent |
+| groupSync.previousNames | Names the primary CR used to have, so its Groups can be corrected | [] |
+
+`customGroupSyncs.items[].previousNames` takes the same form per tenant.
 
 ### Test Configuration
 

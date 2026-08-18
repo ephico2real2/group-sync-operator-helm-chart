@@ -307,6 +307,65 @@ unavailable
 {{- end -}}
 {{- end }}
 
+# The declared renames, as the `old=new` list the provenance-relabel Job consumes.
+#
+# Renaming a GroupSync CR leaves every Group it synced carrying the OLD name in its
+# sync-provider label, because the operator only rewrites a Group when that Group's LDAP
+# membership changes. Declaring the previous name is what lets the Job repair it — the mapping
+# cannot be inferred from the cluster, since nothing there records that one CR succeeded another.
+#
+# One helper, so the ConfigMap, the RBAC and the Job cannot disagree about whether there is any
+# work to do: all three render only when this is non-empty, which means a cluster that has never
+# renamed anything gets no Job, no ServiceAccount and — the part that matters — no ClusterRole
+# holding patch on groups.
+{{- define "group-sync-operator-helm.provenanceRenames" -}}
+{{- $renames := list -}}
+{{- $seenOld := list -}}
+{{- if .Values.groupSync.enabled -}}
+{{- $prevs := .Values.groupSync.previousNames | default list -}}
+{{- if not (kindIs "slice" $prevs) -}}
+{{- fail (printf "groupSync.previousNames must be a LIST of former CR names, e.g. [\"old-name\"] — got a %s" (kindOf $prevs)) -}}
+{{- end -}}
+{{- range $prev := $prevs -}}
+{{- $prev = $prev | toString -}}
+{{- if not (regexMatch "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$" $prev) -}}
+{{- fail (printf "groupSync.previousNames entry %q is not a Kubernetes object name — write the bare former CR name, nothing else" $prev) -}}
+{{- end -}}
+{{- if has $prev $seenOld -}}
+{{- fail (printf "previous name %q is declared more than once, so its Groups would have two claimed owners" $prev) -}}
+{{- end -}}
+{{- $seenOld = append $seenOld $prev -}}
+{{- $renames = append $renames (printf "%s=%s" $prev $.Values.groupSync.name) -}}
+{{- end -}}
+{{- end -}}
+{{- if .Values.customGroupSyncs.enabled -}}
+{{- range $item := (.Values.customGroupSyncs.items | default list) -}}
+{{- if $item.enabled -}}
+{{- $prevs := $item.previousNames | default list -}}
+{{- if not (kindIs "slice" $prevs) -}}
+{{- fail (printf "customGroupSyncs item %q: previousNames must be a LIST of former CR names — got a %s" $item.name (kindOf $prevs)) -}}
+{{- end -}}
+{{- range $prev := $prevs -}}
+{{- $prev = $prev | toString -}}
+{{- if not (regexMatch "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$" $prev) -}}
+{{- fail (printf "customGroupSyncs item %q: previousNames entry %q is not a Kubernetes object name — write the bare former CR name, nothing else" $item.name $prev) -}}
+{{- end -}}
+{{- if has $prev $seenOld -}}
+{{- fail (printf "previous name %q is declared more than once, so its Groups would have two claimed owners" $prev) -}}
+{{- end -}}
+{{- $seenOld = append $seenOld $prev -}}
+{{- $renames = append $renames (printf "%s=%s" $prev $item.name) -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+{{- join "," $renames -}}
+{{- end }}
+
+{{- define "group-sync-operator-helm.provenanceRelabelEnabled" -}}
+{{- if and .Values.provenanceRelabel.enabled (include "group-sync-operator-helm.provenanceRenames" .) -}}true{{- end -}}
+{{- end }}
+
 {{- define "group-sync-operator-helm.ldapUrl" -}}
 {{- $url := include "group-sync-operator-helm.ldapUrlOrEmpty" . -}}
 {{- if not $url -}}

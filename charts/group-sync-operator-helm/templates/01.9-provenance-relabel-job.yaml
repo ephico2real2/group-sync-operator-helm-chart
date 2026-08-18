@@ -1,0 +1,81 @@
+# Repairs the sync-provider label on Groups whose GroupSync CR was renamed.
+#
+# WHY A HOOK ON UPGRADE. A rename happens at exactly one moment — the upgrade that changes the item's
+# name — and the Groups it orphans are never corrected by the operator, which rewrites a Group only when
+# that Group's LDAP membership changes. So the repair belongs where the rename happens, and under ArgoCD
+# there is nobody else to notice: this chart's own Application sets prune and selfHeal.
+#
+# WEIGHT 7 puts it after what it actually needs: the InstallPlan approver (-1) and the readiness wait (0)
+# guarantee the CRD is served, and the GroupSync CRs it reads are ordinary manifest resources, applied
+# before any post hook (wave 3 under ArgoCD, before this Job's wave 4). The extraction (5) and CA (6)
+# Jobs are sequence, not dependencies — this Job reads no credentials and no certificates. Before the
+# tests (10/20), so a test run sees repaired provenance.
+#
+# The script lives in files/relabel-provenance.sh, mounted from the ConfigMap, so the same logic can be
+# read and run outside the cluster instead of being buried in a template.
+{{- if include "group-sync-operator-helm.provenanceRelabelEnabled" . }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "group-sync-operator-helm.fullname" . }}-provenance-relabel
+  namespace: {{ .Values.groupSync.namespace }}
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+  annotations:
+    # After the GroupSync CRs in wave 3 — the Job reads them.
+    argocd.argoproj.io/sync-wave: "4"
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true,Replace=true
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "7"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  backoffLimit: {{ .Values.provenanceRelabel.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.provenanceRelabel.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: {{ .Values.provenanceRelabel.ttlSecondsAfterFinished }}
+  template:
+    metadata:
+      labels:
+        {{- include "group-sync-operator-helm.selectorLabels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "group-sync-operator-helm.fullname" . }}-provenance-relabel
+      restartPolicy: Never
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: relabel-provenance
+          image: "{{ .Values.provenanceRelabel.image.repository }}:{{ .Values.provenanceRelabel.image.tag }}"
+          imagePullPolicy: {{ .Values.provenanceRelabel.image.pullPolicy }}
+          command: ["/bin/bash", "/scripts/relabel-provenance.sh"]
+          env:
+            # The declared renames, built from values by the provenanceRenames helper — so the Job is told
+            # exactly what the CRs were declared to have been called, and can never infer it.
+            - name: RENAMES
+              value: {{ include "group-sync-operator-helm.provenanceRenames" . | quote }}
+            - name: DRY_RUN
+              value: {{ .Values.provenanceRelabel.dryRun | quote }}
+            # 0 disables the cap. Any positive number aborts a run that would relabel more than this, which
+            # is the guard against a wrong RENAMES rewriting provenance across the cluster.
+            - name: LIMIT
+              value: {{ .Values.provenanceRelabel.limit | quote }}
+            # oc writes a cache under $HOME.
+            - name: HOME
+              value: /tmp
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            {{- toYaml .Values.provenanceRelabel.resources | nindent 12 }}
+          volumeMounts:
+            - name: scripts
+              mountPath: /scripts
+              readOnly: true
+      volumes:
+        - name: scripts
+          configMap:
+            name: {{ include "group-sync-operator-helm.fullname" . }}-provenance-relabel
+            defaultMode: 0755
+{{- end }}
