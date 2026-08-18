@@ -1,0 +1,15 @@
+# TEMPORARY overlay: run the fork build of the operator from our own catalog, to test the
+# provenance-adoption fix (redhat-cop/group-sync-operator#466) before it exists upstream.
+#
+# Not for merging. Revert by dropping this file from the helm command; the chart's defaults point back
+# at community-operators.
+operatorGroup:
+  # v0.0.37 from our catalog declares only the AllNamespaces install mode.
+  allNamespaces: true
+
+subscription:
+  source: group-sync-operator-fork
+  sourceNamespace: openshift-marketplace
+  # Pin the exact CSV, so "which code is running" has one answer.
+  startingCSV: group-sync-operator.v0.0.37
+  installPlanApproval: Automatic

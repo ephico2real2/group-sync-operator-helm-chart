@@ -51,3 +51,9 @@ spec:
   name: {{ .Values.subscription.name }}
   source: {{ .Values.subscription.source }}
   sourceNamespace: {{ .Values.subscription.sourceNamespace }}
+  {{- with .Values.subscription.startingCSV }}
+  # Pins the exact CSV OLM may install, rather than taking whatever the channel head happens to be.
+  # `with` so an empty value emits nothing: an empty startingCSV is rejected by the API, and a chart
+  # that rendered one would fail the sync for a field the user never set.
+  startingCSV: {{ . }}
+  {{- end }}
