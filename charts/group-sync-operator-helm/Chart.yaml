@@ -2,7 +2,7 @@ apiVersion: v2
 name: group-sync-operator-helm
 description: A Helm chart to deploy the GroupSync Operator and its configuration for LDAP synchronization in OpenShift
 type: application
-version: 0.12.0
+version: 0.12.1
 appVersion: "1.1"
 home: https://github.com/ephico2real2/group-sync-operator-helm-chart
 icon: https://raw.githubusercontent.com/redhat-cop/group-sync-operator/master/assets/logo.png
@@ -29,6 +29,8 @@ annotations:
   # discarded now take effect, and trustedCA.injected now wins over a custom groupSync.ca.name. Anyone
   # moving from 0.3.x or 0.4.x still needs to read them.
   artifacthub.io/changes: |
+    - kind: changed
+      description: "crc-values.yaml renames its two custom GroupSync items to match what they actually sync: bda-rbac-groupsync -> bdp-oud-group-rbac-groupsync, which pairs with the NCO policy CR bdp-oud-group-rbac, and ldap-clusteraccess-groupsync -> autobahnusers-onboarding-groupsync, which syncs cn=app-ssb-autobahnusers. The lab overlay only - no template, default or behaviour change, and both items keep their filter and schedule. WORTH KNOWING BEFORE COPYING THIS: renaming an item renames its GroupSync CR, so Helm deletes the old one and creates the new one, and the groups it owned are NOT relabelled. Measured on both renames - 66 groups before and after with an identical list and nothing deleted, but 22 of them still carry sync-provider=<old-CR-name>_ldap, because the operator only rewrites a Group when its LDAP membership changes. A forced sync did not move them either. RBAC is unaffected, since the NCO GroupConfig policies select that label key with Exists and never its value - what breaks is attribution, so anything answering 'which sync owns this group' from the label value names a CR that no longer exists until the members change or the groups are recreated."
     - kind: added
       description: "subscription.resources sizes the OPERATOR's own pod, passed through to the Subscription's spec.config.resources. Empty by default, so nothing changes unless you set it - the operator keeps what its CSV declares, measured as manager requesting 300m/200Mi and kube-rbac-proxy requesting nothing, with no limits. requests and limits are independent, so raising requests while leaving limits unset (guaranteed share, free to burst, pod stays Burstable) is expressible. Three measured caveats are documented in values.yaml and echoed in NOTES.txt when the key is set: OLM applies one block to EVERY container so the scheduler sees double what you write; it REPLACES the CSV's sizing rather than merging; and a total too large for the node leaves the new pod Pending while the old one keeps serving and helm upgrade still reports success. A render-time guard refuses any key other than requests/limits/claims, because the API server prunes the rest silently - a singular 'request' would apply cleanly and do nothing."
     - kind: security
