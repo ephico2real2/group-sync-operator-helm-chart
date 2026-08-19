@@ -48,7 +48,7 @@ kubectl exec -n ldap-testing $LDAP_POD -- ldapadd -x -H ldap://localhost:389 \
     -f /tmp/ldap-bda-rbac-groups.ldif
 
 # Namespace RBAC for the spar / trno mnemonics, used by the BDA namespace demo.
-# Synced by ldap-groupsync (same cn=app-ocp-rbac-* filter as the base structure).
+# Synced by app-ocp-rbac-group-groupsync (same cn=app-ocp-rbac-* filter as the base structure).
 kubectl cp ldap-rbac-groups-spar-trno.ldif ldap-testing/$LDAP_POD:/tmp/
 kubectl exec -n ldap-testing $LDAP_POD -- ldapadd -x -H ldap://localhost:389 \
     -D "cn=admin,dc=ephico2real,dc=com" \
@@ -56,7 +56,7 @@ kubectl exec -n ldap-testing $LDAP_POD -- ldapadd -x -H ldap://localhost:389 \
     -f /tmp/ldap-rbac-groups-spar-trno.ldif
 ```
 
-Confirm the sync picked them up. `ldap-groupsync` runs on the schedule in `values.yaml`
+Confirm the sync picked them up. `app-ocp-rbac-group-groupsync` runs on the schedule in `values.yaml`
 (default `*/30 * * * *`), so allow up to that long. There is no supported "sync now"
 annotation — tested, and it does not trigger a run. To see results sooner, temporarily
 lower `groupSync.schedule` and `helm upgrade`.

@@ -10,7 +10,7 @@
 # 0 (unpaged) and 1000, both of which return the same groups from this directory. Nothing
 # else in the spec can be changed without altering what gets synced.
 #
-#   ./60-force-groupsync.sh ldap-groupsync [namespace]
+#   ./60-force-groupsync.sh app-ocp-rbac-group-groupsync [namespace]
 
 set -euo pipefail
 

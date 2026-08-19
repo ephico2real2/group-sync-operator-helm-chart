@@ -32,13 +32,18 @@ groupSync:
   # rewrites a Group only when that Group's LDAP membership changes, and a forced sync does not move it.
   # The Groups are not deleted and RBAC is unaffected, but they are credited to no CR until repaired.
   # Declare the old name in previousNames below and the provenance-relabel Job fixes them on the upgrade.
-  name: ldap-groupsync
+  # Named for what it syncs: the cn=app-ocp-rbac-* groups, per the rfc2307 filter below.
+  name: app-ocp-rbac-group-groupsync
 
   # Names this CR used to have, so the provenance-relabel Job can correct the Groups it left behind.
   # Optional, and only useful for one upgrade after a rename — although leaving it in place is harmless,
-  # since a name that is no longer stale matches no Group. Example:
-  #   previousNames: ["ldap-groupsync-old"]
-  previousNames: []
+  # since a name that is no longer stale matches no Group.
+  #
+  # ldap-groupsync is declared because THIS chart renamed the CR from it. On the reference cluster that CR
+  # owned 42 of 66 Groups, and without this entry every one of them would keep sync-provider=ldap-groupsync_ldap
+  # forever — the operator rewrites a Group only when its LDAP membership changes, so a rename does not
+  # self-heal. Remove it once no cluster you upgrade still carries that value.
+  previousNames: ["ldap-groupsync"]
   # Namespace where the GroupSync CR will be created
   namespace: group-sync-operator
   # Schedule in cron format (every 30 minutes)

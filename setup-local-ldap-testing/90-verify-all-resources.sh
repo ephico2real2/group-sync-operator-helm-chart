@@ -50,7 +50,7 @@ echo
 echo "🚀 GroupSync Operator Status:"
 echo "---------------------------"
 # Every CR in the namespace, not one hardcoded name. This used to look for "ldap-group-sync", which is
-# the SECRET's name — the CR is "ldap-groupsync" — so it printed "NOT found" on a perfectly healthy lab.
+# the SECRET's name — the CR is "app-ocp-rbac-group-groupsync" — so it printed "NOT found" on a perfectly healthy lab.
 # Listing also covers the customGroupSyncs tenants, which a single name never could.
 CRS=$(oc get groupsync -n group-sync-operator -o name 2>/dev/null | sed 's|.*/||')
 if [ -n "$CRS" ]; then
