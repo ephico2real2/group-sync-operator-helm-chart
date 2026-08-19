@@ -831,10 +831,9 @@ cluster that has never renamed a GroupSync gets no Job, no ServiceAccount and no
 | provenanceRelabel.limit | Optional ceiling on Groups relabelled per run; 0 means no cap | 0 |
 | provenanceRelabel.retries | Attempts per Group before recording a failure | 3 |
 | provenanceRelabel.retryDelaySeconds | Seconds between attempts | 2 |
-| provenanceRelabel.batchSize | Pause after this many Groups; 0 disables pausing | 20 |
-| provenanceRelabel.batchPauseSeconds | Seconds to pause between batches | 2 |
+| provenanceRelabel.pauseSeconds | Seconds between writes, so a large repair paces itself; 0 disables | 1 |
 | provenanceRelabel.backoffLimit | No wait loop, so a retry repeats the same calls against the same state | 0 |
-| provenanceRelabel.activeDeadlineSeconds | Pod deadline | 300 |
+| provenanceRelabel.activeDeadlineSeconds | Pod deadline, sized to the work — allows ~1,700 Groups at pauseSeconds 1 | 1800 |
 | provenanceRelabel.ttlSecondsAfterFinished | How long the finished Job is kept for its log | 300 |
 | provenanceRelabel.image.repository | Needs `oc` | registry.redhat.io/openshift4/ose-cli |
 | provenanceRelabel.image.tag | Pinned, not `latest` | v4.14 |

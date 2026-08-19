@@ -2,7 +2,7 @@ apiVersion: v2
 name: group-sync-operator-helm
 description: A Helm chart to deploy the GroupSync Operator and its configuration for LDAP synchronization in OpenShift
 type: application
-version: 0.12.6
+version: 0.12.7
 appVersion: "1.1"
 home: https://github.com/ephico2real2/group-sync-operator-helm-chart
 icon: https://raw.githubusercontent.com/redhat-cop/group-sync-operator/master/assets/logo.png
@@ -29,6 +29,8 @@ annotations:
   # discarded now take effect, and trustedCA.injected now wins over a custom groupSync.ca.name. Anyone
   # moving from 0.3.x or 0.4.x still needs to read them.
   artifacthub.io/changes: |
+    - kind: changed
+      description: "provenanceRelabel now pauses between every write instead of bursting in batches: pauseSeconds (1) replaces batchSize/batchPauseSeconds. A steady one-write-per-second is gentler on the API server than 20 back-to-back followed by a rest, and the arithmetic is easy - the run takes about a second per Group, so the 42-Group repair here takes ~41s. activeDeadlineSeconds goes 300 -> 1800 to match, and its comment now says it is sized to the WORK rather than to a wait: unlike the other Jobs in this chart it has no polling loop, so the only thing that makes it long-running is the number of Groups. At pauseSeconds 1 the deadline allows roughly 1,700 Groups against a largest-seen repair of 42, so it stays a backstop against a wedged run holding a hook open rather than a limit on legitimate work."
     - kind: changed
       description: "provenanceRelabel.limit now defaults to 0 (NO CAP), with retries and a batch pause instead. The cap was wrong from the start and 0.12.5's raise to 50 only postponed the problem. This Job's only write is `oc label --overwrite` on one key: it never removes the key, never deletes a Group, and never touches RBAC, because the GroupConfig policies match that key with operator: Exists and narrow by group name. The value is attribution metadata, so a wrong run mis-attributes Groups that were already credited to a CR which no longer exists, and the next correct run fixes it - nothing is lost that a re-run cannot restore. The cap was copied from the sibling chart's orphan sweeper, where it IS protective because that sweeper DELETES RoleBindings and a wrong run revokes access permanently. Here it only obstructed: renaming the primary CR needs 42 Groups relabelled, the cap refused at 25, and the upgrade hook failed with it. What replaces it is what a large run actually needs - provenanceRelabel.retries (3) with retryDelaySeconds (2) so one lost race with the operator does not leave the run half-applied, and batchSize (20) with batchPauseSeconds (2) so an uncapped repair does not hammer the API server. All five values are validated as whole numbers before anything runs, because a typo'd number that silently stops working while the run reports success is worse than no number."
     - kind: changed

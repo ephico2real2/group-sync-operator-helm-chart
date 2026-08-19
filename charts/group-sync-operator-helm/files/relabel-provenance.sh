@@ -28,8 +28,7 @@
 #      LIMIT       optional ceiling; 0 (the default) means NO CAP — see the note above the check
 #      RETRIES     attempts per Group before recording a failure
 #      RETRY_DELAY seconds between attempts
-#      BATCH_SIZE  pause after this many Groups; 0 disables pausing
-#      BATCH_PAUSE seconds to pause between batches
+#      PAUSE       seconds between writes, so a large repair paces itself; 0 disables
 set -uo pipefail
 
 LABEL_KEY="${LABEL_KEY:-group-sync-operator.redhat-cop.io/sync-provider}"
@@ -38,15 +37,14 @@ DRY_RUN="${DRY_RUN:-false}"
 LIMIT="${LIMIT:-0}"
 RETRIES="${RETRIES:-3}"
 RETRY_DELAY="${RETRY_DELAY:-2}"
-BATCH_SIZE="${BATCH_SIZE:-20}"
-BATCH_PAUSE="${BATCH_PAUSE:-2}"
+PAUSE="${PAUSE:-1}"
 
 log()  { echo "[provenance-relabel] $*"; }
 fail() { echo "[provenance-relabel] FAILED: $*" >&2; exit 1; }
 
 # A typo'd number is worse than no number, because it would silently stop working while the run still
 # reports success. Refuse to start instead.
-for n in LIMIT RETRIES RETRY_DELAY BATCH_SIZE BATCH_PAUSE; do
+for n in LIMIT RETRIES RETRY_DELAY PAUSE; do
   eval "val=\$$n"
   case "$val" in
     ''|*[!0-9]*) fail "${n} must be a whole number, got '${val}'" ;;
@@ -60,7 +58,7 @@ if [ -z "$RENAMES" ]; then
 fi
 
 [ "$DRY_RUN" = "true" ] && log "DRY RUN: no Group will be modified"
-log "label key: ${LABEL_KEY}, cap: $([ "$LIMIT" -eq 0 ] && echo none || echo "$LIMIT"), retries: ${RETRIES}, batch: ${BATCH_SIZE} then ${BATCH_PAUSE}s"
+log "label key: ${LABEL_KEY}, cap: $([ "$LIMIT" -eq 0 ] && echo none || echo "$LIMIT"), retries: ${RETRIES}, pause: ${PAUSE}s between writes"
 
 # ── Step 1: which CRs exist right now ───────────────────────────────────────────────────────────────
 # A rename is only credible when the OLD name is GONE. If it still exists it owns its Groups
@@ -250,11 +248,10 @@ for i in $(seq 0 $((TOTAL - 1))); do
     attempt=$((attempt + 1))
   done
 
-  # PAUSE BETWEEN BATCHES, so an uncapped repair does not hammer the API server. With no cap, a rename of a
-  # CR owning hundreds of Groups is a single run — the pause is what keeps that neighbourly.
-  if [ "$BATCH_SIZE" -gt 0 ] && [ "$(( (i + 1) % BATCH_SIZE ))" -eq 0 ] && [ "$((i + 1))" -lt "$TOTAL" ]; then
-    log "  … $((i + 1)) of ${TOTAL} done, pausing ${BATCH_PAUSE}s before the next batch"
-    sleep "$BATCH_PAUSE"
+  # PAUSE BETWEEN WRITES, so an uncapped repair paces itself instead of bursting. Not after the last one —
+  # there is nothing left to be polite to.
+  if [ "$PAUSE" -gt 0 ] && [ "$((i + 1))" -lt "$TOTAL" ]; then
+    sleep "$PAUSE"
   fi
 done
 

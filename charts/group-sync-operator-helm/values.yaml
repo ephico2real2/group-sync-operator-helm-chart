@@ -701,14 +701,20 @@ provenanceRelabel:
   retries: 3
   retryDelaySeconds: 2
 
-  # Pause after this many Groups, to keep a large uncapped repair neighbourly to the API server. 0 disables
-  # the pausing. Measured on the 42-Group repair: batches of 20 with a 2s pause added ~4s in total.
-  batchSize: 20
-  batchPauseSeconds: 2
+  # Seconds between writes, so a large repair paces itself rather than bursting. 0 disables it.
+  #
+  # 1s is a rate any API server will not notice, and it keeps the arithmetic easy: the run takes about one
+  # second per Group. The 42-Group repair measured here takes ~41s. Raise it if you would rather be slower.
+  pauseSeconds: 1
 
   # 0: this Job has no wait loop, so a retry would repeat the same API calls against the same state.
   backoffLimit: 0
-  activeDeadlineSeconds: 300
+
+  # Sized to the WORK, not to a wait — unlike the other Jobs in this chart, which poll for something that
+  # may never arrive. At pauseSeconds: 1 this allows a repair of roughly 1,700 Groups; the largest seen here
+  # is 42. It stays as a backstop so a wedged run cannot hold a hook open indefinitely, not as a limit on
+  # legitimate work — raise it alongside pauseSeconds if you make the pause longer.
+  activeDeadlineSeconds: 1800
   ttlSecondsAfterFinished: 300
   image:
     repository: registry.redhat.io/openshift4/ose-cli
