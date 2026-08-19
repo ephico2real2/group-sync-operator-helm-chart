@@ -2,7 +2,7 @@ apiVersion: v2
 name: group-sync-operator-helm
 description: A Helm chart to deploy the GroupSync Operator and its configuration for LDAP synchronization in OpenShift
 type: application
-version: 0.12.9
+version: 0.12.10
 appVersion: "1.1"
 home: https://github.com/ephico2real2/group-sync-operator-helm-chart
 icon: https://raw.githubusercontent.com/redhat-cop/group-sync-operator/master/assets/logo.png
@@ -29,6 +29,8 @@ annotations:
   # discarded now take effect, and trustedCA.injected now wins over a custom groupSync.ca.name. Anyone
   # moving from 0.3.x or 0.4.x still needs to read them.
   artifacthub.io/changes: |
+    - kind: changed
+      description: "Corrects a claim 0.12.9 made about autobahnusers-onboarding-groupsync: it is NOT a login gate, and its schedule is not login latency. OAuth checks membership itself - the identity provider's own LDAP query carries the (memberOf=cn=app-ssb-autobahnusers,...) filter, which OpenShift evaluates against the directory per user at login, with or without this CR. A person added in LDAP can authenticate immediately; the sync has no part in it. What the synced Group is instead: an audit record of who belongs to that LDAP group. It grants nothing - measured, zero RoleBindings or ClusterRoleBindings reference it, and its name carries none of the suffixes the NCO GroupConfig policies match, so no policy selects it either. The schedule buys freshness of that audit view, which is why two hours is cheap. No behaviour change in this release, only the comment."
     - kind: changed
       description: "crc-values.yaml sets autobahnusers-onboarding-groupsync to sync every two hours (0 */2 * * *) instead of inheriting the 30-minute primary schedule. The lab overlay only - no template or default change. Written as 0 */2 * * * and not */120 * * * *, because the minute field spans 0-59 so */120 never matches, which is the same trap the hourly item beside it already documents. WORTH KNOWING: this is the OAuth login-gate group, so the schedule IS login latency - somebody added to app-ssb-autobahnusers in LDAP cannot authenticate until the sync runs, and that wait is now up to two hours. Force a sync with setup-local-ldap-testing/60-force-groupsync.sh when onboarding someone who needs access immediately."
     - kind: changed
