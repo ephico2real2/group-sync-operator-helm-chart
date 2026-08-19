@@ -2,7 +2,7 @@ apiVersion: v2
 name: group-sync-operator-helm
 description: A Helm chart to deploy the GroupSync Operator and its configuration for LDAP synchronization in OpenShift
 type: application
-version: 0.12.10
+version: 0.12.11
 appVersion: "1.1"
 home: https://github.com/ephico2real2/group-sync-operator-helm-chart
 icon: https://raw.githubusercontent.com/redhat-cop/group-sync-operator/master/assets/logo.png
@@ -29,6 +29,8 @@ annotations:
   # discarded now take effect, and trustedCA.injected now wins over a custom groupSync.ca.name. Anyone
   # moving from 0.3.x or 0.4.x still needs to read them.
   artifacthub.io/changes: |
+    - kind: added
+      description: "Adds crc-example-values.yaml: crc-values.yaml with every comment stripped, so a reader can see a fully-configured install on one page rather than in 100+ annotated lines. Generated from crc-values.yaml and verified to render byte-identically - same values, same rendered manifest hash. It is NOT the file to copy for a new cluster and says so: the url, bindDN and group queries belong to one lab, and a chart pointed at someone else's directory silently syncs nothing. sample-values.yaml remains the starting point for a real cluster, because it sets only what the chart cannot discover. Also records why this file carries no '# requires-cluster: true' marker while sample-values.yaml does - it sets groupSync.url explicitly, so it renders offline, and CI asserts that."
     - kind: changed
       description: "Corrects a claim 0.12.9 made about autobahnusers-onboarding-groupsync: it is NOT a login gate, and its schedule is not login latency. OAuth checks membership itself - the identity provider's own LDAP query carries the (memberOf=cn=app-ssb-autobahnusers,...) filter, which OpenShift evaluates against the directory per user at login, with or without this CR. A person added in LDAP can authenticate immediately; the sync has no part in it. What the synced Group is instead: an audit record of who belongs to that LDAP group. It grants nothing - measured, zero RoleBindings or ClusterRoleBindings reference it, and its name carries none of the suffixes the NCO GroupConfig policies match, so no policy selects it either. The schedule buys freshness of that audit view, which is why two hours is cheap. No behaviour change in this release, only the comment."
     - kind: changed

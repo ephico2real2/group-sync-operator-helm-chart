@@ -1,0 +1,52 @@
+# The crc-values.yaml overlay with every comment stripped — the same values, nothing explained. It exists to
+# be read as a whole: what a fully-configured install of this chart looks like on one page, when the
+# annotated original runs to 100+ lines.
+#
+# NOT the file to copy for a new cluster. Two reasons:
+#   - the url, bindDN and group queries are one lab's, and a chart configured with someone else's directory
+#     silently syncs nothing
+#   - crc-values.yaml is the maintained one; this is generated from it and will drift the moment that
+#     changes. Regenerate rather than edit:
+#       python3 -c "import yaml;print(yaml.safe_dump(yaml.safe_load(open('crc-values.yaml')),default_flow_style=False,sort_keys=False))"
+#
+# No `# requires-cluster: true` marker, unlike sample-values.yaml: this file carries an explicit
+# groupSync.url, so it renders offline and CI asserts exactly that.
+#
+# For a real cluster start from sample-values.yaml, which sets the few things the chart cannot discover and
+# lets the rest come from the cluster's OAuth CR.
+#
+# previousNames entries are the rename history this lab has already applied, kept because a name that is no
+# longer stale matches no Group. Yours will be empty.
+
+groupSync:
+  url: ldaps://openldap-service.ldap-testing.svc.cluster.local:636
+oauthSecretExtraction:
+  bindDN: cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com
+  sourceSecret:
+    name: ldap-secret
+customGroupSyncs:
+  enabled: true
+  items:
+  - name: bdp-oud-group-rbac-groupsync
+    enabled: true
+    groupCn: bda-rbac-*
+    schedule: 0 * * * *
+    previousNames:
+    - bda-rbac-groupsync
+  - name: autobahnusers-onboarding-groupsync
+    enabled: true
+    groupCn: app-ssb-autobahnusers
+    schedule: 0 */2 * * *
+    previousNames:
+    - ldap-clusteraccess-groupsync
+    objectClass:
+    - groupOfNames
+    - groupOfUniqueNames
+    groupMembershipAttributes:
+    - member
+    - uniqueMember
+subscription:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 100Mi
