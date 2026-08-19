@@ -52,22 +52,31 @@ groupSync:
       baseDN: "ou=Groups,dc=example,dc=com"
       filter: "(&(objectClass=groupOfNames)(cn=app-ocp-rbac-*))"
 
-# Off, and now for a plainer reason than before: as of 0.10.0 values.yaml ships customGroupSyncs.items
-# EMPTY, so nothing arrives unless a values file asks for it. Turning the switch on here without items would
-# create no CRs at all; turning it on WITH the lab's bda-rbac-* tenant would create a CR that matches nothing
-# on this cluster, since the groupsQuery above is app-ocp-rbac-* against dc=example,dc=com.
+# Off, and for a plain reason: values.yaml ships customGroupSyncs.items with one item, DISABLED, so nothing
+# arrives unless a values file asks for it. Turning the switch on here would create no CRs at all; turning it
+# on with a tenant whose groupCn does not exist in your directory would create a CR that matches nothing,
+# since the groupsQuery above is app-ocp-rbac-* against dc=example,dc=com.
 #
-# One CR per naming pattern. The primary GroupSync already covers app-ocp-rbac-*, so QA needs a tenant here
-# only when a SECOND pattern appears. When it does, declare it like this — the same shape crc-values.yaml
-# uses for the lab's bda-rbac-* groups:
+# One CR per naming pattern. The primary GroupSync already covers app-ocp-rbac-*, so a tenant is needed here
+# only when a SECOND pattern appears. When it does, declare it like this:
 #
 #   customGroupSyncs:
 #     enabled: true
 #     items:
-#       - name: bda-rbac-groupsync
+#       - name: analytics-rbac-groupsync
 #         enabled: true
-#         groupCn: "bda-rbac-*"
+#         groupCn: "analytics-rbac-*"
 #         schedule: "0 * * * *"     # optional; inherits groupSync.schedule otherwise
+#
+# NAME IT FOR WHAT IT SYNCS, and expect to live with the name: renaming an item renames its CR, and every
+# Group it had synced keeps the OLD name in its sync-provider label — the operator rewrites a Group only when
+# that Group's LDAP membership changes, so a rename does not self-heal. Declare the old name in previousNames
+# and the provenance-relabel Job repairs them on the upgrade that performs the rename:
+#
+#       - name: analytics-rbac-groupsync
+#         previousNames: ["analytics-groupsync"]
+#
+# Measured on the reference lab, renaming the primary CR left 42 of 66 Groups stale until that Job ran.
 #
 # Patterns must not overlap between tenants — that is guaranteed by the org naming standard, not by the
 # chart. See docs/DESIGN_custom_groupsync.md.
