@@ -1,50 +1,38 @@
-# The crc-values.yaml overlay with every comment stripped — the same values, nothing explained. It exists to
-# be read as a whole: what a fully-configured install of this chart looks like on one page, when the
-# annotated original runs to 100+ lines.
+# CRC / local test directory, over LDAPS — the same values as crc-values.yaml with the explanations removed.
 #
-# NOT the file to copy for a new cluster. Two reasons:
-#   - the url, bindDN and group queries are one lab's, and a chart configured with someone else's directory
-#     silently syncs nothing
-#   - crc-values.yaml is the maintained one; this is generated from it and will drift the moment that
-#     changes. Regenerate rather than edit:
-#       python3 -c "import yaml;print(yaml.safe_dump(yaml.safe_load(open('crc-values.yaml')),default_flow_style=False,sort_keys=False))"
-#
-# No `# requires-cluster: true` marker, unlike sample-values.yaml: this file carries an explicit
-# groupSync.url, so it renders offline and CI asserts exactly that.
-#
-# For a real cluster start from sample-values.yaml, which sets the few things the chart cannot discover and
-# lets the rest come from the cluster's OAuth CR.
-#
-# previousNames entries are the rename history this lab has already applied, kept because a name that is no
-# longer stale matches no Group. Yours will be empty.
+# Read crc-values.yaml for WHY any of this is set; that file is the maintained one and this is a copy for
+# scanning. The url, bindDN and group queries are this lab's, so do not copy them for another cluster —
+# sample-values.yaml is the starting point for that.
 
+# The LDAP endpoint and bind identity. Empty in values.yaml so each cluster supplies its own.
 groupSync:
-  url: ldaps://openldap-service.ldap-testing.svc.cluster.local:636
+  url: "ldaps://openldap-service.ldap-testing.svc.cluster.local:636"
+
+# Where the bind credentials come from. Given explicitly: this directory is in no OAuth CR.
 oauthSecretExtraction:
-  bindDN: cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com
+  bindDN: "cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com"
   sourceSecret:
     name: ldap-secret
+
+# The tenants this cluster syncs, one CR each.
 customGroupSyncs:
   enabled: true
   items:
-  - name: bdp-oud-group-rbac-groupsync
-    enabled: true
-    groupCn: bda-rbac-*
-    schedule: 0 * * * *
-    previousNames:
-    - bda-rbac-groupsync
-  - name: autobahnusers-onboarding-groupsync
-    enabled: true
-    groupCn: app-ssb-autobahnusers
-    schedule: 0 */2 * * *
-    previousNames:
-    - ldap-clusteraccess-groupsync
-    objectClass:
-    - groupOfNames
-    - groupOfUniqueNames
-    groupMembershipAttributes:
-    - member
-    - uniqueMember
+    - name: bdp-oud-group-rbac-groupsync
+      enabled: true
+      groupCn: "bda-rbac-*"
+      schedule: "0 * * * *"
+      previousNames: ["bda-rbac-groupsync"]
+
+    - name: autobahnusers-onboarding-groupsync
+      enabled: true
+      groupCn: "app-ssb-autobahnusers"
+      schedule: "0 */2 * * *"
+      previousNames: ["ldap-clusteraccess-groupsync"]
+      objectClass: ["groupOfNames", "groupOfUniqueNames"]
+      groupMembershipAttributes: ["member", "uniqueMember"]
+
+# Operator pod sizing, for a single-node cluster.
 subscription:
   resources:
     requests:
