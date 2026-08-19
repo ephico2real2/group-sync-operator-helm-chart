@@ -83,6 +83,14 @@ CR_LINES="$(oc get groupsync -A -o jsonpath='{range .items[*]}{.metadata.name}{r
   || fail "cannot list GroupSync CRs, so no rename can be validated — the API's error is above"
 log "live GroupSync CRs: $(echo "$CR_LINES" | awk '{print $1}' | tr '\n' ' ')"
 
+# Every sync-provider value currently in use, fetched once. Used only to tell "already repaired" apart from
+# "the provider name changed", below — a Kubernetes label selector cannot match a prefix, so this is filtered
+# in the shell. The key's dots are escaped because jsonpath treats them as path separators.
+ESCAPED_KEY="$(printf '%s' "$LABEL_KEY" | sed 's/\./\\./g')"
+ALL_VALUES="$(oc get groups -l "$LABEL_KEY" \
+                -o jsonpath="{range .items[*]}{.metadata.labels.${ESCAPED_KEY}}{\"\n\"}{end}")" \
+  || fail "cannot list Groups carrying ${LABEL_KEY} — the API's error is above"
+
 is_live_cr() {
   echo "$CR_LINES" | awk '{print $1}' | grep -qxF "$1"
 }
@@ -171,10 +179,16 @@ for pair in ${RENAMES//,/ }; do
   done
 
   if [ "$pair_found" -eq 0 ]; then
-    # Zero matches is what "already repaired" looks like — but it is ALSO what a renamed provider looks
-    # like: the stale value's suffix is the OLD CR's provider name, and only the NEW CR's providers can
-    # be read, so a rename that changed the provider name too leaves its stale values unfindable here.
-    log "NOTE: ${old_cr} -> ${new_cr}: no Group carries ${old_cr}_<provider> for any provider of ${new_cr} — already repaired, or the provider name changed with the rename (a value stamped by the old provider name cannot be derived and stays stale)"
+    # Zero matches means one of two things, and they are worth telling apart rather than hedging between
+    # on every upgrade: the mapping is already repaired, or the PROVIDER name changed with the rename and
+    # the stale values carry a suffix no derived value can match. A Group in the second case still carries
+    # <old-cr>_<something>, so a prefix check answers it.
+    STILL_THERE="$(printf '%s\n' "$ALL_VALUES" | grep "^${old_cr}_" | sort -u | tr '\n' ' ')"
+    if [ -n "$(echo $STILL_THERE)" ]; then
+      log "WARNING: ${old_cr} -> ${new_cr}: nothing matched a value derived from ${new_cr}'s providers, yet Groups still carry ${STILL_THERE}— the provider name must have changed with the rename, and a value stamped by the OLD provider name cannot be derived. Relabel those by hand."
+    fi
+    # Otherwise there is genuinely nothing to do, and the run's closing line already says so. No per-mapping
+    # line here: a message that prints on every routine upgrade stops being a signal.
   fi
 done
 
