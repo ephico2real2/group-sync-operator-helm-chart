@@ -682,10 +682,19 @@ provenanceRelabel:
   # Abort a run that would relabel more than this many Groups. 0 disables the cap.
   #
   # A BLAST-RADIUS GUARD, not a tuning knob. A large count means previousNames is wrong for this cluster
-  # far more often than it means that many Groups genuinely changed owner. 25 is above the largest real
-  # repair seen here (22) and well below the group count (66), so a wrong declaration aborts loudly
-  # instead of rewriting provenance across the cluster.
-  limit: 25
+  # far more often than it means that many Groups genuinely changed owner.
+  #
+  # PICK IT ABOVE THE LARGEST LEGITIMATE REPAIR AND BELOW THE NUMBER OF LABELLED GROUPS. The largest
+  # legitimate repair is a rename of whichever CR owns the most Groups — measured here at 42, when the
+  # primary CR was renamed. The runaway this must still catch is a wrong or empty CR list making EVERY
+  # labelled Group look orphaned, which is 64 on this cluster. So 50 sits between them: 42 passes, 64
+  # aborts.
+  #
+  # 25 was the default until 0.12.5 and was too low — it was chosen when the largest repair seen was 22,
+  # and it then refused a legitimate 42-Group repair, failing the upgrade hook. That refusal was the guard
+  # working, and the count was verified by hand before this default was raised; do the same before raising
+  # it further, because the number that makes a wrong declaration abort is the whole point.
+  limit: 50
 
   # 0: this Job has no wait loop, so a retry would repeat the same API calls against the same state.
   backoffLimit: 0
