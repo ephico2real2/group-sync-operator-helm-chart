@@ -1,0 +1,40 @@
+# CRC / local test directory, over LDAPS — the same values as crc-values.yaml with the explanations removed.
+#
+# Read crc-values.yaml for WHY any of this is set; that file is the maintained one and this is a copy for
+# scanning. The url, bindDN and group queries are this lab's, so do not copy them for another cluster —
+# sample-values.yaml is the starting point for that.
+
+# The LDAP endpoint and bind identity. Empty in values.yaml so each cluster supplies its own.
+groupSync:
+  url: "ldaps://openldap-service.ldap-testing.svc.cluster.local:636"
+
+# Where the bind credentials come from. Given explicitly: this directory is in no OAuth CR.
+oauthSecretExtraction:
+  bindDN: "cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com"
+  sourceSecret:
+    name: ldap-secret
+
+# The tenants this cluster syncs, one CR each.
+customGroupSyncs:
+  enabled: true
+  items:
+    - name: bdp-oud-group-rbac-groupsync
+      enabled: true
+      groupCn: "bda-rbac-*"
+      schedule: "0 * * * *"
+      previousNames: ["bda-rbac-groupsync"]
+
+    - name: autobahnusers-onboarding-groupsync
+      enabled: true
+      groupCn: "app-ssb-autobahnusers"
+      schedule: "0 */2 * * *"
+      previousNames: ["ldap-clusteraccess-groupsync"]
+      objectClass: ["groupOfNames", "groupOfUniqueNames"]
+      groupMembershipAttributes: ["member", "uniqueMember"]
+
+# Operator pod sizing, for a single-node cluster.
+subscription:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 100Mi
