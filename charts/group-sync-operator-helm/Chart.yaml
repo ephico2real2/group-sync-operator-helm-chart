@@ -2,7 +2,7 @@ apiVersion: v2
 name: group-sync-operator-helm
 description: A Helm chart to deploy the GroupSync Operator and its configuration for LDAP synchronization in OpenShift
 type: application
-version: 0.12.5
+version: 0.12.6
 appVersion: "1.1"
 home: https://github.com/ephico2real2/group-sync-operator-helm-chart
 icon: https://raw.githubusercontent.com/redhat-cop/group-sync-operator/master/assets/logo.png
@@ -29,6 +29,8 @@ annotations:
   # discarded now take effect, and trustedCA.injected now wins over a custom groupSync.ca.name. Anyone
   # moving from 0.3.x or 0.4.x still needs to read them.
   artifacthub.io/changes: |
+    - kind: changed
+      description: "provenanceRelabel.limit now defaults to 0 (NO CAP), with retries and a batch pause instead. The cap was wrong from the start and 0.12.5's raise to 50 only postponed the problem. This Job's only write is `oc label --overwrite` on one key: it never removes the key, never deletes a Group, and never touches RBAC, because the GroupConfig policies match that key with operator: Exists and narrow by group name. The value is attribution metadata, so a wrong run mis-attributes Groups that were already credited to a CR which no longer exists, and the next correct run fixes it - nothing is lost that a re-run cannot restore. The cap was copied from the sibling chart's orphan sweeper, where it IS protective because that sweeper DELETES RoleBindings and a wrong run revokes access permanently. Here it only obstructed: renaming the primary CR needs 42 Groups relabelled, the cap refused at 25, and the upgrade hook failed with it. What replaces it is what a large run actually needs - provenanceRelabel.retries (3) with retryDelaySeconds (2) so one lost race with the operator does not leave the run half-applied, and batchSize (20) with batchPauseSeconds (2) so an uncapped repair does not hammer the API server. All five values are validated as whole numbers before anything runs, because a typo'd number that silently stops working while the run reports success is worse than no number."
     - kind: changed
       description: "provenanceRelabel.limit default 25 -> 50, because 25 refused a legitimate repair. Renaming the primary GroupSync in 0.12.4 orphaned 42 Groups, the cap aborted the hook at 25, and the helm upgrade failed with it - the CR renamed (a manifest resource) while the repair did not (a hook). The refusal was correct behaviour and the message said what to do, but a chart whose own documented rename fails on its own default is a bad default. The rule is now written down: pick it above the largest legitimate repair - a rename of whichever CR owns the most Groups, measured at 42 here - and below the number of labelled Groups, which is what a wrong or empty CR list would make look orphaned, 64 here. 50 sits between them, so 42 passes and 64 still aborts. The 42 was verified by hand before raising it: all 42 matched the renamed CR's own cn=app-ocp-rbac-* filter, so the count was explained rather than anomalous."
     - kind: changed

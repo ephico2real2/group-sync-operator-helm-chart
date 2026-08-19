@@ -25,22 +25,34 @@
 #
 # Env: RENAMES  comma-separated old=new pairs; empty means there is nothing to do
 #      DRY_RUN  "true" reports and changes nothing
-#      LIMIT    refuse a run that would relabel more than this many Groups; 0 disables the cap
+#      LIMIT       optional ceiling; 0 (the default) means NO CAP — see the note above the check
+#      RETRIES     attempts per Group before recording a failure
+#      RETRY_DELAY seconds between attempts
+#      BATCH_SIZE  pause after this many Groups; 0 disables pausing
+#      BATCH_PAUSE seconds to pause between batches
 set -uo pipefail
 
 LABEL_KEY="${LABEL_KEY:-group-sync-operator.redhat-cop.io/sync-provider}"
 RENAMES="${RENAMES:-}"
 DRY_RUN="${DRY_RUN:-false}"
-LIMIT="${LIMIT:-25}"
+LIMIT="${LIMIT:-0}"
+RETRIES="${RETRIES:-3}"
+RETRY_DELAY="${RETRY_DELAY:-2}"
+BATCH_SIZE="${BATCH_SIZE:-20}"
+BATCH_PAUSE="${BATCH_PAUSE:-2}"
 
 log()  { echo "[provenance-relabel] $*"; }
 fail() { echo "[provenance-relabel] FAILED: $*" >&2; exit 1; }
 
-# A typo'd cap is worse than no cap, because the guard silently stops firing while the run still reports
-# success. Refuse to start instead.
-case "$LIMIT" in
-  ''|*[!0-9]*) fail "LIMIT must be a whole number (0 disables the cap), got '${LIMIT}'" ;;
-esac
+# A typo'd number is worse than no number, because it would silently stop working while the run still
+# reports success. Refuse to start instead.
+for n in LIMIT RETRIES RETRY_DELAY BATCH_SIZE BATCH_PAUSE; do
+  eval "val=\$$n"
+  case "$val" in
+    ''|*[!0-9]*) fail "${n} must be a whole number, got '${val}'" ;;
+  esac
+done
+[ "$RETRIES" -lt 1 ] && fail "RETRIES must be at least 1, got '${RETRIES}'"
 
 if [ -z "$RENAMES" ]; then
   log "no renames declared (no customGroupSyncs item lists previousNames); nothing to do"
@@ -48,7 +60,7 @@ if [ -z "$RENAMES" ]; then
 fi
 
 [ "$DRY_RUN" = "true" ] && log "DRY RUN: no Group will be modified"
-log "label key: ${LABEL_KEY}, cap: ${LIMIT} Group(s) per run"
+log "label key: ${LABEL_KEY}, cap: $([ "$LIMIT" -eq 0 ] && echo none || echo "$LIMIT"), retries: ${RETRIES}, batch: ${BATCH_SIZE} then ${BATCH_PAUSE}s"
 
 # ── Step 1: which CRs exist right now ───────────────────────────────────────────────────────────────
 # A rename is only credible when the OLD name is GONE. If it still exists it owns its Groups
@@ -176,12 +188,26 @@ if [ "$TOTAL" -eq 0 ]; then
 fi
 
 # ── Step 3: the cap ─────────────────────────────────────────────────────────────────────────────────
+# NO CAP BY DEFAULT, and the reason is the blast radius rather than optimism.
+#
+# The only write here is `oc label --overwrite` on ONE key. It never removes that key, never deletes a Group,
+# and never touches RBAC — the GroupConfig policies that grant access match the key with `operator: Exists`
+# and narrow by group name, so the VALUE is attribution metadata and nothing more. A wrong run mis-attributes
+# Groups that were already credited to a CR which no longer exists, and the next correct run fixes it.
+# Nothing is lost that a re-run cannot restore.
+#
+# The sibling chart's orphan sweeper is a different case: it DELETES RoleBindings, so a wrong run revokes
+# access and no re-run brings it back. A cap there is genuinely protective. Porting it here was a mistake —
+# it refused a legitimate 42-Group repair, failed the upgrade hook, and bought no safety.
+#
+# LIMIT remains for anyone who wants a ceiling, but a number big enough to never obstruct a real repair is a
+# number that never fires. If you set one, expect it to refuse a genuine repair eventually.
 if [ "$LIMIT" -gt 0 ] && [ "$TOTAL" -gt "$LIMIT" ]; then
   log "would relabel ${TOTAL} Group(s):"
   for i in $(seq 0 $((TOTAL - 1))); do
     log "    ${GROUP_NAMES[$i]}  ${OLD_VALUES[$i]} -> ${NEW_VALUES[$i]}"
   done
-  fail "refusing to relabel ${TOTAL} Groups, which exceeds LIMIT=${LIMIT}. That many at once usually means RENAMES is wrong for this cluster rather than that many Groups genuinely changing owner. Check 'oc get groupsync' and the declared previousNames, then re-run or raise provenanceRelabel.limit."
+  fail "refusing to relabel ${TOTAL} Groups, which exceeds the LIMIT=${LIMIT} you set. Nothing was changed. Raise or remove provenanceRelabel.limit — it defaults to 0 (no cap) because this operation only overwrites a label value and a re-run corrects any mistake."
 fi
 
 # ── Step 4: apply ───────────────────────────────────────────────────────────────────────────────────
@@ -202,12 +228,33 @@ for i in $(seq 0 $((TOTAL - 1))); do
     continue
   fi
 
-  if oc label group "$group" "${LABEL_KEY}=${new_value}" --overwrite >/dev/null; then
-    log "relabelled ${group}: ${old_value} -> ${new_value}"
-    CHANGED=$((CHANGED + 1))
-  else
-    log "ERROR relabelling ${group}; it keeps ${old_value}"
-    FAILURES=$((FAILURES + 1))
+  # RETRY rather than abandoning one Group. A single write can fail for reasons that pass a moment later —
+  # a conflict with the operator writing the same Group, or an API server under load — and giving up would
+  # leave the run partially applied for no good reason.
+  attempt=1
+  while : ; do
+    if oc label group "$group" "${LABEL_KEY}=${new_value}" --overwrite >/dev/null 2>&1; then
+      log "relabelled ${group}: ${old_value} -> ${new_value}"
+      CHANGED=$((CHANGED + 1))
+      break
+    fi
+    if [ "$attempt" -ge "$RETRIES" ]; then
+      # Re-run once WITHOUT discarding stderr, so the log says why rather than just "ERROR".
+      why="$(oc label group "$group" "${LABEL_KEY}=${new_value}" --overwrite 2>&1 >/dev/null | tail -1)"
+      log "ERROR relabelling ${group} after ${RETRIES} attempt(s); it keeps ${old_value}: ${why}"
+      FAILURES=$((FAILURES + 1))
+      break
+    fi
+    log "  retrying ${group} (attempt $((attempt + 1)) of ${RETRIES})"
+    sleep "$RETRY_DELAY"
+    attempt=$((attempt + 1))
+  done
+
+  # PAUSE BETWEEN BATCHES, so an uncapped repair does not hammer the API server. With no cap, a rename of a
+  # CR owning hundreds of Groups is a single run — the pause is what keeps that neighbourly.
+  if [ "$BATCH_SIZE" -gt 0 ] && [ "$(( (i + 1) % BATCH_SIZE ))" -eq 0 ] && [ "$((i + 1))" -lt "$TOTAL" ]; then
+    log "  … $((i + 1)) of ${TOTAL} done, pausing ${BATCH_PAUSE}s before the next batch"
+    sleep "$BATCH_PAUSE"
   fi
 done
 

@@ -679,22 +679,32 @@ provenanceRelabel:
   # before -> after.
   dryRun: false
 
-  # Abort a run that would relabel more than this many Groups. 0 disables the cap.
+  # NO CAP BY DEFAULT. 0 means unlimited; set a number only if you want a ceiling.
   #
-  # A BLAST-RADIUS GUARD, not a tuning knob. A large count means previousNames is wrong for this cluster
-  # far more often than it means that many Groups genuinely changed owner.
+  # A cap was the default until 0.12.6 and it was wrong. This Job's only write is `oc label --overwrite` on
+  # one key: it never removes that key, never deletes a Group, and never touches RBAC, because the
+  # GroupConfig policies that grant access match the key with `operator: Exists` and narrow by group name.
+  # The value is attribution metadata. A wrong run mis-attributes Groups that were already credited to a CR
+  # which no longer exists, and the next correct run fixes it — nothing is lost that a re-run cannot restore.
   #
-  # PICK IT ABOVE THE LARGEST LEGITIMATE REPAIR AND BELOW THE NUMBER OF LABELLED GROUPS. The largest
-  # legitimate repair is a rename of whichever CR owns the most Groups — measured here at 42, when the
-  # primary CR was renamed. The runaway this must still catch is a wrong or empty CR list making EVERY
-  # labelled Group look orphaned, which is 64 on this cluster. So 50 sits between them: 42 passes, 64
-  # aborts.
+  # It was copied from the sibling chart's orphan sweeper, where a cap IS protective because that sweeper
+  # DELETES RoleBindings and a wrong run revokes access permanently. Here it only ever obstructed: renaming
+  # the primary CR needs 42 Groups relabelled, the cap refused at 25, and the upgrade hook failed with it.
   #
-  # 25 was the default until 0.12.5 and was too low — it was chosen when the largest repair seen was 22,
-  # and it then refused a legitimate 42-Group repair, failing the upgrade hook. That refusal was the guard
-  # working, and the count was verified by hand before this default was raised; do the same before raising
-  # it further, because the number that makes a wrong declaration abort is the whole point.
-  limit: 50
+  # If you set one, expect it to refuse a real repair eventually — the largest legitimate run is a rename of
+  # whichever CR owns the most Groups, and that number grows with the cluster.
+  limit: 0
+
+  # Attempts per Group before it is recorded as a failure, and the pause between them. A single label write
+  # can lose a race with the operator writing the same Group, or hit a loaded API server; retrying costs
+  # nothing and stops one transient error leaving the run half-applied.
+  retries: 3
+  retryDelaySeconds: 2
+
+  # Pause after this many Groups, to keep a large uncapped repair neighbourly to the API server. 0 disables
+  # the pausing. Measured on the 42-Group repair: batches of 20 with a 2s pause added ~4s in total.
+  batchSize: 20
+  batchPauseSeconds: 2
 
   # 0: this Job has no wait loop, so a retry would repeat the same API calls against the same state.
   backoffLimit: 0

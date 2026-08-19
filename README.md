@@ -828,7 +828,11 @@ cluster that has never renamed a GroupSync gets no Job, no ServiceAccount and no
 |-----------|-------------|---------|
 | provenanceRelabel.enabled | Enable the repair Job (still needs a declared rename to render) | true |
 | provenanceRelabel.dryRun | Report every Group and its before -> after, change nothing | false |
-| provenanceRelabel.limit | Abort a run that would relabel more than this many Groups; 0 disables | 50 |
+| provenanceRelabel.limit | Optional ceiling on Groups relabelled per run; 0 means no cap | 0 |
+| provenanceRelabel.retries | Attempts per Group before recording a failure | 3 |
+| provenanceRelabel.retryDelaySeconds | Seconds between attempts | 2 |
+| provenanceRelabel.batchSize | Pause after this many Groups; 0 disables pausing | 20 |
+| provenanceRelabel.batchPauseSeconds | Seconds to pause between batches | 2 |
 | provenanceRelabel.backoffLimit | No wait loop, so a retry repeats the same calls against the same state | 0 |
 | provenanceRelabel.activeDeadlineSeconds | Pod deadline | 300 |
 | provenanceRelabel.ttlSecondsAfterFinished | How long the finished Job is kept for its log | 300 |
