@@ -51,3 +51,6 @@ setup-local-ldap-testing/.oauth-backup/
 # (cpython-313 here), so it is both noise and wrong for anyone on another version.
 __pycache__/
 *.pyc
+
+# Personal session notes — working state, not shipped content. Same convention as the sibling repos.
+RESUME.md
