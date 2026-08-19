@@ -56,10 +56,17 @@ spec:
               value: {{ include "group-sync-operator-helm.provenanceRenames" . | quote }}
             - name: DRY_RUN
               value: {{ .Values.provenanceRelabel.dryRun | quote }}
-            # 0 disables the cap. Any positive number aborts a run that would relabel more than this, which
-            # is the guard against a wrong RENAMES rewriting provenance across the cluster.
+            # 0 (the default) means no cap — see values.yaml for why a cap was wrong here.
             - name: LIMIT
               value: {{ .Values.provenanceRelabel.limit | quote }}
+            - name: RETRIES
+              value: {{ .Values.provenanceRelabel.retries | quote }}
+            - name: RETRY_DELAY
+              value: {{ .Values.provenanceRelabel.retryDelaySeconds | quote }}
+            - name: BATCH_SIZE
+              value: {{ .Values.provenanceRelabel.batchSize | quote }}
+            - name: BATCH_PAUSE
+              value: {{ .Values.provenanceRelabel.batchPauseSeconds | quote }}
             # oc writes a cache under $HOME.
             - name: HOME
               value: /tmp
