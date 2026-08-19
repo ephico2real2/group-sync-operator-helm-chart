@@ -325,6 +325,13 @@ jobs:
 
       # A syntax error in a templated shell script only shows up when the pod runs, which in a hook is
       # after the install has half-completed. Caught here instead.
+      - name: Every oc call names its resource in full
+        # A resource plural is not reserved, so a short name can bind to a DIFFERENT API GROUP. Measured on a
+        # live cluster in the sibling chart: `oc get subscription` resolved to
+        # subscriptions.messaging.knative.dev and returned Forbidden. A misrouted LIST returns nothing rather
+        # than failing — and relabel-provenance.sh drives what it rewrites from two lists.
+        run: ci/qualified-resources.py
+
       - name: Shell syntax — source scripts and rendered job scripts
         run: |
           set -euo pipefail

@@ -125,11 +125,11 @@ spec:
               fail() { echo "[installplan-approver] FAILED: $*" >&2; exit 1; }
 
               plan_ref() {
-                oc get subscription "$SUBSCRIPTION" -n "$NAMESPACE" --ignore-not-found=true \
+                oc get subscriptions.operators.coreos.com "$SUBSCRIPTION" -n "$NAMESPACE" --ignore-not-found=true \
                    -o jsonpath='{.status.installPlanRef.name}' 2>/dev/null
               }
               plan_field() {
-                oc get installplan "$1" -n "$NAMESPACE" --ignore-not-found=true \
+                oc get installplans.operators.coreos.com "$1" -n "$NAMESPACE" --ignore-not-found=true \
                    -o jsonpath="{$2}" 2>/dev/null
               }
 
@@ -144,7 +144,7 @@ spec:
               # has staged nothing" — and the read WAS Forbidden, because the RBAC above omitted
               # clusterserviceversions until 0.10.0. A permission problem must look like one.
               csv_phase() {
-                oc get csv -n "$NAMESPACE" --ignore-not-found=true \
+                oc get clusterserviceversions.operators.coreos.com -n "$NAMESPACE" --ignore-not-found=true \
                    -o jsonpath='{range .items[*]}{.metadata.name}{"|"}{.status.phase}{"\n"}{end}' \
                   | grep "^${SUBSCRIPTION}\." | head -1
               }
@@ -161,7 +161,7 @@ spec:
               # the same package. Detected rather than waited out, because the alternative is
               # DeadlineExceeded minutes later with nothing pointing at the cause.
               resolution_failure() {
-                oc get subscription "$SUBSCRIPTION" -n "$NAMESPACE" --ignore-not-found=true \
+                oc get subscriptions.operators.coreos.com "$SUBSCRIPTION" -n "$NAMESPACE" --ignore-not-found=true \
                    -o jsonpath='{range .status.conditions[?(@.type=="ResolutionFailed")]}{.status}{"|"}{.message}{end}' \
                   2>/dev/null
               }
@@ -185,7 +185,7 @@ spec:
                       echo "  An orphaned ClusterServiceVersion is blocking it. helm uninstall removes the" >&2
                       echo "  Subscription and OLM leaves the CSV behind, which a new Subscription cannot" >&2
                       echo "  resolve against. Remove it and reinstall:" >&2
-                      oc get csv -n "$NAMESPACE" --ignore-not-found=true -o name 2>/dev/null \
+                      oc get clusterserviceversions.operators.coreos.com -n "$NAMESPACE" --ignore-not-found=true -o name 2>/dev/null \
                         | grep "${SUBSCRIPTION}\." | sed "s|^|    oc delete -n ${NAMESPACE} |" >&2 ;;
                   esac
                   exit 1
@@ -199,7 +199,7 @@ spec:
               if [ -z "$PLAN" ]; then
                 log "no installPlanRef; scanning for a staged plan that names ${SUBSCRIPTION}"
                 for phase in RequiresApproval InstallReady; do
-                  for cand in $(oc get installplan -n "$NAMESPACE" --ignore-not-found=true \
+                  for cand in $(oc get installplans.operators.coreos.com -n "$NAMESPACE" --ignore-not-found=true \
                        -o jsonpath="{range .items[?(@.status.phase=='${phase}')]}{.metadata.name}{' '}{end}" \
                       2>/dev/null); do
                     names="$(plan_field "$cand" '.spec.clusterServiceVersionNames[*]')"
@@ -217,8 +217,8 @@ spec:
 
               [ -n "$PLAN" ] || fail "subscription ${SUBSCRIPTION} never referenced an InstallPlan, and
                 no staged plan names it. Inspect:
-                  oc describe subscription ${SUBSCRIPTION} -n ${NAMESPACE}
-                  oc get installplan -n ${NAMESPACE} -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,APPROVED:.spec.approved,CSV:.spec.clusterServiceVersionNames[*]
+                  oc describe subscriptions.operators.coreos.com ${SUBSCRIPTION} -n ${NAMESPACE}
+                  oc get installplans.operators.coreos.com -n ${NAMESPACE} -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,APPROVED:.spec.approved,CSV:.spec.clusterServiceVersionNames[*]
                 A missing catalog source or an unresolvable channel presents exactly like this."
 
               # OLM can bundle co-installed operators into one plan, so the CSV list is logged.
@@ -230,14 +230,14 @@ spec:
                 *"${SUBSCRIPTION}.v"*) : ;;
                 *) fail "InstallPlan ${PLAN} does not mention ${SUBSCRIPTION} (it installs: ${CSVS}).
                 Refusing to approve a plan this chart did not cause. Inspect:
-                  oc get installplan -n ${NAMESPACE} -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,APPROVED:.spec.approved,CSV:.spec.clusterServiceVersionNames[*]" ;;
+                  oc get installplans.operators.coreos.com -n ${NAMESPACE} -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,APPROVED:.spec.approved,CSV:.spec.clusterServiceVersionNames[*]" ;;
               esac
 
               if [ "$(plan_field "$PLAN" .spec.approved)" != "true" ]; then
                 log "approving ${PLAN}"
-                oc patch installplan "$PLAN" -n "$NAMESPACE" --type merge \
+                oc patch installplans.operators.coreos.com "$PLAN" -n "$NAMESPACE" --type merge \
                    -p '{"spec":{"approved":true}}' \
-                  || fail "could not patch InstallPlan ${PLAN}. Inspect: oc describe installplan ${PLAN} -n ${NAMESPACE}"
+                  || fail "could not patch InstallPlan ${PLAN}. Inspect: oc describe installplans.operators.coreos.com ${PLAN} -n ${NAMESPACE}"
               fi
 
               # Without this the Job succeeds on the patch and the failure lands on the next Job.
@@ -251,11 +251,11 @@ spec:
                 sleep "$INTERVAL"
               done
               [ "$PHASE" = "Complete" ] || fail "${PLAN} is phase '${PHASE:-<none>}'.
-                Inspect: oc describe installplan ${PLAN} -n ${NAMESPACE}"
+                Inspect: oc describe installplans.operators.coreos.com ${PLAN} -n ${NAMESPACE}"
 
               # Every plan in the namespace, including ones this Job did not touch.
               log "InstallPlans in ${NAMESPACE}:"
-              oc get installplan -n "$NAMESPACE" --ignore-not-found=true \
+              oc get installplans.operators.coreos.com -n "$NAMESPACE" --ignore-not-found=true \
                  -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,APPROVED:.spec.approved,CSV:.spec.clusterServiceVersionNames[*] \
                 2>&1 | sed 's/^/  /'
 

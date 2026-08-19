@@ -113,14 +113,14 @@ VERIFICATION STEPS:
 =================
 
 1. Verify the Operator installation:
-   $ oc get csv -n {{ .Values.groupSync.namespace }}
+   $ oc get clusterserviceversions.operators.coreos.com -n {{ .Values.groupSync.namespace }}
    $ oc get pods -n {{ .Values.groupSync.namespace }}
 
 2. Verify the GroupSync resource:
-   $ oc get groupsync -n {{ .Values.groupSync.namespace }}
+   $ oc get groupsyncs.redhatcop.redhat.io -n {{ .Values.groupSync.namespace }}
 
 3. Check the GroupSync resource status:
-   $ oc describe groupsync {{ .Values.groupSync.name }} -n {{ .Values.groupSync.namespace }}
+   $ oc describe groupsyncs.redhatcop.redhat.io {{ .Values.groupSync.name }} -n {{ .Values.groupSync.namespace }}
 
 4. View synchronization logs:
    $ oc logs -n {{ .Values.groupSync.namespace }} deployment/group-sync-operator-controller-manager -c manager --tail=100
@@ -135,7 +135,7 @@ VERIFICATION STEPS:
    known after it is derived from the cluster's OAuth CR.
 
    The url the CR is actually using, whether you set it or it was derived:
-   $ oc get groupsync {{ .Values.groupSync.name }} -n {{ .Values.groupSync.namespace }} \
+   $ oc get groupsyncs.redhatcop.redhat.io {{ .Values.groupSync.name }} -n {{ .Values.groupSync.namespace }} \
        -o jsonpath='{.spec.providers[0].ldap.url}{"\n"}'
 
 TROUBLESHOOTING:
