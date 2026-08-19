@@ -114,7 +114,7 @@ force_groupsync() {
     # recorded in 60-force-groupsync.sh, where `oc annotate` left generation at 2 and lastSyncSuccessTime
     # untouched. So the sync never happened, the errors were swallowed by >/dev/null 2>&1, and the
     # BEFORE/AFTER group diff every caller prints compared a directory against itself.
-    local cr_name="${1:-ldap-groupsync}"
+    local cr_name="${1:-app-ocp-rbac-group-groupsync}"
     echo -e "${CYAN}🔄 Forcing GroupSync '${cr_name}' to sync...${NC}"
     if "${SCRIPT_DIR}/60-force-groupsync.sh" "$cr_name" group-sync-operator; then
         echo -e "${GREEN}✅ GroupSync '${cr_name}' synced${NC}"
@@ -594,7 +594,7 @@ main() {
         exit 1
     fi
     
-    if ! oc get groupsync ldap-groupsync -n group-sync-operator >/dev/null 2>&1; then
+    if ! oc get groupsync app-ocp-rbac-group-groupsync -n group-sync-operator >/dev/null 2>&1; then
         echo -e "${YELLOW}⚠️  GroupSync CR not found. Some operations may not sync automatically.${NC}"
     fi
     

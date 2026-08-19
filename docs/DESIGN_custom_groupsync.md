@@ -42,7 +42,7 @@ Real example already running on the cluster:
 
 | CR name | provider name | ownership label value |
 |---|---|---|
-| `ldap-groupsync` | `ldap` | `ldap-groupsync_ldap` |
+| `app-ocp-rbac-group-groupsync` | `ldap` | `app-ocp-rbac-group-groupsync_ldap` |
 
 **Why this matters:** a GroupSync will **not touch** a group that another GroupSync already
 owns (it logs *"Group Provider Label Did Not Match"* and skips it). So two resources must
@@ -154,7 +154,7 @@ With the example above and `customGroupSyncs.enabled: true`, Helm renders **two 
 `GroupSync` resources next to the primary one:
 
 ```text
-GroupSync/ldap-groupsync           (primary — unchanged)
+GroupSync/app-ocp-rbac-group-groupsync           (primary — unchanged)
 GroupSync/bda-rbac-groupsync       (new — syncs cn=bda-rbac-*)
 GroupSync/xyz-ocp-rbac-groupsync   (new — syncs cn=xyz-ocp-rbac-*)
 ```
@@ -217,9 +217,9 @@ Run in order; each step must pass before the next.
 
 | # | Check | Command | Pass = |
 |---|---|---|---|
-| 1 | Primary CR unchanged | render with helper vs backup, diff the `ldap-groupsync` object | zero differences |
+| 1 | Primary CR unchanged | render with helper vs backup, diff the `app-ocp-rbac-group-groupsync` object | zero differences |
 | 2 | Chart is valid | `helm lint ../charts/group-sync-operator-helm` | 0 failed |
-| 3 | Renders cleanly | `helm template ../charts/group-sync-operator-helm -f ../charts/group-sync-operator-helm/crc-values.yaml -n group-sync-operator` | 2 GroupSync objects (`ldap-groupsync`, `bda-rbac-groupsync`), valid YAML. A values file is required: with `groupSync.url` empty the render fails closed by design. Under chart defaults the count is 1, since `items` ships empty |
+| 3 | Renders cleanly | `helm template ../charts/group-sync-operator-helm -f ../charts/group-sync-operator-helm/crc-values.yaml -n group-sync-operator` | 2 GroupSync objects (`app-ocp-rbac-group-groupsync`, `bda-rbac-groupsync`), valid YAML. A values file is required: with `groupSync.url` empty the render fails closed by design. Under chart defaults the count is 1, since `items` ships empty |
 | 4 | Filter is correct | inspect `bda-rbac-groupsync` in the row-3 render (it comes from `crc-values.yaml`, not the defaults) | `filter: "(&(objectClass=groupOfNames)(cn=bda-rbac-*))"` |
 | 5 | Live sync works | `helm upgrade` on CRC, then `oc get groups -l ...` | `bda-rbac-*` groups appear, labelled `bda-rbac-groupsync_ldap` |
 | 6 | No cross-claim | check operator logs | no *"Did Not Match"* warnings for `bda-rbac-*` |

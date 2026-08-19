@@ -77,7 +77,7 @@ A single `helm install` on a cluster without the operator failed like this:
 
 ```
 Error: INSTALLATION FAILED: unable to build kubernetes objects from release manifest:
-  resource mapping not found for name: "ldap-groupsync" ... no matches for kind "GroupSync"
+  resource mapping not found for name: "app-ocp-rbac-group-groupsync" ... no matches for kind "GroupSync"
   in version "redhatcop.redhat.io/v1alpha1"  ensure CRDs are installed first
 ```
 
@@ -507,13 +507,13 @@ To trigger an immediate sync without waiting for the scheduled time:
 
 ```bash
 # Trigger immediate sync
-kubectl annotate groupsync ldap-groupsync -n group-sync-operator sync.redhatcop.redhat.io/sync-now="$(date)" --overwrite
+kubectl annotate groupsync app-ocp-rbac-group-groupsync -n group-sync-operator sync.redhatcop.redhat.io/sync-now="$(date)" --overwrite
 
 # Using oc command
-oc annotate groupsync ldap-groupsync -n group-sync-operator sync.redhatcop.redhat.io/sync-now="$(date)" --overwrite
+oc annotate groupsync app-ocp-rbac-group-groupsync -n group-sync-operator sync.redhatcop.redhat.io/sync-now="$(date)" --overwrite
 
 # Check if sync happened (verify completion)
-kubectl get groupsync ldap-groupsync -n group-sync-operator -o yaml | grep lastSyncSuccessTime
+kubectl get groupsync app-ocp-rbac-group-groupsync -n group-sync-operator -o yaml | grep lastSyncSuccessTime
 
 # Count synced RBAC groups
 kubectl get groups | grep -c app-ocp-rbac
@@ -525,7 +525,7 @@ kubectl logs -n group-sync-operator deployment/group-sync-operator-controller-ma
 kubectl get groups | grep app-ocp-rbac | head -10
 
 # Alternative commands using oc
-oc get groupsync ldap-groupsync -n group-sync-operator -o yaml | grep lastSyncSuccessTime
+oc get groupsync app-ocp-rbac-group-groupsync -n group-sync-operator -o yaml | grep lastSyncSuccessTime
 oc get groups | grep -c app-ocp-rbac
 oc logs -n group-sync-operator deployment/group-sync-operator-controller-manager -c manager --tail=5
 oc get groups | grep app-ocp-rbac | head -10
@@ -715,7 +715,7 @@ minutes. See [Sync schedule](#sync-schedule) for the demo-speed alternative.
 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
-| groupSync.name | Name of the primary GroupSync resource | ldap-groupsync |
+| groupSync.name | Name of the primary GroupSync resource | app-ocp-rbac-group-groupsync |
 | groupSync.namespace | Target namespace | group-sync-operator |
 | groupSync.schedule | Sync schedule (cron format) | "*/30 * * * *" |
 | groupSync.providerName | LDAP provider name | ldap |
@@ -835,7 +835,7 @@ cluster that has never renamed a GroupSync gets no Job, no ServiceAccount and no
 | provenanceRelabel.image.repository | Needs `oc` | registry.redhat.io/openshift4/ose-cli |
 | provenanceRelabel.image.tag | Pinned, not `latest` | v4.14 |
 | provenanceRelabel.image.pullPolicy | Image pull policy | IfNotPresent |
-| groupSync.previousNames | Names the primary CR used to have, so its Groups can be corrected | [] |
+| groupSync.previousNames | Names the primary CR used to have, so its Groups can be corrected — set because this chart renamed it | ldap-groupsync |
 
 `customGroupSyncs.items[].previousNames` takes the same form per tenant.
 

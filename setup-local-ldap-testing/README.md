@@ -533,7 +533,7 @@ dc=ephico2real,dc=com
 
 Two group families are seeded, each synced by its own GroupSync CR:
 
-**Primary — `app-ocp-rbac-*`** (synced by `ldap-groupsync`, filter `cn=app-ocp-rbac-*`).
+**Primary — `app-ocp-rbac-*`** (synced by `app-ocp-rbac-group-groupsync`, filter `cn=app-ocp-rbac-*`).
 Format `app-ocp-rbac-{team}-{ns|cluster}-{admin|developer|audit}`, e.g.
 `app-ocp-rbac-platform-cluster-admin`. Seeded from `ldap-structure-combined.ldif`.
 
@@ -549,7 +549,7 @@ see the **Update Guide** section below.
 > useful for testing the "group referenced but does not exist" path.
 
 **Namespace RBAC for the BDA demo — `app-ocp-rbac-{spar,trno}-ns-*`** (synced by
-`ldap-groupsync`, same `cn=app-ocp-rbac-*` filter). Seeded from
+`app-ocp-rbac-group-groupsync`, same `cn=app-ocp-rbac-*` filter). Seeded from
 `ldap-rbac-groups-spar-trno.ldif`: 6 groups covering
 `{spar,trno} × {admin,developer,audit}`.
 
