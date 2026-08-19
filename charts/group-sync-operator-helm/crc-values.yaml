@@ -73,10 +73,19 @@ customGroupSyncs:
       # not "*/120 * * * *": the minute field spans 0-59, so */120 never matches — the same trap the hourly
       # item above documents.
       #
-      # THE COST IS LOGIN LATENCY, because this is the OAuth login-gate group. Someone added to
-      # app-ssb-autobahnusers in LDAP cannot authenticate until this sync runs, so the wait is now up to two
-      # hours rather than thirty minutes. Force one with setup-local-ldap-testing/60-force-groupsync.sh when
-      # onboarding somebody who needs access immediately.
+      # THIS SYNC DOES NOT GATE LOGIN, and two hours is cheap because of it. OAuth checks membership itself:
+      # the identity provider's own LDAP query carries the filter
+      #   (&(uid=*)(memberOf=cn=app-ssb-autobahnusers,ou=Groups,dc=ephico2real,dc=com))
+      # which OpenShift evaluates against the directory per user, at login, with or without this CR. So a
+      # person added in LDAP can authenticate immediately — the sync has no part in it.
+      #
+      # What the synced Group IS: an audit record of who belongs to that LDAP group, readable with
+      # `oc get group app-ssb-autobahnusers -o jsonpath='{.users}'`. It grants nothing — measured: zero
+      # RoleBindings or ClusterRoleBindings reference it, and its name carries none of the suffixes the NCO
+      # GroupConfig policies match, so no policy selects it.
+      #
+      # The schedule therefore buys freshness of that audit view, not access. Two hours is fine for reading
+      # a membership list; run setup-local-ldap-testing/60-force-groupsync.sh if you want it current now.
       schedule: "0 */2 * * *"
       # Renamed from ldap-clusteraccess-groupsync in 0.12.1 — one Group to correct, the login-gate group.
       previousNames: ["ldap-clusteraccess-groupsync"]
