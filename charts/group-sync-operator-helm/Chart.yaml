@@ -2,7 +2,7 @@ apiVersion: v2
 name: group-sync-operator-helm
 description: A Helm chart to deploy the GroupSync Operator and its configuration for LDAP synchronization in OpenShift
 type: application
-version: 0.12.8
+version: 0.12.9
 appVersion: "1.1"
 home: https://github.com/ephico2real2/group-sync-operator-helm-chart
 icon: https://raw.githubusercontent.com/redhat-cop/group-sync-operator/master/assets/logo.png
@@ -29,6 +29,8 @@ annotations:
   # discarded now take effect, and trustedCA.injected now wins over a custom groupSync.ca.name. Anyone
   # moving from 0.3.x or 0.4.x still needs to read them.
   artifacthub.io/changes: |
+    - kind: changed
+      description: "crc-values.yaml sets autobahnusers-onboarding-groupsync to sync every two hours (0 */2 * * *) instead of inheriting the 30-minute primary schedule. The lab overlay only - no template or default change. Written as 0 */2 * * * and not */120 * * * *, because the minute field spans 0-59 so */120 never matches, which is the same trap the hourly item beside it already documents. WORTH KNOWING: this is the OAuth login-gate group, so the schedule IS login latency - somebody added to app-ssb-autobahnusers in LDAP cannot authenticate until the sync runs, and that wait is now up to two hours. Force a sync with setup-local-ldap-testing/60-force-groupsync.sh when onboarding someone who needs access immediately."
     - kind: changed
       description: "The relabel Job stops printing a NOTE for every already-satisfied rename, and checks instead of hedging. 0.12.6 made a zero-match mapping say 'already repaired, or the provider name changed' - true but useless, and it printed on EVERY routine upgrade: a steady-state run was 9 log lines of which 6 were notices about nothing happening, which is how a warning stops being a signal. The two cases are distinguishable, so the script now distinguishes them: a Group stranded by a PROVIDER rename still carries <old-cr>_<something>, so one prefix check answers it. Already repaired is now silent, because the closing line already says nothing was relabelled; a real provider rename now WARNS and names the stale values it found, telling the reader to relabel those by hand. Costs one extra list call, done once before the loop rather than per mapping. A label selector cannot match a prefix, so the filtering is client-side and the key's dots are escaped for jsonpath. Measured: steady state 6 lines and zero notices, a provider rename warns with the value named, and a normal repair is unchanged."
     - kind: changed
