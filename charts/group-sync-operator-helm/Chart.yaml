@@ -2,7 +2,7 @@ apiVersion: v2
 name: group-sync-operator-helm
 description: A Helm chart to deploy the GroupSync Operator and its configuration for LDAP synchronization in OpenShift
 type: application
-version: 0.12.11
+version: 0.12.12
 appVersion: "1.1"
 home: https://github.com/ephico2real2/group-sync-operator-helm-chart
 icon: https://raw.githubusercontent.com/redhat-cop/group-sync-operator/master/assets/logo.png
@@ -29,6 +29,8 @@ annotations:
   # discarded now take effect, and trustedCA.injected now wins over a custom groupSync.ca.name. Anyone
   # moving from 0.3.x or 0.4.x still needs to read them.
   artifacthub.io/changes: |
+    - kind: changed
+      description: "sample-values.yaml is current again. Its commented tenant example named bda-rbac-groupsync, a CR this chart renamed to bdp-oud-group-rbac-groupsync in 0.12.1, and it claimed to be 'the same shape crc-values.yaml uses' - no longer true, so the example now uses a neutral analytics-rbac name rather than borrowing the lab's. It also said values.yaml ships customGroupSyncs.items EMPTY, which stopped being true when the login-gate item was added there disabled. And it now documents previousNames, which did not exist when the file was last touched: renaming an item renames its CR and every Group it synced keeps the old name in its sync-provider label, because the operator rewrites a Group only when that Group's LDAP membership changes. Measured on the reference lab, renaming the primary CR left 42 of 66 Groups stale until the provenance-relabel Job ran. Every key the file sets was checked against values.yaml - none had disappeared - and it still fails offline as its requires-cluster marker promises."
     - kind: added
       description: "Adds crc-example-values.yaml: crc-values.yaml with every comment stripped, so a reader can see a fully-configured install on one page rather than in 100+ annotated lines. Generated from crc-values.yaml and verified to render byte-identically - same values, same rendered manifest hash. It is NOT the file to copy for a new cluster and says so: the url, bindDN and group queries belong to one lab, and a chart pointed at someone else's directory silently syncs nothing. sample-values.yaml remains the starting point for a real cluster, because it sets only what the chart cannot discover. Also records why this file carries no '# requires-cluster: true' marker while sample-values.yaml does - it sets groupSync.url explicitly, so it renders offline, and CI asserts that."
     - kind: changed
