@@ -63,10 +63,8 @@ spec:
               value: {{ .Values.provenanceRelabel.retries | quote }}
             - name: RETRY_DELAY
               value: {{ .Values.provenanceRelabel.retryDelaySeconds | quote }}
-            - name: BATCH_SIZE
-              value: {{ .Values.provenanceRelabel.batchSize | quote }}
-            - name: BATCH_PAUSE
-              value: {{ .Values.provenanceRelabel.batchPauseSeconds | quote }}
+            - name: PAUSE
+              value: {{ .Values.provenanceRelabel.pauseSeconds | quote }}
             # oc writes a cache under $HOME.
             - name: HOME
               value: /tmp
