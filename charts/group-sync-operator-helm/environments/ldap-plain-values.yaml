@@ -10,7 +10,7 @@
 # Switching to LDAPS afterwards is three steps, then dropping this file:
 #
 #   setup-local-ldap-testing/15-bootstrap-cert-manager-ca.sh apply
-#   oc delete groups -l group-sync-operator.redhat-cop.io/sync-provider
+#   oc delete groups.user.openshift.io -l group-sync-operator.redhat-cop.io/sync-provider
 #   helm upgrade group-sync charts/group-sync-operator-helm -n group-sync-operator --reset-values
 #
 # The group deletion is not optional. The operator compares openshift.io/ldap.url on each Group

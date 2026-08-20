@@ -38,7 +38,7 @@ metadata:
 rules:
 # list to find the Groups carrying a stale value, patch to correct it — and `get`, which is NOT optional
 # even though nothing in the script fetches a Group by name. `oc label` reads the object before it writes:
-# measured with -v=6 against this cluster, one `oc label group … --overwrite` issues
+# measured with -v=6 against this cluster, one `oc label groups.user.openshift.io … --overwrite` issues
 #   GET   /apis/user.openshift.io/v1/groups/<name>
 #   PATCH /apis/user.openshift.io/v1/groups/<name>
 # so a rule without `get` fails Forbidden on the GET and relabels nothing. A sibling chart shipped exactly
@@ -50,8 +50,8 @@ rules:
   verbs: ["get", "list", "patch"]
 # Read-only, and the whole basis of the decision: a rename is only credible when the OLD CR is absent
 # from the list, and the replacement value is built from the NEW CR's provider names — both taken from
-# the SAME single `oc get groupsync -A` read, so `list` is the only verb the script exercises on
-# groupsyncs. The per-CR `oc get groupsync <name>` lookup that needed `get` was folded into that read;
+# the SAME single `oc get groupsyncs.redhatcop.redhat.io -A` read, so `list` is the only verb the script exercises on
+# groupsyncs. The per-CR `oc get groupsyncs.redhatcop.redhat.io <name>` lookup that needed `get` was folded into that read;
 # if a named lookup ever returns, re-add `get` and re-verify with -v=6, exactly as the groups rule
 # above demands.
 - apiGroups: ["redhatcop.redhat.io"]

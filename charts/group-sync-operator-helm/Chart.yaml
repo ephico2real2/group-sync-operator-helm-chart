@@ -2,7 +2,35 @@ apiVersion: v2
 name: group-sync-operator-helm
 description: A Helm chart to deploy the GroupSync Operator and its configuration for LDAP synchronization in OpenShift
 type: application
-version: 0.12.12
+# 0.12.13, PATCH: EVERY `oc` CALL NOW NAMES ITS RESOURCE IN FULL. Ported from the sibling
+# openshift-rbac-automation chart, where the defect was measured rather than theorised:
+#
+#     Error from server (Forbidden): subscriptions.messaging.knative.dev "..." is forbidden:
+#     ... cannot get resource "subscriptions" in API group "messaging.knative.dev"
+#
+# `oc get subscription` had bound to the WRONG API GROUP. A resource plural is not reserved — Knative
+# Eventing serves `subscriptions`, OLM serves `subscriptions` — and which one a short name resolves to is
+# decided by API discovery, so it changes as CRDs are installed and removed. These scripts run with
+# HOME=/tmp and therefore a COLD discovery cache on every run, so the binding is not stable even between
+# two runs of the same Job.
+#
+# 47 call sites qualified across the approver, the readiness wait, the provenance relabel, the two test
+# scripts, NOTES.txt and the values files. THE ONES THAT MATTER MOST ARE THE LIST-DRIVEN DECISIONS in
+# relabel-provenance.sh: `oc get groupsyncs...` decides which CRs are LIVE and `oc get groups...` decides
+# which Groups carry a stale provenance value. A misrouted list returns NOTHING rather than failing, so
+# either one would turn the repair into a silent no-op that reports success — and `groups` is a kind this
+# chart WRITES to.
+#
+# ci/qualified-resources.py asserts it and is wired into CI. It checks the RENDER (so a script living in a
+# ConfigMap value is covered like a file), the files/*.sh sources, and NOTES.txt plus the values files,
+# because an operator copy-pastes those. No allowlist for "clusters where the short name is fine": a
+# cluster can add a colliding CRD tomorrow.
+#
+# Verified as the ServiceAccounts that make the calls, on a live cluster: the relabel SA lists
+# groupsyncs.redhatcop.redhat.io (3 live CRs) and lists/patches groups.user.openshift.io (64 of 66 Groups
+# carry the provenance label); the approver SA reads subscriptions.operators.coreos.com; the wait SA reads
+# both. Each is denied the verbs it does not need, so the scoping survived the rename.
+version: 0.12.13
 appVersion: "1.1"
 home: https://github.com/ephico2real2/group-sync-operator-helm-chart
 icon: https://raw.githubusercontent.com/redhat-cop/group-sync-operator/master/assets/logo.png

@@ -131,7 +131,7 @@ groupSync:
   # openshift.io/ldap.url on each Group against host:port and refuses to adopt a mismatch
   # ("annotation did not match sync host"). Deleting the operator-managed groups is enough — the next
   # sync recreates them:
-  #   oc delete groups -l group-sync-operator.redhat-cop.io/sync-provider
+  #   oc delete groups.user.openshift.io -l group-sync-operator.redhat-cop.io/sync-provider
   #
   # The local test directory value, for reference:
   #   url: "ldaps://openldap-service.ldap-testing.svc.cluster.local:636"

@@ -103,7 +103,7 @@ fi
 echo ""
 echo "📍 Test 3: GroupSync Custom Resource Status"
 echo "------------------------------------------"
-if oc get groupsync "$GROUPSYNC_NAME" -n "$GROUPSYNC_NAMESPACE" &> /dev/null; then
+if oc get groupsyncs.redhatcop.redhat.io "$GROUPSYNC_NAME" -n "$GROUPSYNC_NAMESPACE" &> /dev/null; then
   require "GroupSync CR '$GROUPSYNC_NAME' exists" 0
 
   # Check GroupSync configuration
@@ -116,8 +116,8 @@ if oc get groupsync "$GROUPSYNC_NAME" -n "$GROUPSYNC_NAMESPACE" &> /dev/null; th
   echo "   - Groups Filter: $GROUPS_FILTER"
   
   # Check GroupSync status conditions
-  GROUPSYNC_STATUS=$(oc get groupsync "$GROUPSYNC_NAME" -n "$GROUPSYNC_NAMESPACE" -o jsonpath='{.status.conditions[0].type}' 2>/dev/null || echo "Unknown")
-  GROUPSYNC_MESSAGE=$(oc get groupsync "$GROUPSYNC_NAME" -n "$GROUPSYNC_NAMESPACE" -o jsonpath='{.status.conditions[0].message}' 2>/dev/null || echo "No message")
+  GROUPSYNC_STATUS=$(oc get groupsyncs.redhatcop.redhat.io "$GROUPSYNC_NAME" -n "$GROUPSYNC_NAMESPACE" -o jsonpath='{.status.conditions[0].type}' 2>/dev/null || echo "Unknown")
+  GROUPSYNC_MESSAGE=$(oc get groupsyncs.redhatcop.redhat.io "$GROUPSYNC_NAME" -n "$GROUPSYNC_NAMESPACE" -o jsonpath='{.status.conditions[0].message}' 2>/dev/null || echo "No message")
   
   echo "   Current Status: $GROUPSYNC_STATUS"
   echo "   Message: $GROUPSYNC_MESSAGE"
@@ -307,9 +307,9 @@ echo "-----------------------------------------------"
 
 # The GroupSync operator performs internal synchronization, not via CronJobs
 # Check the operator's internal sync status through the GroupSync CR status
-if oc get groupsync "$GROUPSYNC_NAME" -n "$GROUPSYNC_NAMESPACE" &> /dev/null; then
-  LAST_SYNC_TIME=$(oc get groupsync "$GROUPSYNC_NAME" -n "$GROUPSYNC_NAMESPACE" -o jsonpath='{.status.lastSyncTime}' 2>/dev/null || echo "")
-  SYNC_GENERATION=$(oc get groupsync "$GROUPSYNC_NAME" -n "$GROUPSYNC_NAMESPACE" -o jsonpath='{.status.observedGeneration}' 2>/dev/null || echo "")
+if oc get groupsyncs.redhatcop.redhat.io "$GROUPSYNC_NAME" -n "$GROUPSYNC_NAMESPACE" &> /dev/null; then
+  LAST_SYNC_TIME=$(oc get groupsyncs.redhatcop.redhat.io "$GROUPSYNC_NAME" -n "$GROUPSYNC_NAMESPACE" -o jsonpath='{.status.lastSyncTime}' 2>/dev/null || echo "")
+  SYNC_GENERATION=$(oc get groupsyncs.redhatcop.redhat.io "$GROUPSYNC_NAME" -n "$GROUPSYNC_NAMESPACE" -o jsonpath='{.status.observedGeneration}' 2>/dev/null || echo "")
   
   if [ -n "$LAST_SYNC_TIME" ]; then
     echo "✅ GroupSync operator has performed synchronization"
@@ -330,7 +330,7 @@ echo "📍 Test 8: OpenShift Groups Synchronization"
 echo "-------------------------------------------"
 
 # Look for groups that match our expected pattern
-SYNCED_GROUPS=$(oc get groups --no-headers 2>/dev/null | grep "app-ocp-rbac" || echo "")
+SYNCED_GROUPS=$(oc get groups.user.openshift.io --no-headers 2>/dev/null | grep "app-ocp-rbac" || echo "")
 if [ -n "$SYNCED_GROUPS" ]; then
   GROUP_COUNT=$(echo "$SYNCED_GROUPS" | wc -l)
   report_result "Synchronized OpenShift groups found: $GROUP_COUNT" 0
@@ -342,7 +342,7 @@ if [ -n "$SYNCED_GROUPS" ]; then
   echo "   Group membership details:"
   while IFS= read -r group_line; do
     GROUP_NAME=$(echo "$group_line" | awk '{print $1}')
-    MEMBER_COUNT=$(oc get group "$GROUP_NAME" -o jsonpath='{.users}' 2>/dev/null | jq -r 'length' 2>/dev/null || echo "0")
+    MEMBER_COUNT=$(oc get groups.user.openshift.io "$GROUP_NAME" -o jsonpath='{.users}' 2>/dev/null | jq -r 'length' 2>/dev/null || echo "0")
     echo "   - $GROUP_NAME: $MEMBER_COUNT members"
   done <<< "$SYNCED_GROUPS"
 else

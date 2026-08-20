@@ -79,7 +79,7 @@ log "label key: ${LABEL_KEY}, cap: $([ "$LIMIT" -eq 0 ] && echo none || echo "$L
 # One call fetches the names AND their provider names, as "name provider [provider...]" per line, so the
 # provider suffix never needs a second per-CR lookup — which would have had to name a namespace and would
 # have reintroduced exactly the assumption this avoids.
-CR_LINES="$(oc get groupsync -A -o jsonpath='{range .items[*]}{.metadata.name}{range .spec.providers[*]}{" "}{.name}{end}{"\n"}{end}')" \
+CR_LINES="$(oc get groupsyncs.redhatcop.redhat.io -A -o jsonpath='{range .items[*]}{.metadata.name}{range .spec.providers[*]}{" "}{.name}{end}{"\n"}{end}')" \
   || fail "cannot list GroupSync CRs, so no rename can be validated — the API's error is above"
 log "live GroupSync CRs: $(echo "$CR_LINES" | awk '{print $1}' | tr '\n' ' ')"
 
@@ -87,7 +87,7 @@ log "live GroupSync CRs: $(echo "$CR_LINES" | awk '{print $1}' | tr '\n' ' ')"
 # "the provider name changed", below — a Kubernetes label selector cannot match a prefix, so this is filtered
 # in the shell. The key's dots are escaped because jsonpath treats them as path separators.
 ESCAPED_KEY="$(printf '%s' "$LABEL_KEY" | sed 's/\./\\./g')"
-ALL_VALUES="$(oc get groups -l "$LABEL_KEY" \
+ALL_VALUES="$(oc get groups.user.openshift.io -l "$LABEL_KEY" \
                 -o jsonpath="{range .items[*]}{.metadata.labels.${ESCAPED_KEY}}{\"\n\"}{end}")" \
   || fail "cannot list Groups carrying ${LABEL_KEY} — the API's error is above"
 
@@ -164,7 +164,7 @@ for pair in ${RENAMES//,/ }; do
     old_value="${old_cr}_${provider}"
     new_value="${new_cr}_${provider}"
 
-    MATCHED="$(oc get groups -l "${LABEL_KEY}=${old_value}" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')" \
+    MATCHED="$(oc get groups.user.openshift.io -l "${LABEL_KEY}=${old_value}" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')" \
       || fail "cannot list Groups labelled ${LABEL_KEY}=${old_value} — the API's error is above"
 
     found=0
@@ -245,14 +245,14 @@ for i in $(seq 0 $((TOTAL - 1))); do
   # leave the run partially applied for no good reason.
   attempt=1
   while : ; do
-    if oc label group "$group" "${LABEL_KEY}=${new_value}" --overwrite >/dev/null 2>&1; then
+    if oc label groups.user.openshift.io "$group" "${LABEL_KEY}=${new_value}" --overwrite >/dev/null 2>&1; then
       log "relabelled ${group}: ${old_value} -> ${new_value}"
       CHANGED=$((CHANGED + 1))
       break
     fi
     if [ "$attempt" -ge "$RETRIES" ]; then
       # Re-run once WITHOUT discarding stderr, so the log says why rather than just "ERROR".
-      why="$(oc label group "$group" "${LABEL_KEY}=${new_value}" --overwrite 2>&1 >/dev/null | tail -1)"
+      why="$(oc label groups.user.openshift.io "$group" "${LABEL_KEY}=${new_value}" --overwrite 2>&1 >/dev/null | tail -1)"
       log "ERROR relabelling ${group} after ${RETRIES} attempt(s); it keeps ${old_value}: ${why}"
       FAILURES=$((FAILURES + 1))
       break

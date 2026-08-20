@@ -31,7 +31,7 @@ groupSync:
   # Changing the host or port after groups exist orphans them: the operator compares
   # openshift.io/ldap.url on each Group against host:port and refuses to adopt a mismatch. Delete the
   # operator-managed groups and the next sync recreates them:
-  #   oc delete groups -l group-sync-operator.redhat-cop.io/sync-provider
+  #   oc delete groups.user.openshift.io -l group-sync-operator.redhat-cop.io/sync-provider
   url: "ldaps://openldap-service.ldap-testing.svc.cluster.local:636"
 
 oauthSecretExtraction:
@@ -80,7 +80,7 @@ customGroupSyncs:
       # person added in LDAP can authenticate immediately — the sync has no part in it.
       #
       # What the synced Group IS: an audit record of who belongs to that LDAP group, readable with
-      # `oc get group app-ssb-autobahnusers -o jsonpath='{.users}'`. It grants nothing — measured: zero
+      # `oc get groups.user.openshift.io app-ssb-autobahnusers -o jsonpath='{.users}'`. It grants nothing — measured: zero
       # RoleBindings or ClusterRoleBindings reference it, and its name carries none of the suffixes the NCO
       # GroupConfig policies match, so no policy selects it.
       #

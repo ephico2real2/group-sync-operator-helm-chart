@@ -75,7 +75,7 @@ spec:
 
               # Prefix match: the CSV name carries the operator version.
               csv_phase() {
-                oc get csv -n "$NAMESPACE" --ignore-not-found=true \
+                oc get clusterserviceversions.operators.coreos.com -n "$NAMESPACE" --ignore-not-found=true \
                    -o jsonpath='{range .items[*]}{.metadata.name}{"|"}{.status.phase}{"\n"}{end}' \
                   2>/dev/null | grep "^${SUBSCRIPTION}\." | head -1
               }
@@ -106,7 +106,7 @@ spec:
               if [ "${FP_CSV#*|}" = "Succeeded" ] && [ "${FP_READY:-0}" -ge 1 ] 2>/dev/null \
                  && [ "$FP_EST" = "True" ]; then
                 log "already ready — nothing to wait for"
-                log "sync status:   oc get groupsync -n ${NAMESPACE} -o wide"
+                log "sync status:   oc get groupsyncs.redhatcop.redhat.io -n ${NAMESPACE} -o wide"
                 exit 0
               fi
               log "not ready yet; entering the full wait (${ATTEMPTS} attempts x ${INTERVAL}s)"
@@ -122,7 +122,7 @@ spec:
                 sleep "$INTERVAL"
               done
               [ "$PHASE" = "Succeeded" ] || fail "no ${SUBSCRIPTION}.* CSV reached Succeeded.
-                Inspect: oc get csv,subscription,installplan -n ${NAMESPACE}
+                Inspect: oc get clusterserviceversions.operators.coreos.com,subscriptions.operators.coreos.com,installplans.operators.coreos.com -n ${NAMESPACE}
                 installPlanApproval: Manual leaves the InstallPlan unapproved and hangs here."
 
               # A ready replica, not just a Succeeded CSV: the pod can be CrashLoopBackOff.
@@ -153,9 +153,9 @@ spec:
                 Inspect: oc get crd ${CRD} -o yaml"
 
               # The CR count is informational: on a first install they may not be reconciled yet.
-              FOUND="$(oc get groupsync -n "$NAMESPACE" --no-headers --ignore-not-found=true 2>/dev/null | wc -l | tr -d ' ')"
+              FOUND="$(oc get groupsyncs.redhatcop.redhat.io -n "$NAMESPACE" --no-headers --ignore-not-found=true 2>/dev/null | wc -l | tr -d ' ')"
               log "operator is ready; ${FOUND:-0} GroupSync CR(s) present in ${NAMESPACE}"
-              log "sync status:   oc get groupsync -n ${NAMESPACE} -o wide"
-              log "synced groups: oc get groups -l app.kubernetes.io/managed-by=group-sync-operator"
+              log "sync status:   oc get groupsyncs.redhatcop.redhat.io -n ${NAMESPACE} -o wide"
+              log "synced groups: oc get groups.user.openshift.io -l app.kubernetes.io/managed-by=group-sync-operator"
           resources: {{- toYaml .Values.operatorWait.resources | nindent 12 }}
 {{- end }}

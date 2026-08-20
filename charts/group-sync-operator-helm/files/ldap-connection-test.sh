@@ -184,7 +184,7 @@ fi
 # Stands in for a bind test. A completed sync proves bind and query worked, which connectivity
 # checks alone cannot show.
 section "Test 4 — the operator synced through this configuration"
-CRS=$(oc get groupsync -n "$GROUPSYNC_NAMESPACE" -o name 2>/dev/null)
+CRS=$(oc get groupsyncs.redhatcop.redhat.io -n "$GROUPSYNC_NAMESPACE" -o name 2>/dev/null)
 if [ -z "$CRS" ]; then
   fail "no GroupSync resources in ${GROUPSYNC_NAMESPACE}"
 else
@@ -202,7 +202,7 @@ else
 
     if [ -z "$OK" ]; then
       fail "${NAME} has never completed a sync within ${SYNC_WAIT_SECONDS:-180}s.
-       oc describe groupsync ${NAME} -n ${GROUPSYNC_NAMESPACE}"
+       oc describe groupsyncs.redhatcop.redhat.io ${NAME} -n ${GROUPSYNC_NAMESPACE}"
       continue
     fi
 
@@ -222,7 +222,7 @@ else
 fi
 
 section "Groups on the cluster"
-COUNT=$(oc get groups --no-headers 2>/dev/null | wc -l | tr -d ' ')
+COUNT=$(oc get groups.user.openshift.io --no-headers 2>/dev/null | wc -l | tr -d ' ')
 info "${COUNT} group(s) present"
 [ "$COUNT" = "0" ] && info "zero is expected only if the directory has no matching groups"
 
@@ -241,5 +241,5 @@ fi
 echo "❌ ${FAILED} check(s) failed. Details above."
 echo
 echo "   operator logs:  oc logs -n ${GROUPSYNC_NAMESPACE} -l control-plane=group-sync-operator"
-echo "   CR status:      oc describe groupsync -n ${GROUPSYNC_NAMESPACE}"
+echo "   CR status:      oc describe groupsyncs.redhatcop.redhat.io -n ${GROUPSYNC_NAMESPACE}"
 exit 1
