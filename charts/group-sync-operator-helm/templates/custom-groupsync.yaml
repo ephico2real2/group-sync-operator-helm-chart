@@ -84,7 +84,12 @@ metadata:
   labels:
     {{- include "group-sync-operator-helm.labels" $root | nindent 4 }}
   annotations:
+    # Same wave and the same escape as the primary CR in 02-groupsync.yaml, and for the same reasons —
+    # above the Subscription so teardown runs finalizers while the operator still exists, and
+    # SkipDryRunOnMissingResource because the GroupSync CRD arrives from OLM mid-sync rather than from this
+    # manifest. A tenant CR that lacked it would fail the whole first sync exactly as the primary one would.
     argocd.argoproj.io/sync-wave: "3"
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
 {{ include "group-sync-operator-helm.groupsyncSpec" $cfg }}
 {{- end }}
 {{- end }}

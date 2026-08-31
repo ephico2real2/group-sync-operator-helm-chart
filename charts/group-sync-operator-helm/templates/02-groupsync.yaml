@@ -12,6 +12,24 @@ metadata:
   labels:
     {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
   annotations:
+    # WAVE 3, AND IT MUST STAY ABOVE THE SUBSCRIPTION'S WAVE (0). ArgoCD deletes in REVERSE wave order, so a
+    # higher wave here means the CRs are removed FIRST on teardown, while the operator is still running and
+    # can execute their finalizers. Below the Subscription, teardown deadlocks: the CRs sit in Terminating
+    # with a finalizer no controller is left to run.
     argocd.argoproj.io/sync-wave: "3"
+    # ArgoCD dry-runs every resource BEFORE applying it, and a dry-run against a kind the cluster does not
+    # serve yet fails with "the server could not find the requested resource" — which fails THE WHOLE SYNC,
+    # not just this document. That is exactly the shape of a first sync since 0.13.0: the GroupSync CRD is
+    # no longer in the manifest (it belongs to the operator's OLM bundle) and arrives mid-sync, when OLM
+    # installs the CSV in wave 0. Ported from the sibling namespace-configuration-operator chart, whose
+    # policy CRs are in the identical position and carry the identical annotation.
+    #
+    # It does NOT weaken validation once the operator is installed: ArgoCD still dry-runs the document when
+    # the CRD is already present, so a malformed spec is caught here rather than at apply time on every sync
+    # after the first.
+    #
+    # It does NOT help plain `helm install`, which resolves every kind against API discovery before applying
+    # anything and has no equivalent escape. That path is what crd.install exists for.
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
 {{ include "group-sync-operator-helm.groupsyncSpec" $cfg }}
 {{- end }}

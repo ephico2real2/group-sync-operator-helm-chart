@@ -34,8 +34,10 @@ type: application
 # lint passes; the wave layout (namespace -2, OperatorGroup -1, Subscription 0) is the same one
 # cert-manager-venafi uses.
 #
-# 0.13.0 ALSO FIXES TWO ARGOCD ORDERING DEFECTS, both invisible to `helm install` and therefore never seen
-# on a cluster without ArgoCD. They were found by auditing the rendered manifest rather than the templates.
+# 0.13.0 ALSO FIXES THREE ARGOCD ORDERING DEFECTS, all invisible to `helm install` and therefore never seen
+# on a cluster without ArgoCD. They were found by auditing the rendered manifest rather than the templates,
+# and ci/check-ordering.py (ported from the sibling openshift-rbac-automation chart) now asserts all three
+# so they cannot regress unnoticed — verified to catch each one when seeded back in.
 #
 #   1. THE INSTALLPLAN APPROVER DEADLOCKED A FIRST SYNC. It sat at sync-wave 1, one after the Subscription
 #      at 0. ArgoCD advances only when a wave is HEALTHY, and its built-in health check for
@@ -54,6 +56,15 @@ type: application
 #      GroupSync CRs at wave 3 that consume the Secret and CA ConfigMap they create. Verified per-resource
 #      in gitops-engine's hook.Types, not inferred from the docs, whose "all Helm hooks will be ignored"
 #      wording reads application-wide. Both now carry hook: Sync like the other three Jobs.
+#
+#   3. THE GROUPSYNC CRs FAILED A FIRST SYNC AT DRY-RUN. ArgoCD dry-runs every resource BEFORE applying
+#      anything, and a dry-run against a kind the cluster does not serve yet fails the WHOLE sync — and
+#      since this release removed the CRD from the manifest, a first sync is exactly that shape: the CRD
+#      arrives mid-sync, from OLM, at wave 0. Every CR (primary and customGroupSyncs) now carries
+#      argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true, ported verbatim from the
+#      namespace-configuration-operator chart, whose policy CRs sit in the identical position. It does not
+#      weaken validation once the CRD exists — ArgoCD still dry-runs when the kind is served — and it does
+#      not help plain `helm install`, which is what crd.install is for.
 #
 # 0.12.13, PATCH: EVERY `oc` CALL NOW NAMES ITS RESOURCE IN FULL. Ported from the sibling
 # openshift-rbac-automation chart, where the defect was measured rather than theorised:
@@ -110,6 +121,10 @@ annotations:
   # discarded now take effect, and trustedCA.injected now wins over a custom groupSync.ca.name. Anyone
   # moving from 0.3.x or 0.4.x still needs to read them.
   artifacthub.io/changes: |
+    - kind: fixed
+      description: "EVERY GROUPSYNC CR NOW CARRIES argocd.argoproj.io/sync-options SkipDryRunOnMissingResource=true - without it the FIRST ArgoCD sync fails outright now that the CRD has left the manifest. ArgoCD dry-runs every resource before applying anything, and a dry-run against a kind the cluster does not serve yet fails with 'the server could not find the requested resource' - which fails the whole sync, not just that document. A first sync is exactly that shape since this release: the GroupSync CRD is not in the rendered source, it arrives mid-sync when OLM resolves the Subscription at wave 0, and the CRs sit at wave 3. Ported verbatim from the sibling namespace-configuration-operator chart, whose NamespaceConfig/GroupConfig policy CRs are in the identical position and have carried the identical annotation all along - this chart had simply not been aligned with it. The annotation does not weaken validation once the operator is installed (ArgoCD still dry-runs the document whenever the CRD is present, so a malformed spec is still caught before apply on every sync after the first), and it does not help plain `helm install`, which resolves kinds before applying and has no equivalent escape - that path is what crd.install exists for. Applied to the primary CR and to every customGroupSyncs item."
+    - kind: added
+      description: "ci/check-ordering.py, ported from the openshift-rbac-automation chart and wired into CI: asserts the install/uninstall ordering is DECLARED, not accidental. It renders the default values, every discoverable overlay, and crd.install=true, then requires an explicit sync-wave on every non-test resource (ArgoCD treats a missing wave as 0 - the Subscription's own wave - so an omission is an ordering bug that reads as fine), an explicit argocd.argoproj.io/hook on every Job in both the render and the template SOURCE (a gated template cannot hide from a source check), the approver sharing the Subscription's wave in the Sync phase, the readiness wait strictly between the Subscription and the CRs, every redhatcop.redhat.io CR above the Subscription's wave (ArgoCD deletes in reverse wave order, so teardown must remove CRs while the operator still runs their finalizers) and carrying SkipDryRunOnMissingResource, and no two same-event hooks sharing a helm hook-weight. Selectors are derived (CRs by API group, overlays by glob) rather than listed, and every selector asserts it matched something - including the test-fixture exemption itself. Verified to catch all three of this release's ordering defects when seeded back into a mutated copy of the chart."
     - kind: fixed
       description: "ARGOCD FIRST SYNC NO LONGER DEADLOCKS. The InstallPlan approver Job moves from sync-wave 1 to sync-wave 0, the Subscription's own wave. ArgoCD advances to the next wave only when the current one is healthy, and its built-in health check for operators.coreos.com/Subscription forgives InstallPlanPending/RequiresApproval only when .status.installedCSV is already set - when it is absent the same condition increments numPending, and numPending greater than zero returns Progressing. On a FIRST install installedCSV is nil, so wave 0 stayed Progressing, wave 1 never started, and the Job that would approve the InstallPlan was waiting on the wave that was waiting on it. The Application could never converge and the Application's retry limit could not help, because every attempt deadlocked identically. installPlanApproval defaults to Manual, so this was the default path, and an UPGRADE was always fine because installedCSV is already set - which is why it stayed hidden. Plain `helm install` was never affected: post-install hooks run after the manifest is applied, ordered by hook-weight alone with no wave gating, which is why this survived on a cluster with no ArgoCD. The sibling cert-manager-venafi chart places its approver at wave 0 and documents this rule; this chart had diverged from it."
     - kind: fixed
