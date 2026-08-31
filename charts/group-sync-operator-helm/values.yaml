@@ -334,6 +334,23 @@ customGroupSyncs:
     #   namespace: some-namespace   # override where the CR is created
     #   filter: "(&(objectClass=groupOfNames)(cn=foo-*)(cn=bar-*))"  # raw LDAP filter (advanced)
 
+# -------------------- GroupSync CRD --------------------
+# OFF, and that is the intended steady state. The CRD arrives from the catalog, installed by OLM when the
+# Subscription below resolves — the same way cert-manager-venafi and the namespace-configuration operator
+# get theirs, neither of which vendors a CRD at all. One owner for the object: OLM upgrades its own CRD,
+# where a Helm-installed copy is a snapshot that drifts as the operator moves on.
+#
+# Turn it on for exactly one case: a direct `helm install` onto a cluster that does not have the operator
+# yet. Helm resolves every kind in the release against API discovery BEFORE it applies anything, so the
+# GroupSync CR at wave 3 fails kind resolution — `no matches for kind "GroupSync"` — with nothing having
+# been applied. No hook weight or sync wave can reorder around that; the failure happens while Helm is
+# still building the object list. Installing the operator first is the other way out, and the better one.
+#
+# ArgoCD never needs it. Argo applies by sync wave against a live cluster rather than resolving the whole
+# release up front, so the Subscription at wave 0 has the CRD in place from OLM long before wave 3.
+crd:
+  install: false
+
 # -------------------- OperatorGroup --------------------
 # allNamespaces exists so this chart can subscribe to a CSV that declares ONLY the AllNamespaces install
 # mode. That is what `make bundle` produces from the operator's own config/manifests base, while the

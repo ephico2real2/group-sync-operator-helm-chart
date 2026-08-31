@@ -1,21 +1,56 @@
+{{- if .Values.crd.install }}
+# THE CATALOG OWNS THIS CRD. It is installed by OLM when the Subscription resolves, exactly as it is
+# for every other operator we run (cert-manager-venafi ships no CRD at all for this reason). This copy
+# exists only as an escape hatch, and it is OFF by default.
+#
+# WHY IT MOVED OUT OF crds/. Helm applies everything in crds/ unconditionally: the directory is not
+# templated, so no value can switch it off, and `--skip-crds` is a client flag rather than a property of
+# the chart. Worse, Helm never upgrades or deletes a CRD it installed from crds/, so the vendored copy
+# drifts from whatever OLM actually installs and two owners end up claiming the same object. In
+# templates/ it is an ordinary resource and can be gated. Helm sorts ordinary resources by KIND, and
+# CustomResourceDefinition sorts before the CRs that depend on it, so ordering inside the release is
+# unchanged when this is enabled.
+#
+# THE CONSEQUENCE OF LEAVING IT OFF, stated plainly: Helm resolves every kind in the release against API
+# discovery BEFORE it applies anything, so a plain `helm install` against a cluster where the operator is
+# not yet present fails on `no matches for kind "GroupSync"`. Under ArgoCD this does not arise: the
+# reference Application already sets skipCrds: true, and Argo applies by sync wave, so the CRD is in
+# place from the catalog by the time wave 3 applies the GroupSync CR. For a direct `helm install` on a
+# bare cluster, either install the operator first or set crd.install=true for that one install.
 # Vendored GroupSync CRD. Refresh from a cluster with the operator installed:
 #   oc get crd groupsyncs.redhatcop.redhat.io -o yaml
 # then strip uid, resourceVersion, creationTimestamp, status and the olm.managed/operatorframework
 # markers.
 #
-# Helm installs crds/ before it renders templates, which is what lets one `helm install` contain
-# both the Subscription and a GroupSync CR. Helm resolves every kind in the release against API
-# discovery before running any hook, so no hook or weight can order around it.
+# WHAT LEAVING crds/ COSTS, and how the two annotations below pay it back. A file in crds/ is not part
+# of the release: Helm skips it when the object already exists, and `helm uninstall` never deletes it.
+# A templated CRD has neither property by default — it becomes a release member that uninstall DELETES,
+# and deleting this CRD CASCADES TO EVERY GroupSync CR ON THE CLUSTER, including ones this release never
+# created. That is the one regression this move could have introduced, so it is closed here rather than
+# documented as a caveat:
 #
-# helm template does not emit crds/, so ArgoCD never manages this file; under Argo the CRD comes
-# from OLM via the Subscription. Helm skips it when it already exists, and never deletes or upgrades
-# it — refresh by hand when the operator ships a new CRD version. OLM adopts and patches this copy
-# on operator install.
+#   helm.sh/resource-policy: keep      Helm leaves the object behind on uninstall. Restores the crds/
+#                                      guarantee; the CR cascade cannot happen.
+#   argocd.argoproj.io/sync-options    The reference Application runs prune + selfHeal. Without
+#     Prune=false                      Prune=false, flipping crd.install back to false later removes the
+#                                      CRD from the rendered source and Argo prunes it — the same cascade
+#                                      by a different route.
+#
+# Unlike crds/, an enabled copy IS upgraded by `helm upgrade`, so it no longer silently goes stale. The
+# flip side is that Helm and OLM would both write the object; that is tolerable only because this is an
+# escape hatch for bootstrapping a bare cluster, not the steady state. In the steady state OLM is the
+# single owner and this renders nothing at all.
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.10.0
+    helm.sh/resource-policy: keep
+    argocd.argoproj.io/sync-options: Prune=false
+    # Ahead of the namespace (-2) and the OperatorGroup (-1). Helm ignores this — it sorts by kind, and
+    # CustomResourceDefinition already sorts first in its install order — so it exists for ArgoCD, where
+    # nothing else establishes that a CRD must precede the CRs of that kind in wave 3.
+    argocd.argoproj.io/sync-wave: "-3"
   name: groupsyncs.redhatcop.redhat.io
 spec:
   conversion:
@@ -1080,3 +1115,4 @@ spec:
     storage: true
     subresources:
       status: {}
+{{- end }}

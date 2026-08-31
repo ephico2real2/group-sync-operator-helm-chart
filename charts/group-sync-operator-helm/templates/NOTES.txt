@@ -22,13 +22,20 @@ and create the required GroupSync secret. The installation order is:
    OAuth Secret Extraction Job (sync-wave: 2)
 6. GroupSync CR (sync-wave: 3)
 
-The GroupSync CRD itself is NOT in this list: `helm install` installs it from crds/ before it
-renders any template, which is the only ordering mechanism early enough.
+The GroupSync CRD is not in this list because this chart does not install it. OLM does, when the
+Subscription at wave 0 resolves against the catalog — so it is established well before the GroupSync
+CR at wave 3, and OLM stays its single owner.
 
-Under ArgoCD, set spec.source.helm.skipCrds: true. Argo renders with `helm template --include-crds`,
-so crds/ IS part of the Application unless you skip it — Argo would then manage the CRD, be able to
-prune it, and contend with OLM, which owns the same CRD through the Subscription. With skipCrds set,
-the CRD comes from OLM at wave 0 and crds/ stays a `helm install` mechanism only.
+{{ if .Values.crd.install -}}
+crd.install is TRUE for this release, so the chart is shipping its own copy of the CRD. That is the
+bootstrap escape hatch, not the steady state: it is there so a direct `helm install` onto a cluster
+without the operator can resolve the GroupSync kind. Once OLM has installed the operator, set it back
+to false so the catalog copy is the only one. The object is annotated resource-policy: keep and
+Prune=false, so turning it off does not delete the CRD out from under your GroupSync CRs.
+{{ else -}}
+If a plain `helm install` on a bare cluster fails with `no matches for kind "GroupSync"`, install the
+operator first, or set crd.install=true for that one install. ArgoCD never needs it.
+{{ end -}}
 
 The OAuth extraction job will:
 - Extract bindPassword from {{ .Values.oauthSecretExtraction.sourceSecret.name }} ({{ .Values.oauthSecretExtraction.sourceSecret.namespace }})

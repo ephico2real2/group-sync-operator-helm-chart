@@ -2,6 +2,38 @@ apiVersion: v2
 name: group-sync-operator-helm
 description: A Helm chart to deploy the GroupSync Operator and its configuration for LDAP synchronization in OpenShift
 type: application
+# 0.13.0, MINOR: THE CHART NO LONGER INSTALLS THE GroupSync CRD. crds/ is gone; OLM installs the CRD when
+# the Subscription resolves, which is how every other operator in this estate is installed —
+# cert-manager-venafi has no crds/ directory and no CustomResourceDefinition in its templates, and neither
+# does the namespace-configuration operator's chart. Both verified, not assumed.
+#
+# WHY crds/ HAD TO GO. It solved the ordering problem and bought a worse one: two owners for one object.
+# The directory is not templated, so no value in this chart could switch it off — `--skip-crds` is a flag
+# the caller passes and `skipCrds` is a field the Application sets, neither a property of the chart. Helm
+# never upgrades a CRD it installed from crds/, so the vendored file is a snapshot that drifts while the
+# operator moves on. And under GitOps it was a live hazard: ArgoCD renders with `helm template
+# --include-crds`, which emits crds/ where a plain `helm template` does not, so Argo took management of a
+# CRD OLM already owned and — with prune and selfHeal — could delete or revert it. Deleting that CRD
+# cascades to every GroupSync CR on the cluster.
+#
+# WHAT REPLACES IT: crd.install, default FALSE, rendering the same CRD as an ordinary template. It exists
+# for one case only — a direct `helm install` onto a cluster without the operator, where Helm resolves
+# every kind against API discovery BEFORE applying anything and the GroupSync CR at wave 3 fails on `no
+# matches for kind "GroupSync"`. No hook weight or sync wave can reorder around that. ArgoCD never needs
+# it: Argo applies wave by wave against a live cluster, so the Subscription at wave 0 has OLM install the
+# CRD long before wave 3.
+#
+# THE REGRESSION THIS COULD HAVE SHIPPED, AND WHY IT DOES NOT. A file in crds/ is never deleted by `helm
+# uninstall`; a templated resource is a release member and IS deleted, cascading to every GroupSync CR.
+# The object therefore carries helm.sh/resource-policy: keep and argocd.argoproj.io/sync-options:
+# Prune=false, so neither an uninstall nor flipping crd.install back to false can remove it. It also
+# carries sync-wave -3, ahead of the namespace at -2, for the enabled-under-Argo case; Helm ignores that
+# and sorts by kind, where CustomResourceDefinition already sorts first.
+#
+# Measured on this chart: --include-crds emits 0 CRDs at the default and 1 with crd.install=true; helm
+# lint passes; the wave layout (namespace -2, OperatorGroup -1, Subscription 0) is the same one
+# cert-manager-venafi uses.
+#
 # 0.12.13, PATCH: EVERY `oc` CALL NOW NAMES ITS RESOURCE IN FULL. Ported from the sibling
 # openshift-rbac-automation chart, where the defect was measured rather than theorised:
 #
@@ -30,7 +62,7 @@ type: application
 # groupsyncs.redhatcop.redhat.io (3 live CRs) and lists/patches groups.user.openshift.io (64 of 66 Groups
 # carry the provenance label); the approver SA reads subscriptions.operators.coreos.com; the wait SA reads
 # both. Each is denied the verbs it does not need, so the scoping survived the rename.
-version: 0.12.13
+version: 0.13.0
 appVersion: "1.1"
 home: https://github.com/ephico2real2/group-sync-operator-helm-chart
 icon: https://raw.githubusercontent.com/redhat-cop/group-sync-operator/master/assets/logo.png
@@ -57,6 +89,10 @@ annotations:
   # discarded now take effect, and trustedCA.injected now wins over a custom groupSync.ca.name. Anyone
   # moving from 0.3.x or 0.4.x still needs to read them.
   artifacthub.io/changes: |
+    - kind: removed
+      description: "BEHAVIOUR: the chart no longer installs the GroupSync CRD. crds/groupsyncs.redhatcop.redhat.io.yaml is gone and OLM installs the CRD when the Subscription at wave 0 resolves, which is how every other operator here is installed - cert-manager-venafi has no crds/ directory and no CustomResourceDefinition in its templates, and neither does the namespace-configuration operator's chart. Both verified. crds/ solved the ordering problem and bought a worse one: two owners for one object. It could not be switched off, because the directory is not templated and --skip-crds is a caller flag rather than a chart property; Helm never upgrades a CRD installed from crds/, so the vendored file drifts as the operator ships new versions; and under GitOps ArgoCD renders with `helm template --include-crds`, which emits crds/ where a plain `helm template` does not, so Argo managed a CRD OLM already owned and with prune plus selfHeal could delete or revert it - a deletion that cascades to every GroupSync CR on the cluster. WHAT TO DO ON UPGRADE: nothing, if OLM installed the CRD first. Check with `oc get crd groupsyncs.redhatcop.redhat.io -o jsonpath='{.metadata.annotations.argocd\\.argoproj\\.io/tracking-id}'` - empty means Argo never took it. Non-empty means Argo owns it: annotate the CRD Prune=false before upgrading."
+    - kind: added
+      description: "crd.install (default false) renders the same CRD as an ordinary template, for the one case that still needs it: a direct `helm install` onto a cluster where the operator is not yet present. Helm resolves every kind in the release against API discovery BEFORE it applies anything, so the GroupSync CR at wave 3 fails with `no matches for kind GroupSync` and nothing is applied - and no hook weight or sync wave can reorder around that, because the failure happens while Helm is still building the object list. Installing the operator first is the better answer. ArgoCD never needs it: Argo applies wave by wave against a live cluster, so the Subscription at wave 0 has OLM install the CRD long before wave 3. Moving out of crds/ would on its own have introduced a regression - a file in crds/ is never deleted by `helm uninstall` whereas a templated resource is, cascading to every GroupSync CR - so the object carries helm.sh/resource-policy keep and argocd.argoproj.io/sync-options Prune=false, meaning neither an uninstall nor flipping the value back to false can remove it. It also carries sync-wave -3, ahead of the namespace at -2, for the enabled-under-Argo case; Helm ignores that and sorts by kind, where CustomResourceDefinition already sorts first. Measured: --include-crds emits 0 CRDs at the default and 1 with crd.install=true. argocd-application.yaml keeps skipCrds true even though it is now a no-op, because targetRevision takes patches automatically and a rollback to a 0.12.x chart brings crds/ back."
     - kind: changed
       description: "sample-values.yaml is current again. Its commented tenant example named bda-rbac-groupsync, a CR this chart renamed to bdp-oud-group-rbac-groupsync in 0.12.1, and it claimed to be 'the same shape crc-values.yaml uses' - no longer true, so the example now uses a neutral analytics-rbac name rather than borrowing the lab's. It also said values.yaml ships customGroupSyncs.items EMPTY, which stopped being true when the login-gate item was added there disabled. And it now documents previousNames, which did not exist when the file was last touched: renaming an item renames its CR and every Group it synced keeps the old name in its sync-provider label, because the operator rewrites a Group only when that Group's LDAP membership changes. Measured on the reference lab, renaming the primary CR left 42 of 66 Groups stale until the provenance-relabel Job ran. Every key the file sets was checked against values.yaml - none had disappeared - and it still fails offline as its requires-cluster marker promises."
     - kind: added
