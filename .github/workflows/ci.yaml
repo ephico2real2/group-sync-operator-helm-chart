@@ -55,6 +55,16 @@ jobs:
       - name: Only the resolver may read the raw LDAP url
         run: python3 ci/url-guard.py "$CHART"
 
+      # Ported from the sibling openshift-rbac-automation chart, where the same script guards the same
+      # rules. Three ArgoCD ordering defects shipped in this chart precisely because nothing asserted
+      # them: the approver one wave after a Manual-approval Subscription (first-sync deadlock), two
+      # Jobs with a wave but no argocd hook (silently PostSync), and CRs without
+      # SkipDryRunOnMissingResource after the CRD left the manifest (first sync fails at dry-run).
+      # The script discovers overlays by glob and selects CRs by API group, so new templates and new
+      # cluster values files are covered without editing it or this workflow.
+      - name: Ordering is declared, not accidental
+        run: python3 ci/check-ordering.py --chart "$CHART"
+
       - name: Render every combination and assert coherence
         run: |
           set -uo pipefail

@@ -10,7 +10,9 @@
 # waited on. Replace=true because a Job spec is immutable and a re-sync would fail on it.
 #
 # It cannot make a GroupSync installable when the CRD is absent: Helm resolves every kind in the
-# release before it runs any hook. crds/ covers that.
+# release before it runs any hook. That ordering is why the CRD has to exist before the release is
+# applied -- from the catalog under ArgoCD (skipCrds + sync waves), or via crd.install=true for a
+# direct first-time `helm install`. This Job's CRD check is a readiness gate, not a substitute.
 {{- if and .Values.operatorWait.enabled .Values.groupSync.enabled }}
 apiVersion: batch/v1
 kind: Job

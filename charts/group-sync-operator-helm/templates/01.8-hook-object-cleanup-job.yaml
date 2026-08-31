@@ -26,6 +26,17 @@ metadata:
     {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
     app.kubernetes.io/component: hook-object-cleanup
   annotations:
+    # DECLARED, not inherited. ArgoCD would map the helm.sh/hook below to PreDelete on its own — the
+    # fallback happens to be right here — but every other Job in this chart states its ArgoCD phase, and two
+    # of them ran in the wrong phase precisely because they relied on that fallback without anyone checking
+    # which phase it produced. Stating it makes the phase reviewable and lets ci/check-ordering.py require
+    # the annotation on every Job rather than special-casing this one.
+    argocd.argoproj.io/hook: PreDelete
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    # Waves order PreDelete hooks among themselves. There is only one today, so this changes nothing —
+    # it is declared so that a second pre-delete hook has something to be ordered against instead of
+    # silently tying at the default, and so the Job rule in ci/check-ordering.py needs no exception.
+    argocd.argoproj.io/sync-wave: "0"
     helm.sh/hook: pre-delete
     # Deletes itself once it succeeds. A pre-delete hook that lingered would be the very thing this Job
     # exists to prevent — an untracked object left behind by an uninstall. Kept on failure, so a Forbidden

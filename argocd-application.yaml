@@ -33,13 +33,20 @@ spec:
         # point at the chart's own values.yaml, where url is "", so it could never render at all.
         valueFiles:
           - $values/clusters/prod/group-sync-values.yaml
-        # ArgoCD renders Helm sources with `helm template --include-crds`, so the vendored
-        # crds/groupsyncs.redhatcop.redhat.io.yaml IS part of this Application unless it is skipped.
-        # Without this, Argo takes management of a CRD that OLM already owns through the Subscription and
-        # CSV, and with prune + selfHeal below it can delete or revert it. crds/ exists only so a plain
-        # `helm install` can resolve the GroupSync kind before rendering templates — see the README.
+        # A NO-OP AGAINST THIS CHART VERSION, KEPT DELIBERATELY. As of 0.13.0 the chart has no crds/
+        # directory: the GroupSync CRD comes from the catalog via the Subscription, and OLM is its only
+        # owner. skipCrds only ever governed crds/, so there is nothing left for it to skip.
         #
-        # Deleting that CRD cascades to every GroupSync CR, so leave this set.
+        # It stays because it is free and it is load-bearing in two cases this Application can reach
+        # without anyone editing it: targetRevision below takes patches automatically, so a rollback to a
+        # 0.12.x chart brings crds/ back, and ArgoCD renders Helm sources with
+        # `helm template --include-crds` — which emits crds/ where a plain `helm template` does not.
+        # Argo would then manage a CRD OLM already owns, and with prune + selfHeal below it can delete or
+        # revert it. Deleting that CRD cascades to every GroupSync CR on the cluster.
+        #
+        # It does NOT cover crd.install=true. That renders an ordinary templated CustomResourceDefinition,
+        # which skipCrds does not touch — by design, since it is the bootstrap escape hatch and its whole
+        # purpose is to be applied. Leave crd.install false here; ArgoCD does not need it.
         skipCrds: true
     # Values only: `ref` makes this source referenceable as $values and contributes no manifests of its own.
     - repoURL: https://git.example.com/YOUR-ORG/YOUR-CONFIG-REPO.git
