@@ -16,11 +16,23 @@ and create the required GroupSync secret. The installation order is:
 1. Namespace (sync-wave: -2)
 2. OperatorGroup (sync-wave: -1)
 3. Operator Subscription + Job RBAC (sync-wave: 0)
-4. InstallPlan approver Job, only when installPlanApproval=Manual (sync-wave: 1)
-   OAuth extraction ServiceAccount/ClusterRole/ClusterRoleBinding (sync-wave: 1)
+   InstallPlan approver Job, only when installPlanApproval=Manual (sync-wave: 0)
+     — the SUBSCRIPTION'S OWN WAVE, not a later one. ArgoCD only advances when a wave is healthy,
+       and a Manual-approval Subscription stays Progressing until its InstallPlan is approved, so
+       an approver in a later wave waits on the wave that is waiting on it.
+4. OAuth extraction ServiceAccount/ClusterRole/ClusterRoleBinding (sync-wave: 1)
 5. Operator readiness wait Job (sync-wave: 2)
    OAuth Secret Extraction Job (sync-wave: 2)
+   LDAP CA copy Job (sync-wave: 2)
 6. GroupSync CR (sync-wave: 3)
+7. Provenance relabel Job (sync-wave: 4)
+
+Under ArgoCD every Job above is an `argocd.argoproj.io/hook: Sync`, so it runs inside the wave
+sequence shown. That annotation is required for the wave to mean anything: with only a helm.sh/hook,
+ArgoCD maps post-install to PostSync and the Job runs after the whole sync instead of at its wave.
+
+Under plain `helm install` the waves are inert and helm.sh/hook-weight orders the Jobs instead:
+approver (-1), readiness wait (0), OAuth extraction (5), CA copy (6), provenance relabel (7).
 
 The GroupSync CRD is not in this list because this chart does not install it. OLM does, when the
 Subscription at wave 0 resolves against the catalog — so it is established well before the GroupSync

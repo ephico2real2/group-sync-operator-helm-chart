@@ -914,13 +914,22 @@ helm install group-sync group-sync-operator/group-sync-operator-helm \
 
 ## Notes
 
-- A render is 35-38 objects across 11 kinds, depending on the values file. Besides the GroupSync CR,
-  OperatorGroup and Subscription, the chart ships the namespace-scoped RBAC the hook Jobs need, five hook
-  Jobs (InstallPlan approval, operator readiness, credential extraction, the CA copy, and pre-delete
+- A render is 35-44 objects across 11 kinds, depending on the values file — measured: 35 with
+  `environments/ldap-plain-values.yaml`, 42 with defaults, 44 with `crc-values.yaml`. Besides the GroupSync
+  CR, OperatorGroup and Subscription, the chart ships the namespace-scoped RBAC the hook Jobs need, five
+  hook Jobs (InstallPlan approval, operator readiness, credential extraction, the CA copy, and pre-delete
   cleanup), the two `helm test` Pods, and the test-scripts ConfigMap
-- Ordering is done twice over, because the two tools honour different mechanisms: `helm.sh/hook` plus
-  hook weights make plain `helm install` block on the wait Jobs, and `argocd.argoproj.io/sync-wave` does the
-  same under ArgoCD, which ignores Helm hooks
+- Ordering is done twice over, because the two tools honour different mechanisms: `helm.sh/hook` plus hook
+  weights make plain `helm install` block on the wait Jobs, and `argocd.argoproj.io/sync-wave` does the same
+  under ArgoCD
+- **ArgoCD does not ignore Helm hooks — it converts them, and that distinction is load-bearing.** An earlier
+  version of this bullet said it ignores them. It does not: for each object *individually*, ArgoCD uses
+  `argocd.argoproj.io/hook` if present and otherwise falls back to that object's own `helm.sh/hook`, mapping
+  `post-install`/`post-upgrade` to **PostSync** — which runs after the entire sync, not at the object's
+  wave. So a Job carrying only a Helm hook has a `sync-wave` that orders it against nothing but other
+  PostSync hooks. Every Job in this chart therefore carries `argocd.argoproj.io/hook: Sync` explicitly; two
+  of them were missing it and ran in the wrong phase until 0.13.0. Likewise `argocd.argoproj.io/sync-wave`
+  takes precedence over `helm.sh/hook-weight`, which is only a fallback when no wave is set
 - Labels follow Kubernetes recommended standards
 - LDAP queries use RFC2307 schema
 - The primary CR filters for `app-ocp-rbac-*`; additional per-tenant patterns (e.g.

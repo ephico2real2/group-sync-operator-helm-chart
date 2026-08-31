@@ -34,6 +34,27 @@ type: application
 # lint passes; the wave layout (namespace -2, OperatorGroup -1, Subscription 0) is the same one
 # cert-manager-venafi uses.
 #
+# 0.13.0 ALSO FIXES TWO ARGOCD ORDERING DEFECTS, both invisible to `helm install` and therefore never seen
+# on a cluster without ArgoCD. They were found by auditing the rendered manifest rather than the templates.
+#
+#   1. THE INSTALLPLAN APPROVER DEADLOCKED A FIRST SYNC. It sat at sync-wave 1, one after the Subscription
+#      at 0. ArgoCD advances only when a wave is HEALTHY, and its built-in health check for
+#      operators.coreos.com/Subscription forgives InstallPlanPending/RequiresApproval only when
+#      .status.installedCSV is already set — read from the check itself: when installedCSV is absent the
+#      condition increments numPending, and numPending > 0 returns Progressing. On a first install
+#      installedCSV is nil, so wave 0 never went healthy, wave 1 never started, and the Job that would
+#      approve the plan was waiting on the wave waiting on it. installPlanApproval defaults to Manual, so
+#      this was the DEFAULT path. An upgrade was always fine, which is why it hid. Now wave 0, matching
+#      cert-manager-venafi, which documents this exact rule and which this chart had diverged from.
+#
+#   2. TWO JOBS RAN IN THE WRONG PHASE. The OAuth extraction and LDAP CA Jobs carried a sync-wave but no
+#      argocd.argoproj.io/hook. ArgoCD does not ignore Helm hooks — per object, it uses the argocd
+#      annotation if present and otherwise falls back to that object's helm.sh/hook, mapping post-install to
+#      PostSync. Both therefore ran AFTER the whole sync rather than at wave 2, which put them after the
+#      GroupSync CRs at wave 3 that consume the Secret and CA ConfigMap they create. Verified per-resource
+#      in gitops-engine's hook.Types, not inferred from the docs, whose "all Helm hooks will be ignored"
+#      wording reads application-wide. Both now carry hook: Sync like the other three Jobs.
+#
 # 0.12.13, PATCH: EVERY `oc` CALL NOW NAMES ITS RESOURCE IN FULL. Ported from the sibling
 # openshift-rbac-automation chart, where the defect was measured rather than theorised:
 #
@@ -89,6 +110,10 @@ annotations:
   # discarded now take effect, and trustedCA.injected now wins over a custom groupSync.ca.name. Anyone
   # moving from 0.3.x or 0.4.x still needs to read them.
   artifacthub.io/changes: |
+    - kind: fixed
+      description: "ARGOCD FIRST SYNC NO LONGER DEADLOCKS. The InstallPlan approver Job moves from sync-wave 1 to sync-wave 0, the Subscription's own wave. ArgoCD advances to the next wave only when the current one is healthy, and its built-in health check for operators.coreos.com/Subscription forgives InstallPlanPending/RequiresApproval only when .status.installedCSV is already set - when it is absent the same condition increments numPending, and numPending greater than zero returns Progressing. On a FIRST install installedCSV is nil, so wave 0 stayed Progressing, wave 1 never started, and the Job that would approve the InstallPlan was waiting on the wave that was waiting on it. The Application could never converge and the Application's retry limit could not help, because every attempt deadlocked identically. installPlanApproval defaults to Manual, so this was the default path, and an UPGRADE was always fine because installedCSV is already set - which is why it stayed hidden. Plain `helm install` was never affected: post-install hooks run after the manifest is applied, ordered by hook-weight alone with no wave gating, which is why this survived on a cluster with no ArgoCD. The sibling cert-manager-venafi chart places its approver at wave 0 and documents this rule; this chart had diverged from it."
+    - kind: fixed
+      description: "THE OAUTH EXTRACTION AND LDAP CA JOBS RAN IN THE WRONG ARGOCD PHASE. Both carried argocd.argoproj.io/sync-wave 2 but no argocd.argoproj.io/hook. ArgoCD does not ignore Helm hooks - for each object individually it uses the argocd annotation when present and otherwise falls back to that object's own helm.sh/hook, mapping post-install and post-upgrade to PostSync, which runs after the ENTIRE sync rather than at the object's wave. Their sync-wave therefore ordered them against nothing but other PostSync hooks. That inverted the ordering both Jobs exist to provide: the extraction Job writes the credentials Secret and the CA Job writes the trust ConfigMap that the GroupSync CRs at wave 3 read, so under ArgoCD the CRs came up pointing at objects that did not exist yet and the operator errored until it requeued. Both now carry hook Sync with BeforeHookCreation,HookSucceeded and Replace=true, matching the three Jobs that already had them. Confirmed per-resource against gitops-engine's hook.Types rather than inferred from the ArgoCD docs, whose 'if you define any Argo CD hooks, all Helm hooks will be ignored' wording reads application-wide but is per-object in the source. Note for anyone relying on hook-weight under ArgoCD: sync-wave takes precedence and the weight is only a fallback, so the CA Job's weight-6 ordering behind the extraction Job's weight-5 is a Helm-path guarantee only - safe here because the CA copy's default destination is the Application's own destination namespace, created by CreateNamespace before any wave runs."
     - kind: removed
       description: "BEHAVIOUR: the chart no longer installs the GroupSync CRD. crds/groupsyncs.redhatcop.redhat.io.yaml is gone and OLM installs the CRD when the Subscription at wave 0 resolves, which is how every other operator here is installed - cert-manager-venafi has no crds/ directory and no CustomResourceDefinition in its templates, and neither does the namespace-configuration operator's chart. Both verified. crds/ solved the ordering problem and bought a worse one: two owners for one object. It could not be switched off, because the directory is not templated and --skip-crds is a caller flag rather than a chart property; Helm never upgrades a CRD installed from crds/, so the vendored file drifts as the operator ships new versions; and under GitOps ArgoCD renders with `helm template --include-crds`, which emits crds/ where a plain `helm template` does not, so Argo managed a CRD OLM already owned and with prune plus selfHeal could delete or revert it - a deletion that cascades to every GroupSync CR on the cluster. WHAT TO DO ON UPGRADE: nothing, if OLM installed the CRD first. Check with `oc get crd groupsyncs.redhatcop.redhat.io -o jsonpath='{.metadata.annotations.argocd\\.argoproj\\.io/tracking-id}'` - empty means Argo never took it. Non-empty means Argo owns it: annotate the CRD Prune=false before upgrading."
     - kind: added

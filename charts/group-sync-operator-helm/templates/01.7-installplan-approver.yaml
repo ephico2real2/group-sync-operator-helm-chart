@@ -79,8 +79,28 @@ metadata:
     {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
   namespace: {{ .Values.groupSync.namespace }}
   annotations:
-    # After the Subscription (0), before the readiness wait (2).
-    argocd.argoproj.io/sync-wave: "1"
+    # THE SUBSCRIPTION'S OWN WAVE, and it must not be moved later. This was "1" — "after the Subscription
+    # (0), before the readiness wait (2)" — which reads correctly and deadlocks a first ArgoCD sync.
+    #
+    # ArgoCD advances to the next wave only when the current one is HEALTHY. With installPlanApproval:
+    # Manual (the default in values.yaml) OLM stages an unapproved InstallPlan, and ArgoCD's built-in health
+    # check for operators.coreos.com/Subscription forgives InstallPlanPending/RequiresApproval ONLY when
+    # .status.installedCSV is already set. Read from the check itself, not inferred: when installedCSV is
+    # absent the same condition increments numPending, and numPending > 0 returns Progressing.
+    #
+    # On a FIRST install installedCSV is nil. So wave 0 stays Progressing until the InstallPlan is approved,
+    # and at wave 1 the Job that would approve it is waiting on the wave that is waiting on it. The
+    # Application never converges, and retry: limit 5 on the Application cannot help — every attempt
+    # deadlocks identically. An UPGRADE would have been fine, which is exactly why this hid: installedCSV is
+    # already set, the check forgives the pending plan, and wave 0 goes healthy.
+    #
+    # Same wave, and the sync progresses. The sibling cert-manager-venafi chart places its approver at wave 0
+    # for this reason and has the same Subscription wave; this chart had diverged from it.
+    #
+    # Helm is unaffected either way: post-install hooks run after the manifest is applied, ordered by
+    # hook-weight alone, with no wave gating. That is why a direct `helm install` has always worked and this
+    # never surfaced on a cluster without ArgoCD.
+    argocd.argoproj.io/sync-wave: "0"
     argocd.argoproj.io/hook: Sync
     argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
     argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true,Replace=true

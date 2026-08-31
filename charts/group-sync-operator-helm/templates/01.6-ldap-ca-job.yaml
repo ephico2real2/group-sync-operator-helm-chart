@@ -33,11 +33,25 @@ metadata:
     {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
     app.kubernetes.io/component: ldap-ca
   annotations:
+    # Sync, for the same reason as 01.5: without an argocd hook annotation ArgoCD falls back to this
+    # object's helm.sh/hook, post-install maps to PostSync, and the Job runs after the whole sync instead of
+    # at wave 2 — after the GroupSync CRs at wave 3 that need the CA ConfigMap this Job writes.
     argocd.argoproj.io/sync-wave: "2"
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true,Replace=true
     helm.sh/hook: post-install,post-upgrade
     # After the extraction Job, which is weight 5. It creates targetSecret.namespace when that is missing,
     # and the copy's destination defaults to the same namespace — so on a first install into a namespace
     # Helm did not create, running the copy first would fail on a namespace that appears moments later.
+    #
+    # THAT ORDERING IS A HELM-PATH GUARANTEE ONLY. ArgoCD reads argocd.argoproj.io/sync-wave in preference
+    # to helm.sh/hook-weight and only falls back to the weight when the wave is absent, so under ArgoCD this
+    # Job and the extraction Job share wave 2 and run concurrently. That is safe here because the namespace
+    # is not this Job's to wait for under ArgoCD: targetSecret.namespace defaults to group-sync-operator,
+    # which is the Application's own destination namespace, created by CreateNamespace=true before any wave
+    # runs. Give the copy a destination OUTSIDE the destination namespace and that stops being true —
+    # create that namespace yourself rather than relying on the weight.
     helm.sh/hook-weight: "6"
     helm.sh/hook-delete-policy: before-hook-creation
 spec:
