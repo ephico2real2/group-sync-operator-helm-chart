@@ -759,7 +759,7 @@ minutes. See [Sync schedule](#sync-schedule) for the demo-speed alternative.
 | groupSync.schedule | Sync schedule (cron format) | "*/30 * * * *" |
 | groupSync.providerName | LDAP provider name | ldap |
 | groupSync.insecure | `false` verifies the chain. A CA is required for `ldaps://` either way | false |
-| groupSync.url | LDAP server URL. **Empty by default** — supply it per cluster, or leave it out and it is derived from the OAuth CR at install time (not available to `helm template`) | `""` |
+| groupSync.url | LDAP server URL. **Empty by default** — supply it per cluster, or leave it out and it is derived from the OAuth CR at install time. **Required under ArgoCD**, which renders offline — see [the discovery section](#argocd-must-set-groupsyncurl-explicitly--a-decided-rule) | `""` |
 
 ### Multi-Tenant GroupSync Configuration
 
@@ -828,6 +828,33 @@ not be repeated. An explicit value always wins.
 The **first** LDAP provider wins, and the job logs which one it used. Note that a bare
 `identityProviders[0]` would be the first provider of any type — commonly HTPasswd — so the type
 filter matters.
+
+#### ArgoCD must set groupSync.url explicitly — a decided rule
+
+The three rows above differ in **when** they resolve, and that difference is the whole story under
+GitOps. The bindDN and sourceSecret name are read by the extraction **Job at runtime**, inside the
+cluster, so they stay hands-free everywhere — ArgoCD included. `groupSync.url` is the exception: it
+must be a literal in the GroupSync CR (the CRD's `providers[].ldap.url` is a required plain string,
+no indirection), so it resolves at **render time** via `lookup` — and ArgoCD's repo-server renders
+with an offline `helm template`, where `lookup` returns nothing by construction. The repo-server
+holds no cluster credentials, deliberately: it renders for any destination cluster, so a render for
+cluster B could never read cluster B's OAuth CR anyway. This is ArgoCD's architecture, not a chart
+limitation that a future version can remove.
+
+What happens in each path — both measured, not inferred:
+
+| Deployment path | `groupSync.url` | Result |
+|---|---|---|
+| `helm install` / `upgrade` | may be empty | derived from the OAuth CR — verified by a full reinstall with `test-discovery-values.yaml`, which omits it |
+| ArgoCD / ApplicationSet | **required** in the per-cluster values file (or a Helm parameter) | renders and syncs normally |
+| ArgoCD with it empty | — | the Application fails at render with `ComparisonError`: *"groupSync.url is empty and no LDAP url could be derived"* — the chart's guard, refusing to emit a CR with no url. Nothing partially applies |
+
+Keeping the url in the per-cluster values file was chosen deliberately over the alternatives: a
+runtime-discovery hook Job would have to apply the GroupSync CRs imperatively, taking the chart's
+core deliverable out of Argo's management (no drift detection, prune, or selfHeal on it); and under
+GitOps the url is per-cluster *configuration*, whose declared home is per-cluster config — a value
+silently read from whatever the live OAuth CR happens to say is hidden input, the opposite of
+declarative.
 
 ### Subscription Configuration
 

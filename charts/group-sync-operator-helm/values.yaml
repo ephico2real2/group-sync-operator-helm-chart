@@ -122,10 +122,25 @@ groupSync:
   # basedn and query in an OAuth LDAP url describe authentication, not group sync. An explicit value
   # always wins, so this cannot silently repoint an existing install.
   #
-  # CAUTION — deriving needs a LIVE cluster. It uses `lookup`, which works for helm install and
-  # upgrade but returns nothing for `helm template`, `--dry-run`, and offline GitOps renders such as
-  # ArgoCD. The render FAILS there rather than emitting a GroupSync with no url, so set this
-  # explicitly if you use any of them.
+  # ArgoCD DEPLOYMENTS MUST SET THIS — a decided rule, not a caveat. Discovery uses `lookup`, which
+  # reads the LIVE cluster: it works for `helm install` and `helm upgrade` (measured — a full
+  # reinstall with test-discovery-values.yaml, which omits the url, landed the derived value on every
+  # CR), but ArgoCD's repo-server renders with an offline `helm template`, where lookup returns
+  # nothing by construction — the repo-server holds no cluster credentials, deliberately, since it
+  # renders for any destination cluster. The same applies to `helm template` and client-side
+  # `--dry-run` anywhere. In all of those the render FAILS with this chart's guard ("no LDAP url
+  # could be derived") rather than emitting a GroupSync with an empty url.
+  #
+  # So the rule is by deployment path, not by cluster:
+  #   direct helm install/upgrade   url optional — discovered from the OAuth CR
+  #   ArgoCD / ApplicationSet       url REQUIRED in the values file (or a Helm parameter) per cluster
+  #
+  # This was chosen over runtime discovery (a hook Job applying the CRs imperatively would take them
+  # out of Argo's management — no drift detection, prune or selfHeal on the chart's core deliverable)
+  # and over injecting it from the ApplicationSet generator. The url is per-cluster configuration,
+  # and under GitOps its declared home is the per-cluster values file. The CRD offers no indirection
+  # either way: providers[].ldap.url is a required literal string, so the value must exist at render
+  # time.
   #
   # Changing the host or port after groups exist needs care either way: the operator compares
   # openshift.io/ldap.url on each Group against host:port and refuses to adopt a mismatch
