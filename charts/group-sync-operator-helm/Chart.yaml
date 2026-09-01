@@ -2,6 +2,15 @@ apiVersion: v2
 name: group-sync-operator-helm
 description: A Helm chart to deploy the GroupSync Operator and its configuration for LDAP synchronization in OpenShift
 type: application
+# 0.13.1, PATCH: adds test-discovery-values.yaml — crc-values.yaml WITHOUT groupSync.url, proving the
+# hands-free url discovery still works end to end. Measured on CRC against the released 0.13.0: a full
+# uninstall (CSV deleted) and reinstall with this file put the OAuth-CR-derived url
+# (ldaps://openldap-service...:636, stripped to scheme://host:port) on all three live GroupSync CRs, the
+# operator reached Succeeded, both helm test suites passed, and 66 Groups / 87 members were untouched. The
+# file carries the requires-cluster marker because `lookup` reads the live cluster only — offline renders
+# (helm template, client --dry-run, ArgoCD's repo-server) fail with the chart's own guard, which is the
+# guard working, not discovery being broken. No template changed.
+#
 # 0.13.0, MINOR: THE CHART NO LONGER INSTALLS THE GroupSync CRD. crds/ is gone; OLM installs the CRD when
 # the Subscription resolves, which is how every other operator in this estate is installed —
 # cert-manager-venafi has no crds/ directory and no CustomResourceDefinition in its templates, and neither
@@ -94,7 +103,7 @@ type: application
 # groupsyncs.redhatcop.redhat.io (3 live CRs) and lists/patches groups.user.openshift.io (64 of 66 Groups
 # carry the provenance label); the approver SA reads subscriptions.operators.coreos.com; the wait SA reads
 # both. Each is denied the verbs it does not need, so the scoping survived the rename.
-version: 0.13.0
+version: 0.13.1
 appVersion: "1.1"
 home: https://github.com/ephico2real2/group-sync-operator-helm-chart
 icon: https://raw.githubusercontent.com/redhat-cop/group-sync-operator/master/assets/logo.png
@@ -121,6 +130,8 @@ annotations:
   # discarded now take effect, and trustedCA.injected now wins over a custom groupSync.ca.name. Anyone
   # moving from 0.3.x or 0.4.x still needs to read them.
   artifacthub.io/changes: |
+    - kind: added
+      description: "test-discovery-values.yaml: crc-values.yaml without groupSync.url, the hands-free discovery test. Installing with it proves the chart derives scheme://host:port from the cluster OAuth CR's LDAP identity provider via `lookup` - measured on CRC against released 0.13.0, where a full uninstall and reinstall with this file landed the derived url on all three live GroupSync CRs, the operator reached Succeeded, both test suites passed and 66 Groups were untouched. It carries the requires-cluster marker: lookup reads the LIVE cluster only, so the file can never render offline - helm template, client-side --dry-run and ArgoCD's repo-server all fail with the chart's own guard message, which is the guard working as designed rather than discovery being broken, and CI asserts exactly that failure. A GitOps values file must therefore always set groupSync.url; a direct helm install never needs to. No template changed in this release."
     - kind: fixed
       description: "EVERY GROUPSYNC CR NOW CARRIES argocd.argoproj.io/sync-options SkipDryRunOnMissingResource=true - without it the FIRST ArgoCD sync fails outright now that the CRD has left the manifest. ArgoCD dry-runs every resource before applying anything, and a dry-run against a kind the cluster does not serve yet fails with 'the server could not find the requested resource' - which fails the whole sync, not just that document. A first sync is exactly that shape since this release: the GroupSync CRD is not in the rendered source, it arrives mid-sync when OLM resolves the Subscription at wave 0, and the CRs sit at wave 3. Ported verbatim from the sibling namespace-configuration-operator chart, whose NamespaceConfig/GroupConfig policy CRs are in the identical position and have carried the identical annotation all along - this chart had simply not been aligned with it. The annotation does not weaken validation once the operator is installed (ArgoCD still dry-runs the document whenever the CRD is present, so a malformed spec is still caught before apply on every sync after the first), and it does not help plain `helm install`, which resolves kinds before applying and has no equivalent escape - that path is what crd.install exists for. Applied to the primary CR and to every customGroupSyncs item."
     - kind: added
