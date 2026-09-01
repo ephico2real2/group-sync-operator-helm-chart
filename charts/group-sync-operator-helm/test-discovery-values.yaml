@@ -1,0 +1,42 @@
+# requires-cluster: true
+#
+# crc-values.yaml WITHOUT groupSync.url — the hands-free discovery test. Everything the chart cannot
+# read from the cluster is still set here (bindDN, source secret, tenants); the LDAP url deliberately
+# is NOT. Installing with this file proves the chart derives scheme://host:port from the cluster
+# OAuth CR's LDAP identity provider via `lookup`, exactly as designed.
+#
+#   helm install group-sync charts/group-sync-operator-helm -n group-sync-operator --create-namespace \
+#     -f charts/group-sync-operator-helm/test-discovery-values.yaml
+#
+# The requires-cluster marker is load-bearing: `lookup` reads the LIVE cluster only, so this file can
+# never render offline — `helm template` and client-side --dry-run fail with the chart's own guard,
+# "groupSync.url is empty and no LDAP url could be derived". That failure is the guard working, not
+# discovery being broken; CI expects it, the same way it does for fork-catalog-values.yaml. Under
+# ArgoCD the repo-server renders offline too, so a GitOps values file must always set the url.
+
+oauthSecretExtraction:
+  bindDN: "cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com"
+  sourceSecret:
+    name: ldap-secret
+
+customGroupSyncs:
+  enabled: true
+  items:
+    - name: bdp-oud-group-rbac-groupsync
+      enabled: true
+      groupCn: "bda-rbac-*"
+      schedule: "0 * * * *"
+      previousNames: ["bda-rbac-groupsync"]
+    - name: autobahnusers-onboarding-groupsync
+      enabled: true
+      groupCn: "app-ssb-autobahnusers"
+      schedule: "0 */2 * * *"
+      previousNames: ["ldap-clusteraccess-groupsync"]
+      objectClass: ["groupOfNames", "groupOfUniqueNames"]
+      groupMembershipAttributes: ["member", "uniqueMember"]
+
+subscription:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 100Mi
