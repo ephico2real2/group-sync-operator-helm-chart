@@ -1,0 +1,887 @@
+# manual-test-users.yaml — the OpenShift users that exist only because someone created them by hand.
+#
+# Measured 2026-09-18: the cluster holds 52 users whose identity provider is NOT in the OAuth configuration
+# (`ceo_rnd_oim`, 49; `my-provider`, 2; one with no identity at all). They cannot be recreated by logging
+# in, because there is nothing to log in to — they are User and Identity objects written directly, which is
+# how a test population is made without standing up a provider for it. A rebuilt cluster has none of them,
+# and nothing in any chart or script creates them.
+#
+# Apply with `oc apply -f manual-test-users.yaml`, then repair the back-reference, because an Identity's
+# `user.uid` must match the User object the API server just assigned:
+#
+#   for u in $(oc get users -o name | sed 's#user.user.openshift.io/##'); do
+#     uid=$(oc get user "$u" -o jsonpath='{.metadata.uid}')
+#     for i in $(oc get identity -o json | jq -r --arg u "$u" '.items[]|select(.user.name==$u)|.metadata.name'); do
+#       oc patch identity "$i" --type=merge -p "{\"user\":{\"name\":\"$u\",\"uid\":\"$uid\"}}"
+#     done
+#   done
+#
+# `test-python-user` is deliberately absent: it carries a bare UUID identity with no provider prefix, so
+# there is nothing to reconstruct it from. Recreate it with whatever script made it, or drop it.
+
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-002
+identities:
+- ceo_rnd_oim:test-user-002
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-002
+providerName: ceo_rnd_oim
+providerUserName: test-user-002
+user:
+  name: test-user-002
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-003
+identities:
+- ceo_rnd_oim:test-user-003
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-003
+providerName: ceo_rnd_oim
+providerUserName: test-user-003
+user:
+  name: test-user-003
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-004
+identities:
+- ceo_rnd_oim:test-user-004
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-004
+providerName: ceo_rnd_oim
+providerUserName: test-user-004
+user:
+  name: test-user-004
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-005
+identities:
+- ceo_rnd_oim:test-user-005
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-005
+providerName: ceo_rnd_oim
+providerUserName: test-user-005
+user:
+  name: test-user-005
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-006
+identities:
+- ceo_rnd_oim:test-user-006
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-006
+providerName: ceo_rnd_oim
+providerUserName: test-user-006
+user:
+  name: test-user-006
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-007
+identities:
+- ceo_rnd_oim:test-user-007
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-007
+providerName: ceo_rnd_oim
+providerUserName: test-user-007
+user:
+  name: test-user-007
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-008
+identities:
+- ceo_rnd_oim:test-user-008
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-008
+providerName: ceo_rnd_oim
+providerUserName: test-user-008
+user:
+  name: test-user-008
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-009
+identities:
+- ceo_rnd_oim:test-user-009
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-009
+providerName: ceo_rnd_oim
+providerUserName: test-user-009
+user:
+  name: test-user-009
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-010
+identities:
+- ceo_rnd_oim:test-user-010
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-010
+providerName: ceo_rnd_oim
+providerUserName: test-user-010
+user:
+  name: test-user-010
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-011
+identities:
+- ceo_rnd_oim:test-user-011
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-011
+providerName: ceo_rnd_oim
+providerUserName: test-user-011
+user:
+  name: test-user-011
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-012
+identities:
+- ceo_rnd_oim:test-user-012
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-012
+providerName: ceo_rnd_oim
+providerUserName: test-user-012
+user:
+  name: test-user-012
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-013
+identities:
+- ceo_rnd_oim:test-user-013
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-013
+providerName: ceo_rnd_oim
+providerUserName: test-user-013
+user:
+  name: test-user-013
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-014
+identities:
+- ceo_rnd_oim:test-user-014
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-014
+providerName: ceo_rnd_oim
+providerUserName: test-user-014
+user:
+  name: test-user-014
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-015
+identities:
+- ceo_rnd_oim:test-user-015
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-015
+providerName: ceo_rnd_oim
+providerUserName: test-user-015
+user:
+  name: test-user-015
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-016
+identities:
+- ceo_rnd_oim:test-user-016
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-016
+providerName: ceo_rnd_oim
+providerUserName: test-user-016
+user:
+  name: test-user-016
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-017
+identities:
+- ceo_rnd_oim:test-user-017
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-017
+providerName: ceo_rnd_oim
+providerUserName: test-user-017
+user:
+  name: test-user-017
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-018
+identities:
+- ceo_rnd_oim:test-user-018
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-018
+providerName: ceo_rnd_oim
+providerUserName: test-user-018
+user:
+  name: test-user-018
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-019
+identities:
+- ceo_rnd_oim:test-user-019
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-019
+providerName: ceo_rnd_oim
+providerUserName: test-user-019
+user:
+  name: test-user-019
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-020
+identities:
+- ceo_rnd_oim:test-user-020
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-020
+providerName: ceo_rnd_oim
+providerUserName: test-user-020
+user:
+  name: test-user-020
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-021
+identities:
+- ceo_rnd_oim:test-user-021
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-021
+providerName: ceo_rnd_oim
+providerUserName: test-user-021
+user:
+  name: test-user-021
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-022
+identities:
+- ceo_rnd_oim:test-user-022
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-022
+providerName: ceo_rnd_oim
+providerUserName: test-user-022
+user:
+  name: test-user-022
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-023
+identities:
+- ceo_rnd_oim:test-user-023
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-023
+providerName: ceo_rnd_oim
+providerUserName: test-user-023
+user:
+  name: test-user-023
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-024
+identities:
+- ceo_rnd_oim:test-user-024
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-024
+providerName: ceo_rnd_oim
+providerUserName: test-user-024
+user:
+  name: test-user-024
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-025
+identities:
+- ceo_rnd_oim:test-user-025
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-025
+providerName: ceo_rnd_oim
+providerUserName: test-user-025
+user:
+  name: test-user-025
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-026
+identities:
+- ceo_rnd_oim:test-user-026
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-026
+providerName: ceo_rnd_oim
+providerUserName: test-user-026
+user:
+  name: test-user-026
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-027
+identities:
+- ceo_rnd_oim:test-user-027
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-027
+providerName: ceo_rnd_oim
+providerUserName: test-user-027
+user:
+  name: test-user-027
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-028
+identities:
+- ceo_rnd_oim:test-user-028
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-028
+providerName: ceo_rnd_oim
+providerUserName: test-user-028
+user:
+  name: test-user-028
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-029
+identities:
+- ceo_rnd_oim:test-user-029
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-029
+providerName: ceo_rnd_oim
+providerUserName: test-user-029
+user:
+  name: test-user-029
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-030
+identities:
+- ceo_rnd_oim:test-user-030
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-030
+providerName: ceo_rnd_oim
+providerUserName: test-user-030
+user:
+  name: test-user-030
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-031
+identities:
+- ceo_rnd_oim:test-user-031
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-031
+providerName: ceo_rnd_oim
+providerUserName: test-user-031
+user:
+  name: test-user-031
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-032
+identities:
+- ceo_rnd_oim:test-user-032
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-032
+providerName: ceo_rnd_oim
+providerUserName: test-user-032
+user:
+  name: test-user-032
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-033
+identities:
+- ceo_rnd_oim:test-user-033
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-033
+providerName: ceo_rnd_oim
+providerUserName: test-user-033
+user:
+  name: test-user-033
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-034
+identities:
+- ceo_rnd_oim:test-user-034
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-034
+providerName: ceo_rnd_oim
+providerUserName: test-user-034
+user:
+  name: test-user-034
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-035
+identities:
+- ceo_rnd_oim:test-user-035
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-035
+providerName: ceo_rnd_oim
+providerUserName: test-user-035
+user:
+  name: test-user-035
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-036
+identities:
+- ceo_rnd_oim:test-user-036
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-036
+providerName: ceo_rnd_oim
+providerUserName: test-user-036
+user:
+  name: test-user-036
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-037
+identities:
+- ceo_rnd_oim:test-user-037
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-037
+providerName: ceo_rnd_oim
+providerUserName: test-user-037
+user:
+  name: test-user-037
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-038
+identities:
+- ceo_rnd_oim:test-user-038
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-038
+providerName: ceo_rnd_oim
+providerUserName: test-user-038
+user:
+  name: test-user-038
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-039
+identities:
+- ceo_rnd_oim:test-user-039
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-039
+providerName: ceo_rnd_oim
+providerUserName: test-user-039
+user:
+  name: test-user-039
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-040
+identities:
+- ceo_rnd_oim:test-user-040
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-040
+providerName: ceo_rnd_oim
+providerUserName: test-user-040
+user:
+  name: test-user-040
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-041
+identities:
+- ceo_rnd_oim:test-user-041
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-041
+providerName: ceo_rnd_oim
+providerUserName: test-user-041
+user:
+  name: test-user-041
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-042
+identities:
+- ceo_rnd_oim:test-user-042
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-042
+providerName: ceo_rnd_oim
+providerUserName: test-user-042
+user:
+  name: test-user-042
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-043
+identities:
+- ceo_rnd_oim:test-user-043
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-043
+providerName: ceo_rnd_oim
+providerUserName: test-user-043
+user:
+  name: test-user-043
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-044
+identities:
+- ceo_rnd_oim:test-user-044
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-044
+providerName: ceo_rnd_oim
+providerUserName: test-user-044
+user:
+  name: test-user-044
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-045
+identities:
+- ceo_rnd_oim:test-user-045
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-045
+providerName: ceo_rnd_oim
+providerUserName: test-user-045
+user:
+  name: test-user-045
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-046
+identities:
+- ceo_rnd_oim:test-user-046
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-046
+providerName: ceo_rnd_oim
+providerUserName: test-user-046
+user:
+  name: test-user-046
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-047
+identities:
+- ceo_rnd_oim:test-user-047
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-047
+providerName: ceo_rnd_oim
+providerUserName: test-user-047
+user:
+  name: test-user-047
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-048
+identities:
+- ceo_rnd_oim:test-user-048
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-048
+providerName: ceo_rnd_oim
+providerUserName: test-user-048
+user:
+  name: test-user-048
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-049
+identities:
+- ceo_rnd_oim:test-user-049
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-049
+providerName: ceo_rnd_oim
+providerUserName: test-user-049
+user:
+  name: test-user-049
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: test-user-050
+identities:
+- ceo_rnd_oim:test-user-050
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: ceo_rnd_oim:test-user-050
+providerName: ceo_rnd_oim
+providerUserName: test-user-050
+user:
+  name: test-user-050
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: user1
+identities:
+- my-provider:user1
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: my-provider:user1
+providerName: my-provider
+providerUserName: user1
+user:
+  name: user1
+  uid: PLACEHOLDER
+---
+apiVersion: user.openshift.io/v1
+kind: User
+metadata:
+  name: user2
+identities:
+- my-provider:user2
+---
+apiVersion: user.openshift.io/v1
+kind: Identity
+metadata:
+  name: my-provider:user2
+providerName: my-provider
+providerUserName: user2
+user:
+  name: user2
+  uid: PLACEHOLDER
