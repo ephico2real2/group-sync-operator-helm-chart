@@ -26,6 +26,26 @@ Everything else with an SCC binding on this cluster is an OpenShift default (`re
 `system:authenticated`, `hostnetwork-v2` for the network node identity, `anyuid` for the machine-os
 builder) and comes back with the cluster.
 
+### Where Kyverno and its policies come from
+
+The policies live in the `openshift-rbac-automation` repository, under `working-sessions/policies/` —
+seven `kyverno-*.yaml` policies plus `vap-protect-kyverno-configuration.yaml`, a ValidatingAdmissionPolicy.
+They are applied from that folder by hand; the chart at `charts/openshift-rbac-automation` renders none of
+them, and its `templates/` directory contains no Kyverno resource.
+
+Two points that folder records about itself, because they change what a rebuild should apply:
+
+- `Chart.yaml` names `working-sessions/policies/kyverno-namespace-oud-group.yaml` as a follow-up
+  "outside this chart". It is audit-only, so nothing blocks while it is missing.
+- `values.yaml` records that `replace-operator-image-to-dockerhub` and `inject-dockerhub-secret` were
+  **deliberately deleted** and replaced by the chart's image-override Job plus its `reconcile` CronJob.
+  They are kept only as backups in `docs/local-testing/kyverno-backup/`. Re-applying either would fight
+  the Job, mutating the Deployment back to `docker.io` at admission. Do not restore them.
+
+The SCC grant above is a separate matter and is still in no manifest: searched the whole
+`openshift-rbac-automation` repository for `anyuid`, `SecurityContextConstraints` and
+`system:openshift:scc` and it holds none of them.
+
 ## 2. The six LDAP people and eighteen groups that no seed creates
 
 The directory holds **84** entries; every `*.ldif` in `setup-local-ldap-testing/` together creates **65**.
