@@ -54,3 +54,10 @@ __pycache__/
 
 # Personal session notes — working state, not shipped content. Same convention as the sibling repos.
 RESUME.md
+
+# The LDAP lab's static demo CA. 10-setup-oauth-secrets.sh regenerates this pair whenever it is
+# absent, so it never needed committing — and the lab no longer uses it: the LDAP server mounts the
+# cert-manager leaf `openldap-certmanager-tls`, and the OAuth identity provider reads `ca-config-map`,
+# which 15-bootstrap-cert-manager-ca.sh creates. Keep it out of git.
+setup-local-ldap-testing/ca-cert.pem
+setup-local-ldap-testing/ca-key.pem

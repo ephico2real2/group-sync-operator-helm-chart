@@ -47,7 +47,7 @@ it carries that name. Edit the source and run `helm upgrade`.
 
 | File | Description |
 |------|-------------|
-| `10-setup-oauth-secrets.sh` | Creates the source OAuth secret and a demo CA |
+| `10-setup-oauth-secrets.sh` | Creates the source OAuth secret and a demo CA. The CA is **generated on first run**, not committed — `ca-cert.pem` / `ca-key.pem` are gitignored. It feeds `ca-config-map-test`, which the LDAPS path does not use; the serving chain comes from `15-bootstrap-cert-manager-ca.sh` |
 | `15-bootstrap-cert-manager-ca.sh` | **LDAPS only**: `apply` builds the cert-manager PKI and serving certificate — must run BEFORE the server manifest. `verify` proves the chain from inside the cluster. `trust-cluster` publishes the root to `proxy/cluster.spec.trustedCA` for the injected path |
 | `20-import-ldap-data.sh` | Imports the RBAC groups and test users |
 | `30-manage-ldap-server.sh` | Server lifecycle: deploy, test, restart, logs |
