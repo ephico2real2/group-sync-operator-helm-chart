@@ -16,9 +16,29 @@ PYTHON="${PYTHON:-python3}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# A FAILED ASSERTION MUST SAY WHICH ONE AND SHOW WHAT IT JUDGED. Under set -e the script used to stop at the
+# first false test with no output of its own, and the EXIT trap had already deleted the logs — CI showed a
+# bare exit 1 (measured on the pre-fix tree: "rc=1" and nothing else). The ERR trap runs before the EXIT
+# trap, while the logs still exist. Not set -E: the trap must not fire inside the $(...) substitutions.
+diagnose() {
+  echo "::error::hook-scripts-harness: assertion failed at line $1: $2" >&2
+  for f in "$TMP"/*.log; do
+    [ -f "$f" ] || continue
+    echo "--- $(basename "$f") ---" >&2
+    sed 's/^/    /' "$f" >&2
+  done
+}
+trap 'diagnose "$LINENO" "$BASH_COMMAND"' ERR
+
+# waitSeconds=5, NOT 1. The deadline case must reach the approver's post-loop report (the C6 fix), and the
+# pre-fix script has to fail it EVERY time to be a regression guard. With waitSeconds=1 the pre-fix loop's
+# first out_of_time check could already be past a DEADLINE of now+1 whenever the script started in the last
+# ~100 ms of a wall-clock second (date +%s granularity) — it then took its in-loop report branch and passed
+# the assertions below by accident (measured: 3 of 6 boundary-timed runs). At 5 the check is never past the
+# deadline on the first attempt, and both scripts still sleep once, so the run costs the same 5 s.
 helm template regression "$CHART" \
   -f "$CHART/crc-values.yaml" \
-  --set installPlanApprover.waitSeconds=1 >"$TMP/rendered.yaml"
+  --set installPlanApprover.waitSeconds=5 >"$TMP/rendered.yaml"
 
 "$PYTHON" - "$TMP/rendered.yaml" "$TMP" <<'PY'
 import pathlib
@@ -92,11 +112,11 @@ fi
 OC
 chmod +x "$TMP/bin/oc"
 
-set +e
+# The approver is EXPECTED to exit 1 here; `|| deadline_rc=$?` keeps that from being an errexit or an
+# ERR-trap event of its own.
+deadline_rc=0
 MODE=deadline OC_CALLS="$TMP/deadline.calls" PATH="$TMP/bin:$PATH" \
-  bash "$TMP/approver.sh" >"$TMP/deadline.log" 2>&1
-deadline_rc=$?
-set -e
+  bash "$TMP/approver.sh" >"$TMP/deadline.log" 2>&1 || deadline_rc=$?
 
 test "$deadline_rc" -eq 1
 grep -q 'OLM cannot resolve subscription' "$TMP/deadline.log"

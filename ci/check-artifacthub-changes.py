@@ -22,4 +22,10 @@ if not isinstance(entries, list) or not entries:
 bad = [i for i, e in enumerate(entries, 1) if not (isinstance(e, dict) and set(e) == {"kind", "description"})]
 if bad:
     sys.exit(f"::error::{chart}: artifacthub.io/changes entries without exactly kind+description: {bad}")
+# The six kinds Artifact Hub documents; anything else (a typo like `fixd`) is rejected by its schema and
+# the entry is dropped. Found by the second review pass: the first version of this check let it through.
+KINDS = {"added", "changed", "deprecated", "removed", "fixed", "security"}
+wrong = [(i, e["kind"]) for i, e in enumerate(entries, 1) if e["kind"] not in KINDS]
+if wrong:
+    sys.exit(f"::error::{chart}: artifacthub.io/changes kind not in {sorted(KINDS)}: {wrong}")
 print(f"ok  artifacthub.io/changes: {len(entries)} entries parse")

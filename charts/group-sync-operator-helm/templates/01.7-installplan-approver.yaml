@@ -170,7 +170,7 @@ spec:
               csv_phase() {
                 oc get clusterserviceversions.operators.coreos.com -n "$NAMESPACE" --ignore-not-found=true \
                    -o jsonpath='{range .items[*]}{.metadata.name}{"|"}{.status.phase}{"\n"}{end}' \
-                  | grep "^${SUBSCRIPTION}\." | head -1
+                  | grep "^${SUBSCRIPTION}\.v" | head -1
               }
 
               # ---- Wait for a plan, OR for the operator to be installed without one ---------
@@ -202,8 +202,12 @@ spec:
                     echo "  An orphaned ClusterServiceVersion is blocking it. helm uninstall removes the" >&2
                     echo "  Subscription and OLM leaves the CSV behind, which a new Subscription cannot" >&2
                     echo "  resolve against. Remove it and reinstall:" >&2
+                    # Anchored on "/<package>.v" like every other match in this chart: `-o name` prints
+                    # <type>/<name>, so "/" pins the start of the name. Unanchored, this printed an
+                    # `oc delete` for other-<package>.v1 and <package>.1.2.3 — names the reclaim would never
+                    # treat as this package — as the remedy a human is told to run.
                     oc get clusterserviceversions.operators.coreos.com -n "$NAMESPACE" --ignore-not-found=true -o name 2>/dev/null \
-                      | grep "${SUBSCRIPTION}\." | sed "s|^|    oc delete -n ${NAMESPACE} |" >&2 ;;
+                      | grep "/${SUBSCRIPTION}\.v" | sed "s|^|    oc delete -n ${NAMESPACE} |" >&2 ;;
                 esac
                 exit 1
               }

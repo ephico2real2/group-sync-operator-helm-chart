@@ -106,5 +106,29 @@ Three claims refuted by measurement (C6, C7's whole-block parse, C10's mechanism
 that outrank them (OB3's settled-orphan early exit, Codex's substring package match). Five fixes applied, one
 snippet rejected with the reason. Re-validated: `helm lint`; url-guard, check-ordering, qualified-resources;
 the 20-combination render matrix; the two new CI checks; OB3's 16-case harness on the fixed scripts (every
-case as specified, `c6e` now approves); the live cluster uninstall → settled orphan → install. Second pass on
-the fixed head: pending.
+case as specified, `c6e` now approves); the live cluster uninstall → settled orphan → install (the orphan `Failed/NoOperatorGroup` for ten
+minutes; reclaim waited through OLM's retry, deleted at +10 s, approver approved `install-rvf4d`).
+
+## Second pass, on `6070b06` (2026-09-19, OB3 at `effort: max`)
+
+Same three reviewers, an eight-claim brief attacking each accepted fix and what the first pass did not name.
+**Nothing refuted.** OB3 drove 27 cases through its stateful fake `oc`, instant and at 0.5 s latency: the
+settled orphan now waits and approves (`c1a`, 1 patch); the deadline reports OLM's verdict on both timings;
+the reclaim-disabled path is byte-identical to `main` over five states; `continue 2`, the settle bound
+(≤ `WAIT_SECONDS` + one interval + one call) and the label key (the verbatim Kubernetes validator, offline) all
+hold. Codex measured the same on its harness and the twice-in-a-row reinstall sequence (one delete per run).
+Cursor confirmed the loop exits and the label key by trace.
+
+Volunteered and accepted, with their tests: **OB3 N1** — the approver's *remedy* grep and `csv_phase` were
+not anchored on `.v`, so the FAILED message ended with `oc delete` lines for `other-<package>.v1` and
+`<package>.1.2.3`; anchored on `/<package>.v` and `^<package>.v`. **OB3 N2** — the new CI harness rendered
+the deadline case with `waitSeconds=1`, which the *buggy* approver satisfied on 3–4 of 6 boundary-timed
+starts (`date +%s` granularity), and a failing run printed nothing: `waitSeconds=5` (0 of 6) and an ERR trap
+that names the assertion and prints the judged log. **Codex** — the changes checker did not validate `kind`;
+the six Artifact Hub kinds are enforced (a `fixd` typo fails).
+
+Rejected: Codex's C3 — a mirrored catalog that aliases the *package* name without renaming the bundle's CSVs
+would leave the reclaim inert. True, pre-existing and chart-wide: the approver has anchored on
+`<subscription.name>.v` since before this PR, so such a rename already failed the install on `main`, and
+`values.yaml`'s comment promising the rename is what is wrong. A `csvNamePrefix` value across three Jobs is
+a design change; recorded as a follow-up issue instead.
