@@ -134,6 +134,10 @@ spec:
               # max 1: see the operator-wait Job. Below 5, integer division gives 0 and `seq 1 0` is empty.
               ATTEMPTS={{ max 1 (div .Values.installPlanApprover.waitSeconds 5) }}
               INTERVAL=5
+              # Whether the csv-reclaim hook is in this release: decides if ResolutionFailed is waited on
+              # (the reclaim will clear an orphan) or reported at once (nothing will). Templated as a
+              # literal so the script reads the chart's decision, not a value that could be misspelled.
+              RECLAIM_ENABLED={{ .Values.csvReclaim.enabled | quote }}
 
               # ONE budget for both loops. ATTEMPTS is computed once and used twice, so each wait used to
               # get the full waitSeconds while activeDeadlineSeconds allows waitSeconds + 120 — the kubelet
@@ -196,6 +200,19 @@ spec:
                   exit 0
                 fi
                 RES="$(resolution_failure)"
+                if [ "${RES%%|*}" = "True" ] && [ "${RECLAIM_ENABLED}" = "true" ] && ! out_of_time; then
+                  # THE RECLAIM JOB IS CLEARING THIS. Under plain Helm the csv-reclaim hook (weight -2) has
+                  # already run by the time this Job starts, but under ArgoCD both sit at sync-wave 0 — the
+                  # Subscription's wave, which the approver cannot leave — and Argo runs a wave's hooks
+                  # concurrently, so this Job can read ResolutionFailed while the reclaim is still confirming
+                  # the orphan. Measured 2026-09-18 on CRC: the approver failed at once, the reclaim deleted
+                  # the CSV seconds later, and the install only recovered on Argo's retried sync. So while the
+                  # reclaim is enabled, ResolutionFailed is a state that is about to change: keep waiting
+                  # inside the budget and let OLM re-resolve. Only at the deadline is it reported as final.
+                  log "attempt ${i}/${ATTEMPTS}: ResolutionFailed — the csv-reclaim Job clears an orphaned CSV in this state; waiting for OLM to re-resolve"
+                  sleep "$INTERVAL"
+                  continue
+                fi
                 if [ "${RES%%|*}" = "True" ]; then
                   echo "[installplan-approver] FAILED: OLM cannot resolve subscription ${SUBSCRIPTION}, so no InstallPlan will ever be staged." >&2
                   echo "  ${RES#*|}" >&2
