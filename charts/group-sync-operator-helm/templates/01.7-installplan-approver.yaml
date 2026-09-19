@@ -190,14 +190,48 @@ spec:
                   2>/dev/null
               }
 
+              # OLM's verdict, reported once with its remedy, then exit 1. Called from inside the loop when
+              # the reclaim is disabled (nothing will clear it) and after the loop when the budget ran out
+              # while it was being waited on. One function, so both exits leave the same diagnosis.
+              report_resolution_failure() {
+                echo "[installplan-approver] FAILED: OLM cannot resolve subscription ${SUBSCRIPTION}, so no InstallPlan will ever be staged." >&2
+                echo "  ${1#*|}" >&2
+                case "$1" in
+                  *"is not referenced by a subscription"*)
+                    echo "" >&2
+                    echo "  An orphaned ClusterServiceVersion is blocking it. helm uninstall removes the" >&2
+                    echo "  Subscription and OLM leaves the CSV behind, which a new Subscription cannot" >&2
+                    echo "  resolve against. Remove it and reinstall:" >&2
+                    oc get clusterserviceversions.operators.coreos.com -n "$NAMESPACE" --ignore-not-found=true -o name 2>/dev/null \
+                      | grep "${SUBSCRIPTION}\." | sed "s|^|    oc delete -n ${NAMESPACE} |" >&2 ;;
+                esac
+                exit 1
+              }
+              installed_csv() {
+                oc get subscriptions.operators.coreos.com "$SUBSCRIPTION" -n "$NAMESPACE" --ignore-not-found=true \
+                   -o jsonpath='{.status.installedCSV}' 2>/dev/null
+              }
+
               log "waiting for an InstallPlan for ${SUBSCRIPTION}, or for its CSV to be Succeeded"
+              RES=""
               for i in $(seq 1 "$ATTEMPTS"); do
                 PLAN="$(plan_ref)"
                 [ -n "$PLAN" ] && { log "subscription references InstallPlan ${PLAN}"; break; }
                 CSV="$(csv_phase)"
                 if [ "${CSV#*|}" = "Succeeded" ]; then
-                  log "${CSV%|*} is Succeeded and no InstallPlan is pending — nothing to approve"
-                  exit 0
+                  # A SUCCEEDED CSV IS "NOTHING TO APPROVE" ONLY IF OLM REPORTS IT AS THIS SUBSCRIPTION'S
+                  # installedCSV. An orphan is exactly a Succeeded CSV no Subscription references, and with
+                  # the reclaim enabled that CSV is about to be deleted, after which OLM stages a plan that
+                  # needs approving. Exiting 0 here on the orphan (measured with the fake-oc harness: exit 0
+                  # in 0.1 s, no patch ever issued) leaves that plan unapproved — under Argo CD both hooks
+                  # share wave 0, so this Job reads the settled orphan before the reclaim has acted. Without
+                  # the reclaim the old behaviour stands: the orphan's operator is running and nothing will
+                  # change that, so there is nothing to wait for.
+                  if [ "${RECLAIM_ENABLED}" != "true" ] || [ "$(installed_csv)" = "${CSV%|*}" ]; then
+                    log "${CSV%|*} is Succeeded and no InstallPlan is pending — nothing to approve"
+                    exit 0
+                  fi
+                  log "attempt ${i}/${ATTEMPTS}: ${CSV%|*} is Succeeded but no Subscription reports it as installedCSV — an orphan the csv-reclaim Job will clear; waiting for the plan that follows"
                 fi
                 RES="$(resolution_failure)"
                 if [ "${RES%%|*}" = "True" ] && [ "${RECLAIM_ENABLED}" = "true" ] && ! out_of_time; then
@@ -213,24 +247,17 @@ spec:
                   sleep "$INTERVAL"
                   continue
                 fi
-                if [ "${RES%%|*}" = "True" ]; then
-                  echo "[installplan-approver] FAILED: OLM cannot resolve subscription ${SUBSCRIPTION}, so no InstallPlan will ever be staged." >&2
-                  echo "  ${RES#*|}" >&2
-                  case "$RES" in
-                    *"is not referenced by a subscription"*)
-                      echo "" >&2
-                      echo "  An orphaned ClusterServiceVersion is blocking it. helm uninstall removes the" >&2
-                      echo "  Subscription and OLM leaves the CSV behind, which a new Subscription cannot" >&2
-                      echo "  resolve against. Remove it and reinstall:" >&2
-                      oc get clusterserviceversions.operators.coreos.com -n "$NAMESPACE" --ignore-not-found=true -o name 2>/dev/null \
-                        | grep "${SUBSCRIPTION}\." | sed "s|^|    oc delete -n ${NAMESPACE} |" >&2 ;;
-                  esac
-                  exit 1
-                fi
+                [ "${RES%%|*}" = "True" ] && report_resolution_failure "$RES"
                 log "attempt ${i}/${ATTEMPTS}: no installPlanRef, csv=${CSV:-<none>}"
                 out_of_time && break
                 sleep "$INTERVAL"
               done
+              # THE LOOP HAS TWO CLOCKS. ATTEMPTS*INTERVAL equals the budget, so the attempt count runs out
+              # BEFORE the deadline whenever the API answers faster than the per-iteration overhead needs to
+              # drift past 5 s in total — measured with an instant fake oc: 4/4 attempts consumed, deadline not
+              # reached, and the ResolutionFailed diagnosis replaced by the generic "no plan names it" below.
+              # If the last thing OLM said was ResolutionFailed, that is the finding, with its remedy.
+              [ -z "$PLAN" ] && [ "${RES%%|*}" = "True" ] && report_resolution_failure "$RES"
               # installPlanRef can lag or clear while a plan sits in RequiresApproval. The
               # ownership check below still applies, so this widens discovery only.
               if [ -z "$PLAN" ]; then

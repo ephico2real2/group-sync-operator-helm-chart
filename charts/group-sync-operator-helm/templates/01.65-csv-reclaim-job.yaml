@@ -114,7 +114,11 @@ spec:
                 [ -n "$c" ] || continue
                 nm="${c##*/}"
                 [ -n "$nm" ] || continue
-                case "$nm" in *"${PACKAGE#openshift-}"*|"${PACKAGE}"*) ;; *) continue ;; esac
+                # ANCHORED ON "<package>.v", never a substring. The ported form matched *<package>* and
+                # measured (fake-oc harness): a CSV named group-sync-operator-community.v9.9.9 was reported
+                # as an orphan of THIS package and deleted. A CSV name is <package>.v<version>, so the anchor
+                # is exact; the approver in this chart anchors the same way for the same reason.
+                case "$nm" in "${PACKAGE}.v"*) ;; *) continue ;; esac
                 [ -n "$(oc get "$c" -n "$NAMESPACE" -o jsonpath='{.metadata.labels.olm\.copiedFrom}' 2>/dev/null || true)" ] && continue
                 [ -n "$(oc get "$c" -n "$NAMESPACE" -o jsonpath='{.metadata.ownerReferences}' 2>/dev/null || true)" ] && continue
                 # A CSV OLM IS ACTIVELY WORKING ON IS NOT AN ORPHAN. Measured: an upgrade left the CSV at
@@ -184,11 +188,12 @@ spec:
               # SIX CONDITIONS, ALL REQUIRED, because this deletes something the chart does not own.
               # Condition 1 (ResolutionFailed) is already established above.
               RECLAIMED=""
+              UNSETTLED=""
               for c in $(oc get "$CSVS" -n "$NAMESPACE" -o name 2>/dev/null || true); do
                 [ -n "$c" ] || continue
                 name="${c##*/}"
-                # 3. the name must match this package
-                case "$name" in *"${PACKAGE#openshift-}"*|"${PACKAGE}"*) ;; *) continue ;; esac
+                # 3. the name must match this package — anchored on <package>.v, as in the candidate scan
+                case "$name" in "${PACKAGE}.v"*) ;; *) continue ;; esac
                 # 6. NOT an OLM copy. AllNamespaces mode copies the CSV into EVERY namespace, and every
                 #    copy looks unowned and unreferenced. Deleting a copy fights OLM, which recreates it.
                 #    Only the source has an empty olm.copiedFrom, and only the source blocks resolution.
@@ -205,6 +210,7 @@ spec:
                   case "$phase" in Succeeded|Failed) break ;; esac
                   if [ "$(date +%s)" -ge "$DEADLINE" ]; then
                     log "  ${name}: phase=${phase:-<none>} and still not settled at the deadline, leaving alone"
+                    UNSETTLED="${UNSETTLED} ${name}"
                     continue 2
                   fi
                   log "  ${name}: phase=${phase:-<none>}, waiting for OLM to settle it before deciding ..."
@@ -244,6 +250,13 @@ spec:
 
               if [ -n "$RECLAIMED" ]; then
                 log "reclaimed:${RECLAIMED} — OLM will re-resolve the Subscription on its own"
+              elif [ -n "$UNSETTLED" ]; then
+                # A candidate was found but never settled inside the budget. That is the orphan case with
+                # OLM still working, not "no orphan": say which, so the approver's later timeout is read
+                # against the right cause. Measured: the old message called a stuck-Installing orphan
+                # "not the orphan case".
+                log "ResolutionFailed and a candidate CSV (${UNSETTLED# }) never settled within ${WAIT_SECONDS}s — left alone, nothing deleted"
+                log "inspect: oc get ${CSVS} -n ${NAMESPACE}; if it stays unsettled, OLM is stuck on it, not on this chart"
               else
                 # ResolutionFailed with nothing reclaimable is a real problem this Job cannot fix, and
                 # saying so beats letting the approver time out with a less specific message.
