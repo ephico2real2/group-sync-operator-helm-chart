@@ -1,0 +1,222 @@
+# ldap-missing-from-seeds.ldif — the entries the live directory holds that no seed LDIF creates.
+#
+# Measured 2026-09-18 by diffing the running directory against every *.ldif in this folder: 84 entries
+# live, 65 seeded, 25 unseeded — 6 people and 18 groups (plus one container). They were added to the
+# directory by hand while the dashboard's features were built, so a rebuild from the seeds alone produced
+# a cluster whose LDAP users the tests and screenshots refer to but the directory does not have.
+#
+# userPassword is deliberately absent: these are development accounts and this file is in git. Set them
+# after import, the way 20-import-ldap-data.sh does for the seeded people:
+#   ldappasswd -x -H ldap://localhost:389 -D "cn=admin,dc=ephico2real,dc=com" -w "$LDAP_ADMIN_PASSWORD" \
+#              -s '<the development password>' "uid=<user>,ou=People,dc=ephico2real,dc=com"
+#
+# Apply after 20-import-ldap-data.sh:
+#   oc exec -i -n ldap-testing deploy/openldap-server -- ldapadd -x \
+#     -D "cn=admin,dc=ephico2real,dc=com" -w "$LDAP_ADMIN_PASSWORD" < ldap-missing-from-seeds.ldif
+
+# ── the six people ──────────────────────────────────────────────────────────────
+
+dn: uid=bob.wilson,ou=People,dc=ephico2real,dc=com
+objectClass: inetOrgPerson
+objectClass: posixAccount
+objectClass: shadowAccount
+cn: bob.wilson
+sn: Wilson
+givenName: Bob
+displayName: Bob Wilson
+uid: bob.wilson
+mail: bob.wilson@ephico2real.com
+uidNumber: 10003
+gidNumber: 10003
+homeDirectory: /home/bob.wilson
+loginShell: /bin/bash
+
+dn: uid=charlie.brown,ou=People,dc=ephico2real,dc=com
+objectClass: inetOrgPerson
+objectClass: posixAccount
+objectClass: shadowAccount
+cn: charlie.brown
+sn: Brown
+givenName: Charlie
+displayName: Charlie Brown
+uid: charlie.brown
+mail: charlie.brown@ephico2real.com
+uidNumber: 10005
+gidNumber: 10005
+homeDirectory: /home/charlie.brown
+loginShell: /bin/bash
+
+dn: uid=dana.lee,ou=People,dc=ephico2real,dc=com
+objectClass: inetOrgPerson
+objectClass: posixAccount
+objectClass: shadowAccount
+uid: dana.lee
+cn: Dana Lee
+sn: Lee
+givenName: Dana
+mail: dana.lee@ephico2real.com
+uidNumber: 6260
+gidNumber: 1000
+homeDirectory: /home/dana.lee
+loginShell: /bin/bash
+
+dn: uid=jeff,ou=People,dc=ephico2real,dc=com
+objectClass: inetOrgPerson
+objectClass: posixAccount
+objectClass: shadowAccount
+uid: jeff
+cn: jeff bush
+sn: bush
+givenName: jeff
+mail:
+uidNumber: 8902
+gidNumber: 1000
+homeDirectory: /home/jeff
+loginShell: /bin/bash
+
+dn: uid=lateef.o,ou=People,dc=ephico2real,dc=com
+objectClass: inetOrgPerson
+objectClass: posixAccount
+objectClass: shadowAccount
+uid: lateef.o
+cn: lateef Oni
+sn: Oni
+givenName: lateef
+mail: lateef@gmail.com
+uidNumber: 2418
+gidNumber: 1000
+homeDirectory: /home/lateef.o
+loginShell: /bin/bash
+
+dn: uid=sarah.jones,ou=People,dc=ephico2real,dc=com
+objectClass: inetOrgPerson
+objectClass: posixAccount
+objectClass: shadowAccount
+uid: sarah.jones
+cn: Sarah Jones
+sn: Jones
+givenName: Sarah
+mail: sarah.jones@ephico2real.com
+uidNumber: 2087
+gidNumber: 1000
+homeDirectory: /home/sarah.jones
+loginShell: /bin/bash
+
+# ── the eighteen groups ─────────────────────────────────────────────────────────
+
+dn: cn=app-ocp-rbac-beta-ns-audit,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-beta-ns-audit
+description: Beta team namespace audit access group (view permissions)
+member: uid=bob.wilson,ou=People,dc=ephico2real,dc=com
+
+dn: cn=app-ocp-rbac-groupsync-ns-auditor,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-groupsync-ns-auditor
+description: Group Sync Dashboard namespace auditors (read-only reporting + RBAC review)
+member: uid=bob.wilson,ou=People,dc=ephico2real,dc=com
+member: uid=jane.smith,ou=People,dc=ephico2real,dc=com
+member: uid=lateef.o,ou=People,dc=ephico2real,dc=com
+
+dn: cn=app-ocp-rbac-jeff-ns-audit,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-jeff-ns-audit
+description: Jeff team namespace audit access group (view permissions)
+member: uid=jeff,ou=People,dc=ephico2real,dc=com
+
+dn: cn=app-ocp-rbac-jeff-ns-developer,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-jeff-ns-developer
+description: Jeff team namespace developer access group (edit permissions)
+member: uid=jeff,ou=People,dc=ephico2real,dc=com
+
+dn: cn=app-ocp-rbac-lateef-ns-developer,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-lateef-ns-developer
+description: Lateef Valid NS developer
+member: uid=lateef.o,ou=People,dc=ephico2real,dc=com
+
+dn: cn=app-ocp-rbac-test-cluster-admin,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-test-cluster-admin
+description: Test group for placeholder fix
+member: uid=john.doe,ou=People,dc=ephico2real,dc=com
+
+dn: cn=app-ocp-rbac-tsta-ns-audit,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-tsta-ns-audit
+description: sync-latency test round 1
+member: uid=bob.wilson,ou=People,dc=ephico2real,dc=com
+
+dn: cn=app-ocp-rbac-tstb-ns-audit,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-tstb-ns-audit
+description: sync-latency test round 2
+member: uid=bob.wilson,ou=People,dc=ephico2real,dc=com
+
+dn: cn=app-ocp-rbac-tstc-ns-audit,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-tstc-ns-audit
+description: sync-latency test round 3
+member: uid=bob.wilson,ou=People,dc=ephico2real,dc=com
+
+dn: cn=app-ocp-rbac-tstd-ns-audit,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-tstd-ns-audit
+description: sync-latency test round 4
+member: uid=bob.wilson,ou=People,dc=ephico2real,dc=com
+
+dn: cn=bda-rbac-flink-alpha-apps,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: bda-rbac-flink-alpha-apps
+description: BDA Flink alpha application service accounts
+member: uid=dana.lee,ou=People,dc=ephico2real,dc=com
+
+dn: cn=bda-rbac-flink-alpha-users,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: bda-rbac-flink-alpha-users
+description: BDA Flink alpha human users
+member: uid=dana.lee,ou=People,dc=ephico2real,dc=com
+
+dn: cn=bda-rbac-spark-gamma-apps,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: bda-rbac-spark-gamma-apps
+description: BDA Spark gamma application service accounts
+member: uid=dana.lee,ou=People,dc=ephico2real,dc=com
+
+dn: cn=bda-rbac-spark-synca-users,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: bda-rbac-spark-synca-users
+description: sync-latency test round 1
+member: uid=bob.wilson,ou=People,dc=ephico2real,dc=com
+
+dn: cn=bda-rbac-spark-syncb-users,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: bda-rbac-spark-syncb-users
+description: sync-latency test round 2
+member: uid=bob.wilson,ou=People,dc=ephico2real,dc=com
+
+dn: cn=bda-rbac-spark-syncc-users,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: bda-rbac-spark-syncc-users
+description: sync-latency test round 3
+member: uid=bob.wilson,ou=People,dc=ephico2real,dc=com
+
+dn: cn=bda-rbac-spark-syncd-users,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: bda-rbac-spark-syncd-users
+description: sync-latency test round 4
+member: uid=bob.wilson,ou=People,dc=ephico2real,dc=com
+
+dn: cn=ocp-app-rbac-lateef-ns-developer,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: ocp-app-rbac-lateef-ns-developer
+description: Lateef NS developer
+member: uid=lateef.o,ou=People,dc=ephico2real,dc=com
+
+dn: dc=ephico2real,dc=com
+objectClass: top
+objectClass: dcObject
+objectClass: organization
+o: Ephico Real
+dc: ephico2real

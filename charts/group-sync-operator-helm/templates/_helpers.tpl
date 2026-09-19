@@ -126,11 +126,20 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 # 01.8-hook-object-cleanup-job.yaml is what actually removes them; do not drop it believing this covers it.
 #
 # What the stamp does buy: the objects become selectable by release
-# (`oc get secret,configmap -l app.kubernetes.io/instance=<release>`), their provenance sits beside the
-# group-sync.redhat-cop.io/source annotations the CA copy already carries, and a later chart version can
+# (`oc get secret,configmap -l group-sync-operator-helm/release=<release>`), their provenance sits beside
+# the group-sync.redhat-cop.io/source annotations the CA copy already carries, and a later chart version can
 # adopt either into a real template.
+#
+# NOT app.kubernetes.io/instance. That is Argo CD's resource-tracking LABEL (its default method through
+# Argo CD 2.x, which OpenShift GitOps 1.1x ships; `application.instanceLabelKey` in argocd-cm), and under
+# Argo the release name IS the Application name. Stamped with it, the Secret and the CA copy came into
+# existence carrying the Application's own ownership mark while being absent from the rendered manifest —
+# so with automated prune Argo deleted them on the next reconcile, the GroupSync CRs failed for the objects
+# the Jobs had just written, the Application went OutOfSync, and the Sync-phase hooks were recreated every
+# sync and never looked finished. Reported from a real cluster (2026-09-18: "create and then delete as I
+# sync"); the mechanism is the label, not the Jobs. The release name goes under a key nothing tracks by.
 {{- define "group-sync-operator-helm.hookObjectLabels" -}}
-"app.kubernetes.io/managed-by=Helm" "app.kubernetes.io/name={{ include "group-sync-operator-helm.name" . }}" "app.kubernetes.io/instance={{ .Release.Name }}" "helm.sh/chart={{ include "group-sync-operator-helm.chart" . }}"
+"app.kubernetes.io/managed-by=Helm" "app.kubernetes.io/name={{ include "group-sync-operator-helm.name" . }}" "group-sync-operator-helm/release={{ .Release.Name }}" "helm.sh/chart={{ include "group-sync-operator-helm.chart" . }}"
 {{- end }}
 
 {{- define "group-sync-operator-helm.hookObjectAnnotations" -}}
