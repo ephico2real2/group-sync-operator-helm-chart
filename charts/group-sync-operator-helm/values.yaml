@@ -619,6 +619,38 @@ oauthSecretExtraction:
       cpu: 200m
       memory: 256Mi
 
+# -------------------- Orphaned-CSV reclaim --------------------
+# `helm uninstall` removes the Subscription but OLM LEAVES THE CSV BEHIND with no ownerReferences, so
+# nothing garbage-collects it. The next install then cannot resolve — ResolutionFailed, "constraints not
+# satisfiable: @existing/group-sync-operator//group-sync-operator.v0.0.36" — no InstallPlan is ever staged,
+# the approver fails, and because Helm stops at the first failed hook the OAuth extraction and CA copy never
+# run either. Measured 2026-09-18 on CRC on a plain uninstall-then-install.
+#
+# This Job clears the orphan BEFORE the approver runs (helm weight -2 vs -1), the ordering the sibling
+# charts arrived at after measuring the failure. It deletes only on six conditions — ResolutionFailed
+# reported, the name matches this package, no ownerReferences, not an OLM copy, settled (Succeeded or
+# Failed, never mid-install), referenced by no Subscription — and never touches anything else. Under
+# ArgoCD it matters more: nobody is in the sync loop to run the `oc delete` the approver's log prescribes.
+#
+# Renders only for Manual approval, like the approver it protects.
+csvReclaim:
+  enabled: true
+  # How long to wait for OLM to publish a verdict (installedCSV, or ResolutionFailed) before deciding.
+  # Sampling once would see neither straight after a sync and skip the reclaim entirely. A clean install
+  # never pays this: with no candidate orphan in the namespace the Job exits at once.
+  waitSeconds: 120
+  image:
+    repository: registry.redhat.io/openshift4/ose-cli
+    tag: v4.14
+    pullPolicy: IfNotPresent
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
 # -------------------- InstallPlan approver --------------------
 # Approves the InstallPlan for this subscription so Manual approval installs unattended, while
 # later upgrades still wait for a human. Refuses any plan that does not name this subscription.
