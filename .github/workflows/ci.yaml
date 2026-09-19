@@ -64,6 +64,10 @@ jobs:
       # cluster values files are covered without editing it or this workflow.
       - name: Ordering is declared, not accidental
         run: python3 ci/check-ordering.py --chart "$CHART"
+      - name: The hook scripts, driven against a fake oc
+        run: bash ci/hook-scripts-harness.sh "$CHART"
+      - name: artifacthub.io/changes parses as YAML
+        run: python3 ci/check-artifacthub-changes.py "$CHART"
 
       - name: Render every combination and assert coherence
         run: |
