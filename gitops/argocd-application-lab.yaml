@@ -1,0 +1,63 @@
+# The chart installed by OpenShift GitOps from THIS git repository — the chart's source tree on main
+# with the lab's own values file (charts/group-sync-operator-helm/crc-values.yaml — it sets groupSync.url, which Argo's
+# offline `helm template` cannot derive from the OAuth CR — inside the chart directory) — as release `group-sync` into
+# `group-sync-operator`, the shape the lab (CRC) runs. The root argocd-application.yaml is the
+# production shape: the PUBLISHED chart plus a values file from a separate config repository.
+#
+#   oc apply -f gitops/argocd-repo-github.yaml
+#   oc apply -f gitops/argocd-application-lab.yaml
+#   oc -n openshift-gitops get application group-sync -w
+#
+# The lab's LDAP bind Secret (`ldap-secret`) and the cert-manager CA are made by the
+# setup-local-ldap-testing scripts, not by this Application; they must exist before the first sync.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: group-sync
+  namespace: openshift-gitops
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/ephico2real2/group-sync-operator-helm-chart.git
+    targetRevision: main
+    path: charts/group-sync-operator-helm
+    helm:
+      releaseName: group-sync
+      valueFiles:
+        - crc-values.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: group-sync-operator
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true
+      - RespectIgnoreDifferences=true
+    retry:
+      limit: 5
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+  ignoreDifferences:
+    # The chart ships the trusted-CA ConfigMap EMPTY and the network operator fills data.ca-bundle.crt;
+    # without this Argo reverts the bundle on every sync (the chart README's ArgoCD section).
+    - group: ""
+      kind: ConfigMap
+      name: ldap-trusted-ca
+      jsonPointers:
+        - /data
+    # OpenShift injects a dockercfg pull secret into every ServiceAccount the chart creates.
+    - group: ""
+      kind: ServiceAccount
+      jsonPointers:
+        - /secrets
+        - /imagePullSecrets
+        - /metadata/annotations/openshift.io~1internal-registry-pull-secret-ref
