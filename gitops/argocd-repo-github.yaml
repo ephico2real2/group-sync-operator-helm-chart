@@ -1,0 +1,16 @@
+# The repository connection for OpenShift GitOps (Argo CD in `openshift-gitops`): the label is what
+# registers it. This repository is public, so `url` and `type` are the whole connection; a private fork
+# adds `username`/`password` (a token) or `sshPrivateKey` as stringData, per Argo's declarative setup.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: repo-group-sync-operator-helm-chart
+  namespace: openshift-gitops
+  labels:
+    argocd.argoproj.io/secret-type: repository
+type: Opaque
+stringData:
+  name: group-sync-operator-helm-chart
+  project: default
+  type: git
+  url: https://github.com/ephico2real2/group-sync-operator-helm-chart.git
