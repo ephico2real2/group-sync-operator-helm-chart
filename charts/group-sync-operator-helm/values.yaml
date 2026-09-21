@@ -268,10 +268,17 @@ groupSyncDashboard:
     enabled: true
     name: ocp-oauth-bind-serviceid
 
-  # nodes, nodes/proxy, pods and pods/log for the cluster-health panel. OFF by default: reading
-  # workload logs and kubelet endpoints is more than a group dashboard needs on a cluster whose
-  # operators have not asked for it.
-  nodeAndPodReads: false
+  # nodes, nodes/proxy, pods and pods/log — what LOGIN CAPTURE reads, not just a health panel.
+  # ON by default (2026-09-20), because a cluster registered without it onboards with a Logins tab
+  # that cannot work and an RBAC hunt to follow: the dashboard reads the oauth-server audit log
+  # through nodes/proxy, and falls back to the oauth pod's log (pods, pods/log) where a site
+  # prefers that source. Measured on the reference cluster: with these four grants a freshly
+  # registered cluster backfilled 201 login attempts from 4 444 audit lines on its first poll;
+  # without them the poller logs "forbidden listing nodes" every cycle and records nothing.
+  #
+  # Turn it OFF where the dashboard must not read kubelet endpoints or workload logs — the rest of
+  # the poller is unaffected, and the Logins tab then says the grant is missing rather than lying.
+  nodeAndPodReads: true
 
   # Anything ELSE that should hold the same read-only role. Each entry: {kind, name, namespace
   # (ServiceAccount only)}. The IdP bind account above has its own field; this is for the rest.
