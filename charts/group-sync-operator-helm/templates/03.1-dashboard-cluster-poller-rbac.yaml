@@ -1,0 +1,158 @@
+{{- if .Values.groupSyncDashboard.enabled }}
+# THE DASHBOARD'S READ-ONLY VIEW OF THIS CLUSTER.
+#
+# group-sync-dashboard polls a cluster it does not run in: a remote reader authenticates with this
+# ServiceAccount's token and lists what the pipeline produced — the GroupSync CRs, the Groups they
+# created, and the namespace-configuration-operator CRs that template access from those Groups.
+#
+# It lived only on the live cluster until now (applied by hand, no owner, nothing in git — measured
+# 2026-09-21: `kubectl.kubernetes.io/last-applied-configuration` and no Helm or Argo labels), so a
+# rebuilt cluster came up without it and the dashboard's poll failed with 403s that looked like an
+# outage. It belongs to this chart because this chart owns the operator whose CRs it reads.
+#
+# EVERY VERB HERE IS A READ, with two deliberate exceptions called out at their rule.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Values.groupSyncDashboard.name }}
+  namespace: {{ .Values.groupSync.namespace }}
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard-cluster-poller
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Values.groupSyncDashboard.name }}
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard-cluster-poller
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+rules:
+# The pipeline itself. `userconfigs` is granted in ADVANCE of any reader: the dashboard auto-detects
+# these CRDs, so an absent CRD answers 404 and is recorded as "absent", while an ungranted one answers
+# 403 — a refresh failure that logs a warning every poll. Granting it early costs nothing on a cluster
+# that never installs the operator, and saves a re-grant when the reader lands.
+- apiGroups: ["redhatcop.redhat.io"]
+  resources: ["groupsyncs", "namespaceconfigs", "groupconfigs", "userconfigs"]
+  verbs: ["get", "list"]
+# The Groups the operator syncs, and the identities behind the names the dashboard shows.
+- apiGroups: ["user.openshift.io"]
+  resources: ["groups", "users", "identities"]
+  verbs: ["get", "list"]
+# Who a Group actually grants access to — the other half of the picture the CRs template.
+- apiGroups: ["rbac.authorization.k8s.io"]
+  resources: ["rolebindings", "clusterrolebindings"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get", "list"]
+# The cluster's OAuth CR, pinned to the only instance that exists, for the identity providers' names.
+# resourceNames pins the NAME and not the namespace, which is harmless for a cluster-scoped singleton.
+- apiGroups: ["config.openshift.io"]
+  resources: ["oauths"]
+  resourceNames: ["cluster"]
+  verbs: ["get"]
+# EXCEPTION 1 — a write verb that reads. SubjectAccessReview has no read verb: asking "may this user
+# see that?" is a create. It changes nothing; the API answers and stores nothing.
+- apiGroups: ["authorization.k8s.io"]
+  resources: ["subjectaccessreviews"]
+  verbs: ["create"]
+# Policy results, in both the old wgpolicyk8s and the new openreports shapes — a cluster may carry
+# either, and listing the absent one 404s quietly with the grant in place.
+- apiGroups: ["wgpolicyk8s.io"]
+  resources: ["policyreports", "clusterpolicyreports"]
+  verbs: ["list"]
+- apiGroups: ["openreports.io"]
+  resources: ["reports", "clusterreports"]
+  verbs: ["list"]
+# Kyverno's policies, in both its API groups, plus its ephemeral reports.
+- apiGroups: ["policies.kyverno.io"]
+  resources:
+    - validatingpolicies
+    - mutatingpolicies
+    - generatingpolicies
+    - deletingpolicies
+    - imagevalidatingpolicies
+    - namespacedvalidatingpolicies
+    - namespacedmutatingpolicies
+    - namespacedgeneratingpolicies
+    - namespaceddeletingpolicies
+    - namespacedimagevalidatingpolicies
+    - policyexceptions
+  verbs: ["get", "list"]
+- apiGroups: ["kyverno.io"]
+  resources:
+    - clusterpolicies
+    - policies
+    - cleanuppolicies
+    - clustercleanuppolicies
+    - policyexceptions
+    - globalcontextentries
+    - updaterequests
+  verbs: ["get", "list"]
+- apiGroups: ["reports.kyverno.io"]
+  resources: ["ephemeralreports", "clusterephemeralreports"]
+  verbs: ["get", "list"]
+# The dashboard resolves a cluster's console/API addresses from its Routes.
+- apiGroups: ["route.openshift.io"]
+  resources: ["routes"]
+  verbs: ["get", "list"]
+{{- if .Values.groupSyncDashboard.nodeAndPodReads }}
+# EXCEPTION 2 — node and pod reads, for the cluster-health panel. Off by default: `pods/log` and
+# `nodes/proxy` read workload output and kubelet endpoints, which is more than a group dashboard
+# needs on a cluster whose operators do not want it.
+- apiGroups: [""]
+  resources: ["nodes"]
+  verbs: ["list"]
+- apiGroups: [""]
+  resources: ["nodes/proxy"]
+  verbs: ["get"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["list"]
+- apiGroups: [""]
+  resources: ["pods/log"]
+  verbs: ["get"]
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ .Values.groupSyncDashboard.name }}
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard-cluster-poller
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ .Values.groupSyncDashboard.name }}
+subjects:
+- kind: ServiceAccount
+  name: {{ .Values.groupSyncDashboard.name }}
+  namespace: {{ .Values.groupSync.namespace }}
+{{- if .Values.groupSyncDashboard.oauthBindUser.enabled }}
+{{- if not .Values.groupSyncDashboard.oauthBindUser.name }}
+{{- fail "groupSyncDashboard.oauthBindUser.enabled is true but .name is empty: set the OpenShift User name the identity provider binds as (what `oc get user` shows), or disable it." }}
+{{- end }}
+# The identity provider's bind account, as a User — a login that sees what the dashboard sees.
+- kind: User
+  name: {{ .Values.groupSyncDashboard.oauthBindUser.name }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
+{{- range .Values.groupSyncDashboard.extraSubjects }}
+- kind: {{ .kind }}
+  name: {{ .name }}
+  {{- if .namespace }}
+  namespace: {{ .namespace }}
+  {{- end }}
+  {{- if eq .kind "User" }}
+  apiGroup: rbac.authorization.k8s.io
+  {{- end }}
+{{- end }}
+{{- end }}

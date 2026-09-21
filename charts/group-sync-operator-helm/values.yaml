@@ -237,6 +237,46 @@ trustedCA:
     # The ConfigMap the chart creates, empty, in groupSync.namespace.
     name: ldap-trusted-ca
 
+# -------------------- group-sync-dashboard's read-only poller --------------------
+# group-sync-dashboard polls this cluster from outside it: a ServiceAccount token, a ClusterRole of
+# reads, and a binding. It existed only on the live cluster until 2026-09-21 (applied by hand, no
+# owner, nothing in git), so a rebuilt cluster came up without it and the dashboard's poll failed
+# with 403s that looked like an outage. It belongs to this chart because this chart owns the
+# operator whose CRs it reads. Template: 03.1-dashboard-cluster-poller-rbac.yaml.
+groupSyncDashboard:
+  # Off leaves the cluster exactly as before; nothing else in the chart reads these values.
+  enabled: true
+  # The name shared by the ServiceAccount, the ClusterRole and the binding. The live cluster's
+  # object is group-sync-dashboard-cluster-poller; keep it unless you are installing a second reader.
+  name: group-sync-dashboard-cluster-poller
+
+  # THE IDENTITY PROVIDER'S BIND ACCOUNT, as an OpenShift User subject.
+  #
+  # Two different things hold this role on the live cluster: the ServiceAccount above (the token the
+  # dashboard polls with) and a User — the LDAP account the identity provider binds as, which is also
+  # a member of the login gate group, so a person can `oc login` as it and see exactly what the
+  # dashboard sees. That is the whole reason to bind it: debugging the dashboard's view without
+  # borrowing its token.
+  #
+  # The name is the OpenShift User name, which is the login attribute — NOT the bind DN. On the lab
+  # cluster the DN is cn=ocp-oauth-bind-serviceid,ou=TrustedApplications,<baseDN> and the User is the
+  # CN alone. Another directory will map it differently: set what `oc get user` shows.
+  #
+  # Leave enabled: false on a cluster whose identity provider binds anonymously, or where no human
+  # should reach the dashboard's view through a login. The ServiceAccount binding is unaffected.
+  oauthBindUser:
+    enabled: true
+    name: ocp-oauth-bind-serviceid
+
+  # nodes, nodes/proxy, pods and pods/log for the cluster-health panel. OFF by default: reading
+  # workload logs and kubelet endpoints is more than a group dashboard needs on a cluster whose
+  # operators have not asked for it.
+  nodeAndPodReads: false
+
+  # Anything ELSE that should hold the same read-only role. Each entry: {kind, name, namespace
+  # (ServiceAccount only)}. The IdP bind account above has its own field; this is for the rest.
+  extraSubjects: []
+
 # -------------------- Custom (multi-tenant) GroupSync CRs --------------------
 # Generate ONE additional GroupSync CR per team/tenant. Full guide:
 # docs/DESIGN_custom_groupsync.md
