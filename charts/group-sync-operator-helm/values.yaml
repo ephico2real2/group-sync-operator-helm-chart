@@ -237,6 +237,74 @@ trustedCA:
     # The ConfigMap the chart creates, empty, in groupSync.namespace.
     name: ldap-trusted-ca
 
+# -------------------- group-sync-dashboard's read-only poller --------------------
+# group-sync-dashboard polls this cluster from outside it: a ServiceAccount token, a ClusterRole of
+# reads, and a binding. It existed only on the live cluster until 2026-09-21 (applied by hand, no
+# owner, nothing in git), so a rebuilt cluster came up without it and the dashboard's poll failed
+# with 403s that looked like an outage. It belongs to this chart because this chart owns the
+# operator whose CRs it reads. Template: 03.1-dashboard-cluster-poller-rbac.yaml.
+groupSyncDashboard:
+  # Off leaves the cluster exactly as before; nothing else in the chart reads these values.
+  enabled: true
+  # The name shared by the ServiceAccount, the ClusterRole and the binding. The live cluster's
+  # object is group-sync-dashboard-cluster-poller; keep it unless you are installing a second reader.
+  name: group-sync-dashboard-cluster-poller
+
+  # THE IDENTITY PROVIDER'S BIND ACCOUNT, as an OpenShift User subject.
+  #
+  # Two different things hold this role on the live cluster: the ServiceAccount above (the token the
+  # dashboard polls with) and a User — the LDAP account the identity provider binds as, which is also
+  # a member of the login gate group, so a person can `oc login` as it and see exactly what the
+  # dashboard sees. That is the whole reason to bind it: debugging the dashboard's view without
+  # borrowing its token.
+  #
+  # The name is the OpenShift User name, which is the login attribute — NOT the bind DN. On the lab
+  # cluster the DN is cn=ocp-oauth-bind-serviceid,ou=TrustedApplications,<baseDN> and the User is the
+  # CN alone. Another directory will map it differently: set what `oc get user` shows.
+  #
+  # Leave enabled: false on a cluster whose identity provider binds anonymously, or where no human
+  # should reach the dashboard's view through a login. The ServiceAccount binding is unaffected.
+  oauthBindUser:
+    enabled: true
+    name: ocp-oauth-bind-serviceid
+
+  # nodes, nodes/proxy, pods and pods/log — what LOGIN CAPTURE reads, not just a health panel.
+  # ON by default (2026-09-20), because a cluster registered without it onboards with a Logins tab
+  # that cannot work and an RBAC hunt to follow: the dashboard reads the oauth-server audit log
+  # through nodes/proxy, and falls back to the oauth pod's log (pods, pods/log) where a site
+  # prefers that source. Measured on the reference cluster: with these four grants a freshly
+  # registered cluster backfilled 201 login attempts from 4 444 audit lines on its first poll;
+  # without them the poller logs "forbidden listing nodes" every cycle and records nothing.
+  #
+  # Turn it OFF where the dashboard must not read kubelet endpoints or workload logs — the rest of
+  # the poller is unaffected, and the Logins tab then says the grant is missing rather than lying.
+  nodeAndPodReads: true
+
+  # Anything ELSE that should hold the same read-only role. Each entry: {kind, name, namespace
+  # (ServiceAccount only)}. The IdP bind account above has its own field; this is for the rest.
+  extraSubjects: []
+
+  # THE TOKEN THE DASHBOARD POLLS WITH, and who may fetch it.
+  #
+  # Kubernetes stopped minting a Secret per ServiceAccount in 1.24, so the long-lived token exists
+  # only because this chart creates the Secret. Registering this cluster as a remote source needs
+  # that token, which otherwise makes it a cluster-admin's errand; with `oauthBindUser.enabled` the
+  # identity provider's bind account can fetch it instead — one Secret, by name, nothing else.
+  token:
+    # The Secret of type kubernetes.io/service-account-token. Keep it on unless something outside
+    # the chart already mints tokens for this ServiceAccount.
+    create: true
+    # Defaults to "<name>-token", which is what the live cluster carries.
+    name: ""
+    # Also allow `oc create token <serviceaccount>` (TokenRequest) — a short-lived token that reads
+    # no Secret at all, and the better choice when the reader can use it. create is the only verb
+    # the subresource has, and the grant is pinned to this ServiceAccount.
+    allowRequest: true
+    # Anything BESIDES oauthBindUser that may fetch the token. Each entry: {kind, name, namespace
+    # (ServiceAccount only)}. Keep this list short: the token is the dashboard's full read of this
+    # cluster.
+    readers: []
+
 # -------------------- Custom (multi-tenant) GroupSync CRs --------------------
 # Generate ONE additional GroupSync CR per team/tenant. Full guide:
 # docs/DESIGN_custom_groupsync.md
