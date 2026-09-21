@@ -1,0 +1,103 @@
+{{- if and .Values.groupSyncDashboard.enabled .Values.groupSyncDashboard.token.create }}
+{{- $name := .Values.groupSyncDashboard.name }}
+{{- $tokenName := default (printf "%s-token" $name) .Values.groupSyncDashboard.token.name }}
+# THE TOKEN THE DASHBOARD POLLS WITH, AND WHO MAY FETCH IT.
+#
+# Kubernetes stopped minting a Secret per ServiceAccount in 1.24, so a long-lived token exists only
+# if something creates it. This does, as a Secret of type kubernetes.io/service-account-token
+# annotated with the ServiceAccount's name; the token controller fills in .data.token.
+#
+# Fetching it is the point: whoever installs the dashboard needs the token to register this cluster
+# as a remote source. Today that is a cluster-admin's job. These rules let the identity provider's
+# bind account do it instead, with the narrowest grant that works.
+#
+# WHY A ROLE AND NOT A CLUSTERROLE. resourceNames pins the NAME and says nothing about the
+# NAMESPACE, so a name-pinned rule in a ClusterRole grants that name in EVERY namespace — the same
+# trap 01.2-oauth-extraction-clusterrole.yaml records, measured on this cluster. A Role in the
+# release namespace is the correct scope.
+#
+# WHY get AND NOT list. RBAC honours resourceNames for get, and ignores it for list and watch: a
+# rule granting list would grant listing EVERY Secret in the namespace. The reader fetches the one
+# Secret by name and cannot enumerate its neighbours. Measured on 4.22.7 before this existed:
+# `oc auth can-i get secret/<token> --as=<bind user>` answered no.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $tokenName }}
+  namespace: {{ .Values.groupSync.namespace }}
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard-cluster-poller
+  annotations:
+    kubernetes.io/service-account.name: {{ $name }}
+    argocd.argoproj.io/sync-wave: "3"
+    # The token controller writes .data.token into this Secret; Helm and Argo must not fight it.
+    helm.sh/resource-policy: keep
+    argocd.argoproj.io/compare-options: IgnoreExtraneous
+type: kubernetes.io/service-account-token
+{{- if or .Values.groupSyncDashboard.oauthBindUser.enabled .Values.groupSyncDashboard.token.readers }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $tokenName }}-reader
+  namespace: {{ .Values.groupSync.namespace }}
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard-cluster-poller
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+rules:
+# The one Secret, by name. No list, no watch, no other Secret in this namespace.
+- apiGroups: [""]
+  resources: ["secrets"]
+  resourceNames: [{{ $tokenName | quote }}]
+  verbs: ["get"]
+{{- if .Values.groupSyncDashboard.token.allowRequest }}
+# TokenRequest: `oc create token <serviceaccount>` mints a SHORT-LIVED token without reading any
+# Secret, which is the modern way and the one to prefer when the reader can choose. create is the
+# only verb the subresource has — it is a request, not a write to anything stored — and the pin
+# holds it to this ServiceAccount.
+- apiGroups: [""]
+  resources: ["serviceaccounts/token"]
+  resourceNames: [{{ $name | quote }}]
+  verbs: ["create"]
+{{- end }}
+# The ServiceAccount itself, so a reader can confirm the token belongs to the identity it expects.
+- apiGroups: [""]
+  resources: ["serviceaccounts"]
+  resourceNames: [{{ $name | quote }}]
+  verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $tokenName }}-reader
+  namespace: {{ .Values.groupSync.namespace }}
+  labels:
+    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    app.kubernetes.io/component: dashboard-cluster-poller
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $tokenName }}-reader
+subjects:
+{{- if .Values.groupSyncDashboard.oauthBindUser.enabled }}
+- kind: User
+  name: {{ .Values.groupSyncDashboard.oauthBindUser.name }}
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}
+{{- range .Values.groupSyncDashboard.token.readers }}
+- kind: {{ .kind }}
+  name: {{ .name }}
+  {{- if .namespace }}
+  namespace: {{ .namespace }}
+  {{- end }}
+  {{- if ne .kind "ServiceAccount" }}
+  apiGroup: rbac.authorization.k8s.io
+  {{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

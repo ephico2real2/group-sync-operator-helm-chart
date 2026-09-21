@@ -277,6 +277,27 @@ groupSyncDashboard:
   # (ServiceAccount only)}. The IdP bind account above has its own field; this is for the rest.
   extraSubjects: []
 
+  # THE TOKEN THE DASHBOARD POLLS WITH, and who may fetch it.
+  #
+  # Kubernetes stopped minting a Secret per ServiceAccount in 1.24, so the long-lived token exists
+  # only because this chart creates the Secret. Registering this cluster as a remote source needs
+  # that token, which otherwise makes it a cluster-admin's errand; with `oauthBindUser.enabled` the
+  # identity provider's bind account can fetch it instead — one Secret, by name, nothing else.
+  token:
+    # The Secret of type kubernetes.io/service-account-token. Keep it on unless something outside
+    # the chart already mints tokens for this ServiceAccount.
+    create: true
+    # Defaults to "<name>-token", which is what the live cluster carries.
+    name: ""
+    # Also allow `oc create token <serviceaccount>` (TokenRequest) — a short-lived token that reads
+    # no Secret at all, and the better choice when the reader can use it. create is the only verb
+    # the subresource has, and the grant is pinned to this ServiceAccount.
+    allowRequest: true
+    # Anything BESIDES oauthBindUser that may fetch the token. Each entry: {kind, name, namespace
+    # (ServiceAccount only)}. Keep this list short: the token is the dashboard's full read of this
+    # cluster.
+    readers: []
+
 # -------------------- Custom (multi-tenant) GroupSync CRs --------------------
 # Generate ONE additional GroupSync CR per team/tenant. Full guide:
 # docs/DESIGN_custom_groupsync.md
