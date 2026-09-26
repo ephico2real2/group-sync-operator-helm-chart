@@ -11,8 +11,9 @@
 #     ClusterRole/admin, NOT ClusterRole/cluster-admin.
 #
 #   app-ocp-rbac-ocp-keycloak-admin
-#     A special role for testing Keycloak admin rights held by people who are NOT
-#     cluster admins on the OpenShift side. It matches no GroupConfig suffix, so it
+#     An APPLICATION group: Keycloak reads it, OpenShift grants it nothing. A special
+#     role for testing Keycloak admin rights held by people who are NOT cluster
+#     admins on the OpenShift side. It matches no GroupConfig suffix, so it
 #     carries no OpenShift permission (measured: 0 ClusterRoleBindings, 0 RoleBindings).
 #     sarah.jones is the test case — a Keycloak admin with no OpenShift rights at all
 #     (measured with her real groups: get pods -A, get secrets, create namespaces all
@@ -21,6 +22,15 @@
 #     reads it through LDAP federation (envoy-tutorial module 18, realm corp) and maps
 #     it to the realm role `admin` — the role module 17's Gateway requires on /admin.
 #     See ephico2real2/envoy-tutorial#6.
+#
+# ── DO NOT NEST ONE GROUP INSIDE ANOTHER ─────────────────────────────────────
+# OpenShift groups do not nest; the rfc2307 sync resolves every `member` as a USER.
+# Measured 2026-09-26: app-ocp-rbac-ocp-ns-developer with this group as its member
+# made GroupSync/app-ocp-rbac-group-groupsync log "the user entry
+# (cn=app-ocp-rbac-ocp-keycloak-admin,...) does not map to a OpenShift User name" and
+# FAIL THE WHOLE SYNC — every app-ocp-rbac-* group stopped syncing, not just the new
+# one; tolerateMemberNotFoundErrors does not cover it. Deleting the nested group
+# restored the sync. List users directly in each group instead.
 #
 # ── EXPECT ONE KYVERNO AUDIT VIOLATION, BY DESIGN ────────────────────────────
 # ClusterPolicy/group-naming-app-ocp-rbac (validationFailureAction: Audit) requires
@@ -51,7 +61,7 @@ member: uid=alice.cooper,ou=People,dc=ephico2real,dc=com
 dn: cn=app-ocp-rbac-ocp-keycloak-admin,ou=Groups,dc=ephico2real,dc=com
 objectClass: groupOfNames
 cn: app-ocp-rbac-ocp-keycloak-admin
-description: Keycloak administrators (realm role admin in Keycloak; no OpenShift permission)
+description: Keycloak administrators - an application group (realm role admin in Keycloak; no OpenShift permission)
 member: uid=john.doe,ou=People,dc=ephico2real,dc=com
 member: uid=alice.cooper,ou=People,dc=ephico2real,dc=com
 member: uid=sarah.jones,ou=People,dc=ephico2real,dc=com
