@@ -64,6 +64,7 @@ it carries that name. Edit the source and run `helm upgrade`.
 | `ldap-structure-combined.ldif` | 20+ production RBAC groups (`app-ocp-rbac-*`) and test users |
 | `ldap-bda-rbac-groups.ldif` | 12 Big-Data Analytics groups (`bda-rbac-*`) — demo for the custom GroupSync CR |
 | `ldap-rbac-groups-spar-trno.ldif` | 6 namespace RBAC groups for the `spar` / `trno` mnemonics — pairs with the BDA namespace demo |
+| `ldap-rbac-groups-ocp.ldif` | The `ocp` mnemonic's groups, one duty each: `…-ocp-cluster-admin` (ClusterRole `admin`, via GroupConfig), `…-ocp-ns-developer` / `…-ocp-ns-audit` (`edit` / `view` in `ocp` namespaces, via NamespaceConfig), and `…-ocp-keycloak-admin` — an application group with **no** OpenShift permission (`sarah.jones` is its test case). Never nest groups |
 | `ldap-normalize-user-dns.ldif` | One-time migration: renames the 5 `cn=` users to `uid=` so all member DNs resolve |
 | `ldap-oauth-login-gate.ldif` | The OAuth bind service account and `app-ssb-autobahnusers`, the group you must be in to log in. Re-runnable |
 | `configure-acls.ldif` | Service account ACL permissions — **two** accounts: one for group sync, one for OAuth login |
