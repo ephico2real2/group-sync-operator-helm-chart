@@ -1,0 +1,57 @@
+# =============================================================================
+# Platform admin groups for the OCP and Keycloak labs
+# =============================================================================
+# Two groups, both synced by GroupSync/app-ocp-rbac-group-groupsync (filter
+# (cn=app-ocp-rbac-*), every 30 minutes) into OpenShift Groups of the same name:
+#
+#   app-ocp-rbac-ocp-cluster-admin
+#     Matches GroupConfig/baseline-cluster-rbac's `-cluster-admin` suffix, so the
+#     namespace-configuration-operator binds it to ClusterRole/admin cluster-wide —
+#     the same grant every other app-ocp-rbac-*-cluster-admin group gets. This is
+#     ClusterRole/admin, NOT ClusterRole/cluster-admin.
+#
+#   app-ocp-rbac-ocp-keycloak-admin
+#     A special role for testing Keycloak admin rights held by people who are NOT
+#     cluster admins on the OpenShift side. It matches no GroupConfig suffix, so it
+#     carries no OpenShift permission (measured: 0 ClusterRoleBindings, 0 RoleBindings).
+#     sarah.jones is the test case — a Keycloak admin with no OpenShift rights at all
+#     (measured with her real groups: get pods -A, get secrets, create namespaces all
+#     "no"). john.doe and alice.cooper are in it too, but they are OpenShift admins
+#     through other groups, so they do not test that separation. Keycloak
+#     reads it through LDAP federation (envoy-tutorial module 18, realm corp) and maps
+#     it to the realm role `admin` — the role module 17's Gateway requires on /admin.
+#     See ephico2real2/envoy-tutorial#6.
+#
+# ── EXPECT ONE KYVERNO AUDIT VIOLATION, BY DESIGN ────────────────────────────
+# ClusterPolicy/group-naming-app-ocp-rbac (validationFailureAction: Audit) requires
+# ^app-ocp-rbac-[a-z]{3,4}-(ns|cluster)-(admin|developer|audit)$. The cluster-admin
+# group passes; `ocp-keycloak-admin` does not (`keycloak` is neither ns nor cluster).
+# The group is created and synced normally; the finding lands in a PolicyReport.
+#
+# Members are existing users, in the uid= form every DN in this directory now uses
+# (see ldap-normalize-user-dns.ldif). groupOfNames requires at least one member.
+#
+# Import (test LDAP already running). The admin password is read from the pod's own
+# environment, so it never appears in a command line or the API server's audit log:
+#   oc exec -i -n ldap-testing deploy/openldap-server -c openldap -- \
+#     sh -c 'ldapadd -x -H ldap://localhost:389 -D "cn=admin,dc=ephico2real,dc=com" \
+#            -w "$LDAP_ADMIN_PASSWORD"' < ldap-rbac-groups-ocp-admins.ldif
+#
+# Then force the sync rather than waiting out the */30 schedule:
+#   ./60-force-groupsync.sh app-ocp-rbac-group-groupsync
+# =============================================================================
+
+dn: cn=app-ocp-rbac-ocp-cluster-admin,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-ocp-cluster-admin
+description: OCP platform administrators (binds ClusterRole/admin cluster-wide via GroupConfig baseline-cluster-rbac)
+member: uid=john.doe,ou=People,dc=ephico2real,dc=com
+member: uid=alice.cooper,ou=People,dc=ephico2real,dc=com
+
+dn: cn=app-ocp-rbac-ocp-keycloak-admin,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-ocp-keycloak-admin
+description: Keycloak administrators (realm role admin in Keycloak; no OpenShift permission)
+member: uid=john.doe,ou=People,dc=ephico2real,dc=com
+member: uid=alice.cooper,ou=People,dc=ephico2real,dc=com
+member: uid=sarah.jones,ou=People,dc=ephico2real,dc=com
