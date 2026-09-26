@@ -10,7 +10,8 @@
 #   ClusterIssuer/ldap-selfsigned-bootstrap   selfSigned, signs nothing but the root
 #     -> Certificate/ldap-enterprise-root-ca  isCA, in the cert-manager namespace
 #          -> ClusterIssuer/ldap-enterprise-ca            the CA that signs leaves
-#               -> Certificate/openldap-serving-cert-cm   CN + both Service DNS SANs
+#               -> Certificate/openldap-serving-cert-cm   CN + both Service DNS SANs + the public
+#                                                          host of Route ldaps (LDAP_PUBLIC_HOST)
 #          -> ConfigMap openshift-config/<CA_CONFIGMAP_NAME>  the enterprise CA source
 #
 # This script stops at that ConfigMap. It writes the enterprise CA where an OpenShift LDAP identity
@@ -33,7 +34,8 @@
 # RUN apply BEFORE deploying the LDAP server. 01-ldap-server.yaml mounts the leaf secret this creates,
 # so the pod sits in ContainerCreating until it exists.
 #
-#   ./15-bootstrap-cert-manager-ca.sh apply            create the PKI and the serving certificate
+#   ./15-bootstrap-cert-manager-ca.sh apply            create the PKI and the serving certificate, and
+#                                                      restart slapd if it serves an older certificate
 #   ./15-bootstrap-cert-manager-ca.sh verify           prove the chain and SANs from inside the cluster
 #   ./15-bootstrap-cert-manager-ca.sh trust-cluster    publish the root to proxy/cluster.spec.trustedCA,
 #                                                      so trustedCA.injected can carry it
@@ -83,6 +85,14 @@ BACKUP_DIR="${BACKUP_DIR:-${SCRIPT_DIR}/.ca-configmap-backup}"
 SAN_SHORT="${LDAP_SVC}.${LDAP_NS}.svc"
 SAN_FQDN="${LDAP_SVC}.${LDAP_NS}.svc.cluster.local"
 
+# The host of the passthrough Route ldaps (01-ldap-server.yaml), added as a third SAN so a client outside
+# the cluster can verify slapd's certificate by that name. One value for both on purpose: the Route's
+# spec.host and this SAN must be equal, and apply refuses to run while they are not. Empty means
+# ldaps-<namespace>.<ingress domain>, resolved in cmd_apply rather than here so that verify and delete do
+# not need to read the ingress config.
+LDAP_PUBLIC_HOST="${LDAP_PUBLIC_HOST:-}"
+LDAP_DEPLOY="${LDAP_DEPLOY:-openldap-server}"
+
 # Marks every object this script owns, so delete can never reach anything it did not create.
 OWNED_KEY="app.kubernetes.io/managed-by"
 OWNED_VAL="15-bootstrap-cert-manager-ca"
@@ -124,6 +134,81 @@ wait_ready() {
   if [ -n "$ns" ]; then oc describe "$kind" "$name" -n "$ns" 2>&1 | tail -20 | sed 's/^/    /' >&2
   else oc describe "$kind" "$name" 2>&1 | tail -20 | sed 's/^/    /' >&2; fi
   die "${kind}/${name} not Ready"
+}
+
+# Resolves LDAP_PUBLIC_HOST and fails closed when the live Route ldaps names a different host: a
+# certificate without the Route's host is refused by every hostname-checking client (Keycloak cannot turn
+# that check off for LDAP). Runs BEFORE the Certificate is applied, so a mismatch re-issues nothing.
+resolve_public_host() {
+  if [ -z "$LDAP_PUBLIC_HOST" ]; then
+    local domain
+    domain=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}' 2>/dev/null || true)
+    [ -n "$domain" ] || die "could not read the ingress domain from ingresses.config.openshift.io/cluster.
+  Set LDAP_PUBLIC_HOST to the host of Route ldaps in ${LDAP_NS} and re-run."
+    LDAP_PUBLIC_HOST="ldaps-${LDAP_NS}.${domain}"
+  fi
+
+  local live
+  live=$(oc get route ldaps -n "$LDAP_NS" -o jsonpath='{.spec.host}' 2>/dev/null || true)
+  if [ -z "$live" ]; then
+    log "Route ldaps not created yet — 01-ldap-server.yaml must give it host ${LDAP_PUBLIC_HOST}"
+  elif [ "$live" != "$LDAP_PUBLIC_HOST" ]; then
+    die "Route ${LDAP_NS}/ldaps has host '${live}', but the certificate would name '${LDAP_PUBLIC_HOST}',
+  so a client connecting through the Route could not verify it. Make them one value:
+    LDAP_PUBLIC_HOST=${live} ./15-bootstrap-cert-manager-ca.sh apply
+  or set spec.host in 01-ldap-server.yaml to ${LDAP_PUBLIC_HOST} and apply that first."
+  else
+    log "Route ldaps host matches the certificate: ${live}"
+  fi
+}
+
+# The serial of the certificate in the leaf Secret, as "serial=<hex>"; empty when unreadable.
+# oc extract, not jsonpath, for the same dotted-key reason as the root CA below.
+leaf_secret_serial() {
+  oc extract "secret/${LEAF_SECRET}" -n "$LDAP_NS" --keys=tls.crt --to=- 2>/dev/null \
+    | openssl x509 -noout -serial 2>/dev/null || true
+}
+
+# The serial slapd is actually serving on 636, read inside its own pod (the image ships openssl), as
+# "serial=<hex>"; empty when the pod is not running or 636 is not answering.
+served_serial() {
+  oc exec -n "$LDAP_NS" "deploy/${LDAP_DEPLOY}" -c openldap -- \
+    sh -c 'echo | openssl s_client -connect localhost:636 2>/dev/null | openssl x509 -noout -serial' \
+    2>/dev/null || true
+}
+
+# slapd loads its certificate only when it starts: install-certs copies the leaf Secret into an emptyDir at
+# pod start (01-ldap-server.yaml), and a container restart does not re-run it. So a re-issued Secret — a new
+# SAN, or a renewal — is not served until the pod is recreated. Recreating is an LDAP outage (Recreate
+# strategy, and the first start regenerates dhparam.pem), so it happens only when the serial served on 636
+# differs from the Secret's; a re-run with nothing new leaves slapd alone.
+roll_if_stale() {
+  if ! oc get deploy "$LDAP_DEPLOY" -n "$LDAP_NS" >/dev/null 2>&1; then
+    log "deploy/${LDAP_DEPLOY} does not exist yet — its first start installs the current certificate"
+    return 0
+  fi
+
+  local want have
+  want=$(leaf_secret_serial)
+  [ -n "$want" ] || die "secret ${LDAP_NS}/${LEAF_SECRET} has no readable tls.crt"
+  have=$(served_serial)
+  [ -n "$have" ] || die "could not read the certificate slapd serves on 636 in deploy/${LDAP_DEPLOY}.
+  Is its pod Running?  oc get pods -n ${LDAP_NS} -l app=openldap-server"
+
+  if [ "$have" = "$want" ]; then
+    log "slapd already serves the Secret's certificate (${want}) — no rollout"
+    return 0
+  fi
+
+  log "slapd serves ${have}, the Secret holds ${want} — rolling out deploy/${LDAP_DEPLOY}"
+  oc rollout restart "deploy/${LDAP_DEPLOY}" -n "$LDAP_NS" | sed 's/^/  /'
+  # 600s is the startupProbe's own budget (10s x 60): dhparam.pem generation on a fresh start is slow.
+  oc rollout status "deploy/${LDAP_DEPLOY}" -n "$LDAP_NS" --timeout=600s | sed 's/^/  /' \
+    || die "deploy/${LDAP_DEPLOY} did not finish rolling out — oc get pods -n ${LDAP_NS} -l app=openldap-server"
+
+  have=$(served_serial)
+  [ "$have" = "$want" ] || die "after the rollout slapd serves '${have:-nothing}', not the Secret's ${want}"
+  log "slapd now serves ${want}"
 }
 
 # Prints the value of this script's ownership label, empty when absent.
@@ -274,6 +359,7 @@ YAML
   step "serving certificate for ${SAN_SHORT}"
   oc get namespace "$LDAP_NS" >/dev/null 2>&1 \
     || die "namespace ${LDAP_NS} not found — run 30-manage-ldap-server.sh first"
+  resolve_public_host
   oc apply -f - <<YAML | sed 's/^/  /'
 apiVersion: cert-manager.io/v1
 kind: Certificate
@@ -283,12 +369,13 @@ metadata:
   labels:
     ${OWNED_KEY}: ${OWNED_VAL}
 spec:
-  # CN plus both SANs. Verification uses the SANs; the CN is set because some LDAP clients
-  # still display it.
+  # CN plus the SANs: both Service names for in-cluster clients, the Route host for outside ones.
+  # Verification uses the SANs; the CN is set because some LDAP clients still display it.
   commonName: ${SAN_SHORT}
   dnsNames:
     - ${SAN_SHORT}
     - ${SAN_FQDN}
+    - ${LDAP_PUBLIC_HOST}
   secretName: ${LEAF_SECRET}
   duration: 2160h     # 90d
   renewBefore: 360h   # 15d
@@ -302,7 +389,19 @@ spec:
     kind: ClusterIssuer
     group: cert-manager.io
 YAML
+  # Ready alone is not enough after a spec change: until cert-manager has evaluated the new generation,
+  # Ready=True is still the PREVIOUS issuance's, the Secret still holds the old certificate, and the serial
+  # compare below would skip the rollout. cert-manager stamps Ready with the generation it evaluated, and
+  # a spec the current certificate does not satisfy turns Ready False at that generation until re-issued.
+  local gen
+  gen=$(oc get certificate "$LEAF_CERT" -n "$LDAP_NS" -o jsonpath='{.metadata.generation}')
+  oc wait "certificate/${LEAF_CERT}" -n "$LDAP_NS" --timeout=180s \
+     --for=jsonpath='{.status.conditions[?(@.type=="Ready")].observedGeneration}'="$gen" >/dev/null 2>&1 \
+    || die "certificate/${LEAF_CERT} was not evaluated at generation ${gen} within 180s"
   wait_ready certificate "$LEAF_CERT" "$LDAP_NS"
+
+  step "slapd serving the current certificate"
+  roll_if_stale
 
   step "root CA into ConfigMap ${CA_CONFIGMAP_NAME}"
   local tmp

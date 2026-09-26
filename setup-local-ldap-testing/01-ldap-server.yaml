@@ -237,3 +237,34 @@ spec:
     targetPort: ldap
   wildcardPolicy: None
 
+---
+# Public LDAPS: ldaps://ldaps-ldap-testing.apps-crc.testing:443, for clients outside the cluster
+# (Keycloak's LDAP federation). Passthrough, so the router forwards the TLS stream by SNI without
+# terminating it and slapd's own certificate is what the client verifies. Edge does not work: an edge
+# Route or an Ingress terminates TLS in the router, which then speaks HTTP — a raw LDAP bind through
+# one got `HTTP/1.1 400 Bad request` (measured, group-sync-operator-helm-chart#71). ldap-route above is
+# a different thing (plain, port ldap) and stays as it is.
+#
+# host is explicit, not generated: it must equal a dnsName on Certificate/openldap-serving-cert-cm, and
+# 15-bootstrap-cert-manager-ca.sh puts LDAP_PUBLIC_HOST there — ldaps-<namespace>.<ingress domain> by
+# default. On a cluster whose ingress domain is not apps-crc.testing, set this host to
+# ldaps-ldap-testing.<that domain> — or any name, with LDAP_PUBLIC_HOST exported to the same value.
+# 15-bootstrap-cert-manager-ca.sh apply refuses to run while this Route's host and its SAN differ.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: ldaps
+  namespace: ldap-testing
+  labels:
+    app: openldap-server
+spec:
+  host: ldaps-ldap-testing.apps-crc.testing
+  to:
+    kind: Service
+    name: openldap-service
+    weight: 100
+  port:
+    targetPort: ldaps
+  tls:
+    termination: passthrough
+  wildcardPolicy: None

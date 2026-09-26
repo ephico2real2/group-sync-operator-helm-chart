@@ -1,0 +1,52 @@
+# Bind service account for Keycloak's LDAP user federation (group-sync-operator-helm-chart#71).
+#
+# Keycloak reaches this directory from outside the cluster, through the passthrough Route ldaps
+# (ldaps://ldaps-ldap-testing.apps-crc.testing:443 — see "Public LDAPS endpoint" in README.md), and binds
+# as this account to search for users and groups. A third consumer, a third credential: the group-sync
+# operator (ocp-ldap-bind-serviceid) and the OAuth identity provider (ocp-oauth-bind-serviceid) keep their
+# own, so any one can be rotated or revoked without taking the others down.
+#
+# What it can read is decided in configure-acls.ldif, not here: ou=People ({1}) and ou=Groups ({2}), and
+# nothing else — not ou=TrustedApplications, and not userPassword. Keycloak checks a user's password by
+# binding as that user, which rule {0}'s `by anonymous auth` already permits, so it never needs the hash.
+# Until those two rules name this DN its searches return "No such object (32)". On a server that already
+# has the older rules, apply configure-acls-keycloak-only.ldif after this file.
+#
+# simpleSecurityObject + organizationalRole, like ocp-ldap-bind-serviceid: a DN and a password are all a
+# bind account needs. No uid and no extensibleObject — ocp-oauth-bind-serviceid carries those only because
+# it is also a login identity the OAuth provider searches for; Keycloak binds with a configured DN and
+# never searches for its own entry.
+#
+# Password: keycloakbindpassword123 — LAB ONLY, published on purpose like bindpassword123 and
+# oauthbindpassword123. A test-directory credential; never point this file at a real directory.
+#
+# Apply with (the admin password is read from the pod's own environment, not typed on this machine's
+# command line):
+#   oc exec -i -c openldap -n ldap-testing deploy/openldap-server -- \
+#     sh -c 'ldapmodify -c -x -H ldap://localhost:389 -D "cn=admin,dc=ephico2real,dc=com" -w "$LDAP_ADMIN_PASSWORD"' \
+#     < ldap-keycloak-bind.ldif
+#
+# Re-runnable the same way ldap-oauth-login-gate.ldif is: ldapmodify with -c. On a second run the `add`
+# fails harmlessly with "Already exists (68)", -c carries on, and the `modify` below uses `replace`, which
+# reaches the same end state whether or not the values were already there.
+
+dn: cn=keycloak-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com
+changetype: add
+objectClass: simpleSecurityObject
+objectClass: organizationalRole
+cn: keycloak-bind-serviceid
+description: Bind account for Keycloak LDAP user federation - reads ou=People and ou=Groups
+userPassword: keycloakbindpassword123
+
+# ── Re-run safety ────────────────────────────────────────────────────────────────────────────────
+dn: cn=keycloak-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com
+changetype: modify
+replace: objectClass
+objectClass: simpleSecurityObject
+objectClass: organizationalRole
+-
+replace: description
+description: Bind account for Keycloak LDAP user federation - reads ou=People and ou=Groups
+-
+replace: userPassword
+userPassword: keycloakbindpassword123
