@@ -139,17 +139,23 @@ wait_ready() {
 # Resolves LDAP_PUBLIC_HOST and fails closed when the live Route ldaps names a different host: a
 # certificate without the Route's host is refused by every hostname-checking client (Keycloak cannot turn
 # that check off for LDAP). Runs BEFORE the Certificate is applied, so a mismatch re-issues nothing.
+#
+# Absent and unreadable are different answers: --ignore-not-found makes a missing Route an empty success,
+# so any failure left is the API refusing or unreachable, and that stops apply rather than skip the check.
 resolve_public_host() {
   if [ -z "$LDAP_PUBLIC_HOST" ]; then
     local domain
-    domain=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}' 2>/dev/null || true)
-    [ -n "$domain" ] || die "could not read the ingress domain from ingresses.config.openshift.io/cluster.
+    domain=$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}') \
+      || die "could not read ingresses.config.openshift.io/cluster (see above).
+  Set LDAP_PUBLIC_HOST to the host of Route ldaps in ${LDAP_NS} and re-run."
+    [ -n "$domain" ] || die "ingresses.config.openshift.io/cluster has no spec.domain.
   Set LDAP_PUBLIC_HOST to the host of Route ldaps in ${LDAP_NS} and re-run."
     LDAP_PUBLIC_HOST="ldaps-${LDAP_NS}.${domain}"
   fi
 
   local live
-  live=$(oc get route ldaps -n "$LDAP_NS" -o jsonpath='{.spec.host}' 2>/dev/null || true)
+  live=$(oc get route ldaps -n "$LDAP_NS" --ignore-not-found -o jsonpath='{.spec.host}') \
+    || die "could not read Route ${LDAP_NS}/ldaps (see above) — refusing to issue a certificate unchecked"
   if [ -z "$live" ]; then
     log "Route ldaps not created yet — 01-ldap-server.yaml must give it host ${LDAP_PUBLIC_HOST}"
   elif [ "$live" != "$LDAP_PUBLIC_HOST" ]; then
@@ -169,11 +175,12 @@ leaf_secret_serial() {
     | openssl x509 -noout -serial 2>/dev/null || true
 }
 
-# The serial slapd is actually serving on 636, read inside its own pod (the image ships openssl), as
-# "serial=<hex>"; empty when the pod is not running or 636 is not answering.
+# The serial slapd is actually serving on 636, read inside its own pod (the image ships openssl and GNU
+# timeout), as "serial=<hex>"; empty when the pod is not running or 636 does not answer. The timeout bounds
+# a handshake that accepts the connection and then stalls, which would otherwise hang apply forever.
 served_serial() {
   oc exec -n "$LDAP_NS" "deploy/${LDAP_DEPLOY}" -c openldap -- \
-    sh -c 'echo | openssl s_client -connect localhost:636 2>/dev/null | openssl x509 -noout -serial' \
+    sh -c 'timeout 15 openssl s_client -connect localhost:636 </dev/null 2>/dev/null | openssl x509 -noout -serial' \
     2>/dev/null || true
 }
 
@@ -183,16 +190,20 @@ served_serial() {
 # strategy, and the first start regenerates dhparam.pem), so it happens only when the serial served on 636
 # differs from the Secret's; a re-run with nothing new leaves slapd alone.
 roll_if_stale() {
-  if ! oc get deploy "$LDAP_DEPLOY" -n "$LDAP_NS" >/dev/null 2>&1; then
+  # An unreadable Deployment is not an absent one: taking it for absent would skip a rollout slapd needs.
+  local deployment
+  deployment=$(oc get deploy "$LDAP_DEPLOY" -n "$LDAP_NS" --ignore-not-found -o name) \
+    || die "could not read deploy/${LDAP_DEPLOY} in ${LDAP_NS} (see above) — not deciding on a rollout blind"
+  if [ -z "$deployment" ]; then
     log "deploy/${LDAP_DEPLOY} does not exist yet — its first start installs the current certificate"
     return 0
   fi
 
   local want have
   want=$(leaf_secret_serial)
-  [ -n "$want" ] || die "secret ${LDAP_NS}/${LEAF_SECRET} has no readable tls.crt"
+  [[ "$want" =~ ^serial=[0-9A-F]+$ ]] || die "secret ${LDAP_NS}/${LEAF_SECRET} has no readable tls.crt"
   have=$(served_serial)
-  [ -n "$have" ] || die "could not read the certificate slapd serves on 636 in deploy/${LDAP_DEPLOY}.
+  [[ "$have" =~ ^serial=[0-9A-F]+$ ]] || die "could not read the certificate slapd serves on 636 in deploy/${LDAP_DEPLOY}.
   Is its pod Running?  oc get pods -n ${LDAP_NS} -l app=openldap-server"
 
   if [ "$have" = "$want" ]; then
@@ -209,6 +220,8 @@ roll_if_stale() {
   have=$(served_serial)
   [ "$have" = "$want" ] || die "after the rollout slapd serves '${have:-nothing}', not the Secret's ${want}"
   log "slapd now serves ${want}"
+  log "ldap-local and group sync were down during the rollout: ./90-verify-all-resources.sh requests a"
+  log "  real ldap-local token and fails until every GroupSync has succeeded since slapd started"
 }
 
 # Prints the value of this script's ownership label, empty when absent.

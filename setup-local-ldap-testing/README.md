@@ -51,10 +51,10 @@ it carries that name. Edit the source and run `helm upgrade`.
 | `15-bootstrap-cert-manager-ca.sh` | **LDAPS only**: `apply` builds the cert-manager PKI and serving certificate — must run BEFORE the server manifest. Its third SAN is the host of Route `ldaps` (`LDAP_PUBLIC_HOST`), and it restarts slapd only when the certificate slapd serves differs from the Secret's. `verify` proves the chain from inside the cluster. `trust-cluster` publishes the root to `proxy/cluster.spec.trustedCA` for the injected path |
 | `20-import-ldap-data.sh` | Imports the RBAC groups and test users |
 | `30-manage-ldap-server.sh` | Server lifecycle: deploy, test, restart, logs |
-| `40-setup-oauth-ldap-login.sh` | Adds the directory to `oauth/cluster` as an LDAP identity provider, so you can **log in** with it and not just sync groups from it. Auto-detects LDAPS vs plain LDAP. `bind-account` creates the bind service account and the login gate group; `apply` writes the provider; `verify` checks it. **Additive** — the existing HTPasswd/kubeadmin login is preserved |
+| `40-setup-oauth-ldap-login.sh` | Adds the directory to `oauth/cluster` as an LDAP identity provider, so you can **log in** with it and not just sync groups from it. Auto-detects LDAPS vs plain LDAP. `bind-account` creates the bind service accounts (OAuth and Keycloak) and the login gate group; `apply` writes the provider; `verify` checks it. **Additive** — the existing HTPasswd/kubeadmin login is preserved |
 | `50-simulate-ldap-operations.sh` | Adds/removes members to exercise sync |
 | `60-force-groupsync.sh` | Forces a GroupSync now instead of waiting for its schedule |
-| `90-verify-all-resources.sh` | Verifies all resources and configuration, including the public LDAPS endpoint: Route, certificate, served-vs-Secret serial, Keycloak bind account |
+| `90-verify-all-resources.sh` | Verifies all resources and configuration, including the public LDAPS endpoint (Route, certificate, served-vs-Secret serial, Keycloak bind account, a GroupSync since slapd started; skipped without cert-manager) and a real `ldap-local` token request (skipped without that provider). Run it after Helm |
 | `99-cleanup-everything.sh` | Complete test environment cleanup |
 
 ### 📊 Data Files
@@ -238,12 +238,15 @@ starts whether or not the PKI exists. On path A the initContainer logs
 ./10-setup-oauth-secrets.sh                 # source OAuth secret + demo CA
 ./30-manage-ldap-server.sh deploy           # first start takes 2-4 min, see note below
 ./20-import-ldap-data.sh                    # RBAC groups and users
-./90-verify-all-resources.sh
 
-helm install group-sync ../charts/group-sync-operator-helm -n group-sync-operator --create-namespace \
+helm upgrade --install group-sync ../charts/group-sync-operator-helm -n group-sync-operator --create-namespace \
   -f ../charts/group-sync-operator-helm/environments/ldap-plain-values.yaml
 helm test group-sync -n group-sync-operator --logs
+./90-verify-all-resources.sh                # after Helm: it checks the Secret and GroupSync the chart makes
 ```
+
+Without cert-manager the verify script **skips** its public-LDAPS checks, with a note, and skips the
+`ldap-local` login check while no `ldap-local` provider exists.
 
 ### Path B — LDAPS with cert-manager
 
@@ -254,12 +257,13 @@ Same, with the PKI created **before** the server, because the server mounts the 
 ./15-bootstrap-cert-manager-ca.sh apply     # ClusterIssuers, root CA, serving cert, ca-config-map
 ./30-manage-ldap-server.sh deploy
 ./20-import-ldap-data.sh
-./90-verify-all-resources.sh
+./40-setup-oauth-ldap-login.sh bind-account # bind accounts (OAuth, Keycloak), gate group, ACL
 
-helm install group-sync ../charts/group-sync-operator-helm -n group-sync-operator --create-namespace \
+helm upgrade --install group-sync ../charts/group-sync-operator-helm -n group-sync-operator --create-namespace \
   -f ../charts/group-sync-operator-helm/crc-values.yaml
 helm test group-sync -n group-sync-operator --logs
 ./15-bootstrap-cert-manager-ca.sh verify    # proves the chain and SAN from inside the cluster
+./90-verify-all-resources.sh                # after Helm, and after the first GroupSync has run
 ```
 
 `apply` is idempotent, so re-running it is safe. cert-manager must already be installed:
@@ -281,10 +285,12 @@ label — so it is worth exercising even though the chart defaults to the copy.
 ./15-bootstrap-cert-manager-ca.sh trust-cluster    # <-- the only extra step
 ./30-manage-ldap-server.sh deploy
 ./20-import-ldap-data.sh
+./40-setup-oauth-ldap-login.sh bind-account
 
-helm install group-sync ../charts/group-sync-operator-helm -n group-sync-operator --create-namespace \
+helm upgrade --install group-sync ../charts/group-sync-operator-helm -n group-sync-operator --create-namespace \
   -f ../charts/group-sync-operator-helm/crc-injected-values.yaml
 helm test group-sync -n group-sync-operator --logs
+./90-verify-all-resources.sh
 ```
 
 `trust-cluster` publishes the root to `openshift-config/ldap-enterprise-ca-bundle` under the key
@@ -395,13 +401,18 @@ openssl s_client -connect "$HOST:443" -servername "$HOST" -CAfile "$ROOT" \
 ```
 
 Both fingerprints must be the `0E:1F:4B:…:14:26` above. A root taken from the handshake and **not** compared
-with a source you already trust proves only that the server sent a chain.
+with a source you already trust proves only that the server sent a chain. If a server sends only the leaf,
+there is no root to take: use the PKI owner's copy (`ca-config-map` here) as `-CAfile` directly.
 
 ### The Keycloak bind account
 
 Reads `ou=People` and `ou=Groups` (rules `{1}` and `{2}` in `configure-acls.ldif`) and nothing else: not
 `ou=TrustedApplications`, not `userPassword`, no writes. Keycloak checks a user's password by binding as that
-user, which rule `{0}` already allows. On a running server, create the entry, then add the grant — the admin
+user, which rule `{0}` already allows.
+
+`./40-setup-oauth-ldap-login.sh bind-account` creates the entry (re-runnable) and applies the full
+`configure-acls.ldif`, which already carries the grant — that is all a fresh directory needs. By hand, on a
+running server that still has the pre-Keycloak rules, create the entry, then add only the grant — the admin
 password is read inside the pod, not typed here:
 
 ```bash
@@ -414,8 +425,9 @@ oc exec -i -c openldap -n ldap-testing deploy/openldap-server -- \
 
 `configure-acls-keycloak-only.ldif` is one modify: it deletes the exact current `{1}` and `{2}` and adds the
 new ones, so it changes both or neither, and it **fails closed** — `No such attribute (16)`, nothing
-changed — if either rule is not exactly the pre-Keycloak value, including on a second run. The full
-`configure-acls.ldif` already carries the grant, so a fresh directory needs only that.
+changed — if either rule is not exactly the pre-Keycloak value, including on a second run; read the live
+rules before doing anything else. The bind LDIF converges on a re-run but `ldapmodify -c` then exits 68
+for its `add`; `bind-account` applies its two records separately, so only the `add` may return 68.
 
 ### How a renewed certificate reaches slapd
 
@@ -431,23 +443,36 @@ jsonpath='{.status.renewalTime}'`), the Secret changes and slapd keeps serving t
 It compares the serial slapd serves on 636 with the Secret's and restarts `deploy/openldap-server` only when
 they differ (`Recreate`, so LDAP is down until the new pod is Ready — 2-4 minutes on a first start); with
 nothing new it says so and leaves slapd alone. `90-verify-all-resources.sh` fails while the two serials
-differ, and names that command. After a restart, `lastSyncSuccessTime` from before it proves nothing: the
-verify script also fails until every GroupSync has succeeded again (`./60-force-groupsync.sh <cr>`).
+differ, and names that command. A restart is an outage for `ldap-local` and group sync, so run the verify
+script afterwards: it requests a real `ldap-local` token (a throwaway kubeconfig, revoked afterwards), and
+fails until every GroupSync has succeeded **after** slapd started (`./60-force-groupsync.sh <cr>` forces one).
 
 ### Never delete Secret `openldap-certmanager-tls`
 
 Not even to force a renewal. The pod mounts it `optional: true`, so a pod that starts while it is missing
 gets osixia's self-signed certificate for the **pod** name — `ldap-local` login and group sync, which
 verify `openldap-service.ldap-testing.svc.cluster.local`, both break. To force a renewal, set the
-Certificate's `Issuing` condition, which is what `cmctl renew` does (`cmctl` is not installed here):
+Certificate's `Issuing` condition, which is what `cmctl renew` does (`cmctl` is not installed here). Run
+it as one subshell with `set -e`, so a failed step stops the ones after it — above all `apply`, which must
+not compare serials before the new certificate is in the Secret (it would find nothing to do, and slapd
+would keep the old one):
 
 ```bash
-CERT=openldap-serving-cert-cm NS=ldap-testing
-# Only when no issuance is already running — this must print nothing:
-oc get certificate "$CERT" -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Issuing")].status}'
-oc patch certificate "$CERT" -n "$NS" --subresource=status --type=json -p "[{\"op\":\"add\",\"path\":\"/status/conditions/-\",\"value\":{\"type\":\"Issuing\",\"status\":\"True\",\"reason\":\"ManuallyTriggered\",\"message\":\"Certificate re-issuance manually triggered\",\"lastTransitionTime\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"observedGeneration\":$(oc get certificate "$CERT" -n "$NS" -o jsonpath='{.metadata.generation}')}}]"
-oc get certificate "$CERT" -n "$NS" -o jsonpath='{.status.revision}{"\n"}'   # goes up by one once re-issued
-./15-bootstrap-cert-manager-ca.sh apply                                        # then slapd picks it up
+(
+  set -e
+  CERT=openldap-serving-cert-cm NS=ldap-testing
+  # Refuse while an issuance is already in progress (an Issuing condition is present):
+  [ -z "$(oc get certificate "$CERT" -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Issuing")].type}')" ] \
+    || { echo "an issuance is already in progress — wait for it" >&2; exit 1; }
+  BEFORE=$(oc get certificate "$CERT" -n "$NS" -o jsonpath='{.status.revision}')
+  oc patch certificate "$CERT" -n "$NS" --subresource=status --type=json -p "[{\"op\":\"add\",\"path\":\"/status/conditions/-\",\"value\":{\"type\":\"Issuing\",\"status\":\"True\",\"reason\":\"ManuallyTriggered\",\"message\":\"Certificate re-issuance manually triggered\",\"lastTransitionTime\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"observedGeneration\":$(oc get certificate "$CERT" -n "$NS" -o jsonpath='{.metadata.generation}')}}]"
+  # cert-manager writes the new Secret first, then bumps status.revision and drops Issuing — so the next
+  # revision means the Secret already holds the new certificate.
+  oc wait "certificate/${CERT}" -n "$NS" --timeout=180s --for=jsonpath='{.status.revision}'="$((BEFORE + 1))"
+  oc wait "certificate/${CERT}" -n "$NS" --timeout=180s --for=condition=Ready
+  ./15-bootstrap-cert-manager-ca.sh apply     # now slapd is rolled onto it
+  ./90-verify-all-resources.sh
+)
 ```
 
 ## Manual LDAP Structure Import (If Bootstrap Fails)

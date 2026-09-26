@@ -210,25 +210,57 @@ echo
 # Route ldaps must pass TLS through to slapd; slapd's certificate must verify against the enterprise CA by
 # the Route's host name; slapd must be serving the certificate cert-manager holds now, not one it loaded
 # before a renewal; and the Keycloak bind account must be able to read People and Groups.
+#
+# Path A (plain LDAP, no cert-manager) has none of this, so the block is SKIPPED, with a note, when
+# cert-manager or Route ldaps is absent. Absent, not unreadable: --ignore-not-found turns a missing object
+# into an empty success, so an API error is still a failure.
 echo "🌐 Public LDAPS endpoint:"
 echo "------------------------"
 LDAPS_OK=1
+LDAPS_SKIPPED=""
 ldaps_fail() { echo "❌ $*"; LDAPS_OK=0; VERIFY_FAILED=1; }
 # Membership of one SAN in "DNS:a, DNS:b" — exact, so the .svc name does not match inside .svc.cluster.local.
 has_san() { tr ',' '\n' | sed 's/^[[:space:]]*//' | grep -qxF "DNS:$1"; }
+# Is $1 strictly later than $2, as instants? RFC 3339 with any fractional precision and Z or an offset. A
+# string compare misorders '…:50.001Z' against '…:50Z', and an equal second proves nothing about order.
+rfc3339_after() {
+    python3 - "$1" "$2" <<'PY'
+import calendar, datetime, decimal, re, sys
 
-ROUTE=$(oc get route ldaps -n ldap-testing -o jsonpath='{.spec.host} {.spec.tls.termination} {.spec.port.targetPort}' 2>/dev/null || true)
-PUBLIC_HOST=${ROUTE%% *}
-if [ -z "$ROUTE" ]; then
-    ldaps_fail "Route 'ldaps' NOT found in ldap-testing — oc apply -f 01-ldap-server.yaml"
-    PUBLIC_HOST=""
-elif [ "${ROUTE#* }" != "passthrough ldaps" ]; then
-    ldaps_fail "Route 'ldaps' is '${ROUTE#* }', not 'passthrough ldaps' — only passthrough carries LDAP"
-else
-    echo "✅ Route 'ldaps': ${PUBLIC_HOST}:443 → passthrough → Service port ldaps"
+def instant(s):
+    m = re.fullmatch(r'(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(\.\d+)?(Z|[+-]\d\d:\d\d)', s)
+    if not m:
+        raise ValueError('not an RFC 3339 timestamp: %r' % s)
+    d = datetime.datetime.fromisoformat(m[1] + ('+00:00' if m[3] == 'Z' else m[3]))
+    return decimal.Decimal(calendar.timegm(d.utctimetuple())) + decimal.Decimal(m[2] or '0')
+
+try:
+    sys.exit(0 if instant(sys.argv[1]) > instant(sys.argv[2]) else 1)
+except (ValueError, OverflowError, decimal.InvalidOperation):
+    sys.exit(1)
+PY
+}
+
+if ! CM_CRD=$(oc get crd certificates.cert-manager.io --ignore-not-found -o name 2>/dev/null) \
+   || ! ROUTE=$(oc get route ldaps -n ldap-testing --ignore-not-found \
+          -o jsonpath='{.spec.host} {.spec.tls.termination} {.spec.port.targetPort}' 2>/dev/null); then
+    ldaps_fail "could not read CRD certificates.cert-manager.io or Route ldaps — is the API reachable?"
+elif [ -z "$CM_CRD" ]; then
+    LDAPS_SKIPPED="cert-manager is not installed (Path A, plain LDAP)"
+elif [ -z "$ROUTE" ]; then
+    LDAPS_SKIPPED="Route ldaps is not deployed (oc apply -f 01-ldap-server.yaml)"
 fi
 
-if [ -n "$PUBLIC_HOST" ]; then
+if [ -n "$LDAPS_SKIPPED" ]; then
+    echo "⏭️  skipped — ${LDAPS_SKIPPED}"
+elif [ "$LDAPS_OK" -eq 1 ]; then
+    PUBLIC_HOST=${ROUTE%% *}
+    if [ "${ROUTE#* }" != "passthrough ldaps" ]; then
+        ldaps_fail "Route 'ldaps' is '${ROUTE#* }', not 'passthrough ldaps' — only passthrough carries LDAP"
+    else
+        echo "✅ Route 'ldaps': ${PUBLIC_HOST}:443 → passthrough → Service port ldaps"
+    fi
+
     # -verify_hostname is OpenSSL's; macOS /usr/bin/openssl is LibreSSL, which rejects it. Say so rather
     # than report a hostname failure that is really a tool failure.
     if ! openssl s_client -help 2>&1 | grep -q -- '-verify_hostname'; then
@@ -265,42 +297,97 @@ if [ -n "$PUBLIC_HOST" ]; then
             ldaps_fail "slapd serves ${SERVED_SERIAL:-nothing}, Secret openldap-certmanager-tls holds ${SECRET_SERIAL:-nothing} — run ./15-bootstrap-cert-manager-ca.sh apply"
         fi
     fi
-fi
 
-if [ -n "${LDAP_POD:-}" ]; then
-    # In the pod, on 389: this proves the account and its ACL grant; the TLS path is proved above. The
-    # password goes in on stdin, never on a command line. userPassword is requested explicitly, so its
-    # absence below means denied, not merely not asked for.
-    KEYCLOAK_BIND_DN="cn=keycloak-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com"
-    KEYCLOAK_BIND_PASSWORD="${KEYCLOAK_BIND_PASSWORD:-keycloakbindpassword123}"   # lab value, ldap-keycloak-bind.ldif
-    kc_search() {
-        printf '%s' "$KEYCLOAK_BIND_PASSWORD" | kubectl exec -i -n ldap-testing "$LDAP_POD" -c openldap -- \
-            ldapsearch -LLL -x -H ldap://localhost:389 -D "$KEYCLOAK_BIND_DN" -y /dev/stdin "$@" 2>/dev/null
-    }
-    KC_PEOPLE=$(kc_search -b "ou=People,dc=ephico2real,dc=com" "(objectClass=inetOrgPerson)" dn userPassword || true)
-    KC_GROUPS=$(kc_search -b "ou=Groups,dc=ephico2real,dc=com" "(objectClass=groupOfNames)" dn || true)
-    KC_N_PEOPLE=$(printf '%s\n' "$KC_PEOPLE" | grep -c '^dn:' || true)
-    KC_N_GROUPS=$(printf '%s\n' "$KC_GROUPS" | grep -c '^dn:' || true)
-    if printf '%s\n' "$KC_PEOPLE" | grep -q '^userPassword'; then
-        ldaps_fail "keycloak-bind-serviceid was returned userPassword — rule {0} in configure-acls.ldif must not name it"
-    elif [ "${KC_N_PEOPLE:-0}" -gt 0 ] && [ "${KC_N_GROUPS:-0}" -gt 0 ]; then
-        echo "✅ keycloak-bind-serviceid reads ${KC_N_PEOPLE} people and ${KC_N_GROUPS} groups; userPassword withheld"
+    if [ -z "${LDAP_POD:-}" ]; then
+        ldaps_fail "no Running openldap-server pod — the Keycloak bind and post-start GroupSync checks did not run"
     else
-        ldaps_fail "keycloak-bind-serviceid reads ${KC_N_PEOPLE:-0} people and ${KC_N_GROUPS:-0} groups — create it with ldap-keycloak-bind.ldif, grant it with configure-acls-keycloak-only.ldif"
-    fi
-
-    # A lastSyncSuccessTime from before slapd last started proves nothing about the slapd running now.
-    SLAPD_STARTED=$(kubectl get pod -n ldap-testing "$LDAP_POD" \
-        -o jsonpath='{.status.containerStatuses[?(@.name=="openldap")].state.running.startedAt}' 2>/dev/null || true)
-    for cr in ${CRS:-}; do
-        SYNCED=$(oc get groupsync "$cr" -n group-sync-operator -o jsonpath='{.status.lastSyncSuccessTime}' 2>/dev/null || true)
-        # Both are RFC 3339 UTC of the same width, so they compare correctly as strings.
-        if [ -n "$SYNCED" ] && [ -n "$SLAPD_STARTED" ] && [[ ! "$SYNCED" < "$SLAPD_STARTED" ]]; then
-            echo "✅ GroupSync '$cr' synced at ${SYNCED}, after slapd started (${SLAPD_STARTED})"
+        # In the pod, on 389: this proves the account and its ACL grant; the TLS path is proved above. The
+        # password goes in on stdin, never on a command line. userPassword is requested explicitly on BOTH
+        # searches, so its absence means denied, not merely not asked for. ldapsearch's exit status is kept:
+        # entries followed by a size or time limit error are an incomplete answer, not a pass.
+        KEYCLOAK_BIND_DN="cn=keycloak-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com"
+        KEYCLOAK_BIND_PASSWORD="${KEYCLOAK_BIND_PASSWORD:-keycloakbindpassword123}"   # lab value, ldap-keycloak-bind.ldif
+        kc_search() {
+            printf '%s' "$KEYCLOAK_BIND_PASSWORD" | kubectl exec -i -n ldap-testing "$LDAP_POD" -c openldap -- \
+                ldapsearch -LLL -o ldif-wrap=no -x -H ldap://localhost:389 -D "$KEYCLOAK_BIND_DN" -y /dev/stdin "$@" 2>/dev/null
+        }
+        KC_SEARCH_OK=1
+        KC_PEOPLE=$(kc_search -b "ou=People,dc=ephico2real,dc=com" "(objectClass=inetOrgPerson)" dn userPassword) || KC_SEARCH_OK=0
+        KC_GROUPS=$(kc_search -b "ou=Groups,dc=ephico2real,dc=com" "(objectClass=groupOfNames)" dn userPassword) || KC_SEARCH_OK=0
+        KC_N_PEOPLE=$(printf '%s\n' "$KC_PEOPLE" | grep -c '^dn:' || true)
+        KC_N_GROUPS=$(printf '%s\n' "$KC_GROUPS" | grep -c '^dn:' || true)
+        if printf '%s\n%s\n' "$KC_PEOPLE" "$KC_GROUPS" | grep -Eqi '^userPassword(;[^:]*)?:'; then
+            ldaps_fail "keycloak-bind-serviceid was returned userPassword — rule {0} in configure-acls.ldif must not name it"
+        elif [ "$KC_SEARCH_OK" -ne 1 ]; then
+            ldaps_fail "keycloak-bind-serviceid: a search failed or was incomplete — create the account with ./40-setup-oauth-ldap-login.sh bind-account (on a running server with the older ACL: ldap-keycloak-bind.ldif, then configure-acls-keycloak-only.ldif)"
+        elif [ "${KC_N_PEOPLE:-0}" -gt 0 ] && [ "${KC_N_GROUPS:-0}" -gt 0 ]; then
+            echo "✅ keycloak-bind-serviceid reads ${KC_N_PEOPLE} people and ${KC_N_GROUPS} groups; userPassword withheld on both"
         else
-            ldaps_fail "GroupSync '$cr' last success ${SYNCED:-never} is not after slapd started (${SLAPD_STARTED:-unknown}) — ./60-force-groupsync.sh $cr"
+            ldaps_fail "keycloak-bind-serviceid reads ${KC_N_PEOPLE:-0} people and ${KC_N_GROUPS:-0} groups — both must be > 0"
         fi
-    done
+
+        # A lastSyncSuccessTime from before (or in the same instant as) slapd's start proves nothing about the
+        # slapd running now.
+        SLAPD_STARTED=$(kubectl get pod -n ldap-testing "$LDAP_POD" \
+            -o jsonpath='{.status.containerStatuses[?(@.name=="openldap")].state.running.startedAt}' 2>/dev/null || true)
+        [ -n "${CRS:-}" ] || ldaps_fail "no GroupSync CRs — nothing shows a sync since slapd started"
+        for cr in ${CRS:-}; do
+            SYNCED=$(oc get groupsync "$cr" -n group-sync-operator -o jsonpath='{.status.lastSyncSuccessTime}' 2>/dev/null || true)
+            if rfc3339_after "$SYNCED" "$SLAPD_STARTED"; then
+                echo "✅ GroupSync '$cr' synced at ${SYNCED}, after slapd started (${SLAPD_STARTED})"
+            else
+                ldaps_fail "GroupSync '$cr' last success ${SYNCED:-never} is not after slapd started (${SLAPD_STARTED:-unknown}) — wait for its next sync, or ./60-force-groupsync.sh $cr"
+            fi
+        done
+    fi
+fi
+echo
+
+# ldap-local, the OAuth identity provider (40-setup-oauth-ldap-login.sh): a real token request, not "the
+# provider is on the OAuth CR" — the only proof that login still works after slapd was recreated.
+#   - a throwaway kubeconfig holding only this cluster's server and CA, never the current credentials, so
+#     the session running this script is untouched;
+#   - the password goes to oc login on stdin, never on a command line (oc reads one whitespace-free word
+#     from a non-terminal stdin, so the password must have no spaces);
+#   - the login must map to an ldap-local identity, not the HTPasswd provider;
+#   - THIS CHECK WRITES: one OAuthAccessToken, revoked with oc logout before the kubeconfig is deleted.
+# Skipped, with a note, when oauth/cluster has no ldap-local provider (it is optional; see the README).
+echo "🔑 ldap-local login:"
+echo "--------------------"
+LOGIN_STATE=ok
+if ! LDAP_LOCAL_IDP=$(oc get oauth cluster -o jsonpath='{.spec.identityProviders[?(@.name=="ldap-local")].name}' 2>/dev/null); then
+    echo "❌ could not read oauth/cluster"; LOGIN_STATE=failed; VERIFY_FAILED=1
+elif [ -z "$LDAP_LOCAL_IDP" ]; then
+    echo "⏭️  skipped — no ldap-local identity provider on oauth/cluster (./40-setup-oauth-ldap-login.sh apply)"
+    LOGIN_STATE=skipped
+else
+    LDAP_LOCAL_USER="${LDAP_LOCAL_USER:-john.doe}"          # in the login gate group, ldap-oauth-login-gate.ldif
+    LDAP_LOCAL_PASSWORD="${LDAP_LOCAL_PASSWORD:-Ldap123!}"  # lab value, ldap-oauth-login-gate.ldif
+    LOGIN_DIR=$(mktemp -d)
+    LOGIN_KC="${LOGIN_DIR}/kubeconfig"
+    if ! oc config view --minify --flatten --raw -o json 2>/dev/null | python3 -c '
+import json, sys
+cluster = json.load(sys.stdin)["clusters"][0]
+print(json.dumps({"apiVersion": "v1", "kind": "Config", "clusters": [cluster], "users": [],
+                  "contexts": [{"name": "proof", "context": {"cluster": cluster["name"]}}],
+                  "current-context": "proof"}))' > "$LOGIN_KC"; then
+        echo "❌ could not read the current cluster's server and CA from the kubeconfig"; LOGIN_STATE=failed
+    elif ! printf '%s\n' "$LDAP_LOCAL_PASSWORD" | oc --kubeconfig="$LOGIN_KC" login \
+            --server="$(oc --kubeconfig="$LOGIN_KC" config view -o jsonpath='{.clusters[0].cluster.server}')" \
+            --username="$LDAP_LOCAL_USER" >/dev/null 2>"${LOGIN_DIR}/login.err"; then
+        echo "❌ ldap-local did not issue a token for ${LDAP_LOCAL_USER}: $(tail -1 "${LOGIN_DIR}/login.err")"
+        LOGIN_STATE=failed
+    elif [ "$(oc --kubeconfig="$LOGIN_KC" whoami 2>/dev/null)" != "$LDAP_LOCAL_USER" ]; then
+        echo "❌ the token issued is not ${LDAP_LOCAL_USER}'s"; LOGIN_STATE=failed
+    elif ! oc get user "$LDAP_LOCAL_USER" -o jsonpath='{.identities}' 2>/dev/null | grep -q '"ldap-local:'; then
+        echo "❌ ${LDAP_LOCAL_USER} logged in, but has no ldap-local identity — another provider answered"; LOGIN_STATE=failed
+    else
+        echo "✅ ldap-local issued a token for ${LDAP_LOCAL_USER} (throwaway kubeconfig; token revoked)"
+    fi
+    # Revoke whatever was issued, then remove the kubeconfig; neither may fail the run.
+    oc --kubeconfig="$LOGIN_KC" logout >/dev/null 2>&1 || true
+    rm -rf "$LOGIN_DIR"
+    [ "$LOGIN_STATE" = ok ] || VERIFY_FAILED=1
 fi
 echo
 
@@ -318,7 +405,14 @@ sum "ConfigMap: ca-config-map-test (openshift-config)" oc get configmap ca-confi
 sum "Secret: ldap-group-sync (group-sync-operator)"    oc get secret ldap-group-sync -n group-sync-operator
 sum "Secret: ldap-secret (openshift-config)"           oc get secret ldap-secret -n openshift-config
 if [ -n "${CRS:-}" ]; then echo "  ✓ GroupSync CRs: $(echo $CRS | tr '\n' ' ')"; else echo "  ✗ GroupSync CRs: none"; VERIFY_FAILED=1; fi
-if [ "${LDAPS_OK:-0}" -eq 1 ]; then echo "  ✓ Public LDAPS: Route ldaps, certificate, serial, Keycloak bind"; else echo "  ✗ Public LDAPS: see the ❌ lines above"; fi
+if [ -n "${LDAPS_SKIPPED:-}" ]; then echo "  • Public LDAPS: skipped — ${LDAPS_SKIPPED}"
+elif [ "${LDAPS_OK:-0}" -eq 1 ]; then echo "  ✓ Public LDAPS: Route ldaps, certificate, serial, Keycloak bind, sync since slapd start"
+else echo "  ✗ Public LDAPS: see the ❌ lines above"; fi
+case "${LOGIN_STATE:-failed}" in
+    ok)      echo "  ✓ ldap-local: a real token was issued" ;;
+    skipped) echo "  • ldap-local: skipped — no ldap-local provider" ;;
+    *)       echo "  ✗ ldap-local: see the ❌ line above" ;;
+esac
 echo "  • LDAP Server: ${RBAC_GROUPS:-0} app-ocp-rbac groups in the directory"
 echo "  • OpenShift Groups synced: $(oc get groups --no-headers 2>/dev/null | wc -l | tr -d ' ')"
 echo
