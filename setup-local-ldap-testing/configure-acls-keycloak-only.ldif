@@ -1,0 +1,34 @@
+# Adds keycloak-bind-serviceid's read grant to the LIVE server — rules {1} (ou=People) and {2} (ou=Groups)
+# only — without replacing the whole olcAccess list the way configure-acls.ldif does.
+#
+# Apply with (EXTERNAL over ldapi://, as 40-setup-oauth-ldap-login.sh applies the full file):
+#   oc exec -i -c openldap -n ldap-testing deploy/openldap-server -- \
+#     ldapmodify -Y EXTERNAL -H ldapi:/// < configure-acls-keycloak-only.ldif
+#
+# One modify, so slapd applies all four operations or none. Each `delete` names the rule's current value
+# in full, and slapd refuses to delete a value that is not there, so the modify FAILS CLOSED — changing
+# nothing — if {1} or {2} on the server is not exactly the pre-Keycloak rule below. A second run fails the
+# same way, because the rule it would delete is already the new one. Either failure means: read the live
+# list before changing anything,
+#   oc exec -c openldap -n ldap-testing deploy/openldap-server -- \
+#     ldapsearch -Q -LLL -o ldif-wrap=no -Y EXTERNAL -H ldapi:/// -s base \
+#       -b 'olcDatabase={1}mdb,cn=config' olcAccess
+#
+# olcAccess values are ordered. Deleting {1} renumbers the rules below it up by one and adding {1} puts
+# them back, so each delete is followed straight away by the add at the same index; {0}, {3} and {4} end
+# where they started. The result is exactly the list in configure-acls.ldif.
+
+dn: olcDatabase={1}mdb,cn=config
+changetype: modify
+delete: olcAccess
+olcAccess: {1}to dn.subtree="ou=People,dc=ephico2real,dc=com" by dn="cn=admin,dc=ephico2real,dc=com" write by dn="cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com" read by dn="cn=ocp-oauth-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com" read by * none
+-
+add: olcAccess
+olcAccess: {1}to dn.subtree="ou=People,dc=ephico2real,dc=com" by dn="cn=admin,dc=ephico2real,dc=com" write by dn="cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com" read by dn="cn=ocp-oauth-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com" read by dn="cn=keycloak-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com" read by * none
+-
+delete: olcAccess
+olcAccess: {2}to dn.subtree="ou=Groups,dc=ephico2real,dc=com" by dn="cn=admin,dc=ephico2real,dc=com" write by dn="cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com" read by dn="cn=ocp-oauth-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com" read by * none
+-
+add: olcAccess
+olcAccess: {2}to dn.subtree="ou=Groups,dc=ephico2real,dc=com" by dn="cn=admin,dc=ephico2real,dc=com" write by dn="cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com" read by dn="cn=ocp-oauth-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com" read by dn="cn=keycloak-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com" read by * none
+-

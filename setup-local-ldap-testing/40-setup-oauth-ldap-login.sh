@@ -15,7 +15,8 @@
 # this lab depends on keeps working. `delete` removes only the provider this script added, by name.
 #
 #   ./40-setup-oauth-ldap-login.sh status        what the directory offers and what the OAuth CR has now
-#   ./40-setup-oauth-ldap-login.sh bind-account  create the bind account, gate group, ACL and Secret
+#   ./40-setup-oauth-ldap-login.sh bind-account  create the OAuth and Keycloak bind accounts, gate group,
+#                                                ACL and Secret
 #   ./40-setup-oauth-ldap-login.sh apply         add (or update) the LDAP identity provider
 #   ./40-setup-oauth-ldap-login.sh verify        the operator settled, and a real user can bind
 #   ./40-setup-oauth-ldap-login.sh delete        remove only our provider, leave the others
@@ -89,6 +90,12 @@ USER_OBJECTCLASS="${USER_OBJECTCLASS:-}"
 # to let any directory user log in.
 LOGIN_GROUPS="${LOGIN_GROUPS:-app-ssb-autobahnusers}"
 GATE_LDIF="${GATE_LDIF:-ldap-oauth-login-gate.ldif}"
+# Keycloak's bind account (public LDAPS, group-sync-operator-helm-chart#71). Created here because this is
+# where the directory's bind accounts are made; configure-acls.ldif below already grants it People and
+# Groups. The password is the lab value in that LDIF.
+KEYCLOAK_LDIF="${KEYCLOAK_LDIF:-ldap-keycloak-bind.ldif}"
+KEYCLOAK_BIND_DN="${KEYCLOAK_BIND_DN:-cn=keycloak-bind-serviceid,ou=TrustedApplications,${BASE_DN}}"
+KEYCLOAK_BIND_PASSWORD="${KEYCLOAK_BIND_PASSWORD:-keycloakbindpassword123}"
 ACL_LDIF="${ACL_LDIF:-configure-acls.ldif}"
 LDAP_ADMIN_PW="${LDAP_ADMIN_PW:-admin123}"
 
@@ -291,9 +298,30 @@ decide_transport() {
   printf 'none'
 }
 
+# Applies ldap-keycloak-bind.ldif one record at a time: first the `add`, where "Already exists (68)" on a
+# re-run is expected, then the `modify … replace`, which must succeed. Sent as one file under -c, the add's 68
+# could stand in for a failed modify. The admin password is the pod's own LDAP_ADMIN_PASSWORD, expanded
+# inside the pod, so it is on no command line on this machine.
+apply_keycloak_bind() {
+  local pod="$1" file="${SCRIPT_DIR}/${KEYCLOAK_LDIF}" record out rc
+  [ -f "$file" ] || die "${KEYCLOAK_LDIF} not found next to this script"
+  for record in 1 2; do
+    out=$(awk -v want="$record" '/^dn:/ {n++} n == want' "$file" \
+          | oc exec -i -c openldap -n "$LDAP_NS" "$pod" -- \
+              sh -c 'ldapmodify -x -H ldap://localhost:389 -D "$1" -w "$LDAP_ADMIN_PASSWORD"' \
+              sh "cn=admin,${BASE_DN}" 2>&1) && rc=0 || rc=$?
+    printf '%s\n' "$out" | sed 's/^/  /'
+    case "${record}:${rc}" in
+      1:0|1:68|2:0) ;;
+      *) die "${KEYCLOAK_LDIF} record ${record} failed (exit ${rc}) — see above" ;;
+    esac
+  done
+}
+
 # Creates the directory-side prerequisites for login: a dedicated bind service account, the gate group,
 # the ACL grant that lets the new account read, and the openshift-config Secret holding its password.
-# Idempotent — an entry that already exists is left alone rather than treated as an error.
+# Also Keycloak's bind account, which the same ACL file grants. Idempotent — an entry that already exists
+# is left alone rather than treated as an error.
 cmd_bind_account() {
   local pod; pod=$(ldap_pod)
 
@@ -316,7 +344,10 @@ cmd_bind_account() {
          || die "ldapmodify failed (exit ${rc}) — see above" ;;
   esac
 
-  step "ACL: letting ${BIND_DN##cn=} read"
+  step "Keycloak bind service account"
+  apply_keycloak_bind "$pod"
+
+  step "ACL: letting ${BIND_DN##cn=} and ${KEYCLOAK_BIND_DN%%,*} read"
   # The subtree rules end in `by * none`, so a new account sees nothing until it is named there. Without
   # this its searches return "No such object (32)", which reads like missing data rather than a denial.
   [ -f "${SCRIPT_DIR}/${ACL_LDIF}" ] || die "${ACL_LDIF} not found next to this script"
@@ -346,6 +377,16 @@ cmd_bind_account() {
   [ "${n:-0}" -gt 0 ] || die "the bind account cannot search ${USERS_BASE_DN} with the password in
   openshift-config/${BIND_SECRET}. Check the ACL applied, and that the password matches the directory."
   log "binds and sees ${n} user(s) under ${USERS_BASE_DN}"
+
+  step "proving ${KEYCLOAK_BIND_DN%%,*} can read People"
+  # Password on stdin (-y /dev/stdin), not on a command line.
+  local kc_n
+  kc_n=$(printf '%s' "$KEYCLOAK_BIND_PASSWORD" | oc exec -i -c openldap -n "$LDAP_NS" "$pod" -- \
+           ldapsearch -x -LLL -H ldap://localhost:389 -D "$KEYCLOAK_BIND_DN" -y /dev/stdin \
+           -b "ou=People,${BASE_DN}" '(objectClass=inetOrgPerson)' dn 2>/dev/null | grep -c '^dn:' || true)
+  [ "${kc_n:-0}" -gt 0 ] || die "${KEYCLOAK_BIND_DN} cannot read ou=People,${BASE_DN} — check ${KEYCLOAK_LDIF}
+  and that ${ACL_LDIF} was applied."
+  log "binds and sees ${kc_n} user(s) under ou=People,${BASE_DN}"
 
   local attr; attr=$(detect_member_attr)
   if [ -n "$attr" ]; then

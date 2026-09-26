@@ -407,8 +407,16 @@ function test_ldaps_connectivity() {
     
     echo ""
     echo -e "${BLUE}LDAPS URLs for external access:${NC}"
-    echo "  Internal: ldaps://openldap-service.ldap-testing.svc.cluster.local:636"
-    echo "  External: ldaps://ldap-route-ldap-testing.apps-crc.testing (via route)"
+    echo "  Internal: ldaps://openldap-service.${NAMESPACE}.svc.cluster.local:636"
+    # Read, not assumed: the public endpoint is the passthrough Route ldaps on 443. ldap-route is plain
+    # (port ldap) and carries no LDAPS.
+    local public_host
+    public_host=$(kubectl get route ldaps -n "$NAMESPACE" -o jsonpath='{.spec.host}' 2>/dev/null || true)
+    if [ -n "$public_host" ]; then
+        echo "  External: ldaps://${public_host}:443 (Route ldaps, passthrough; the client must send SNI)"
+    else
+        echo -e "  ${YELLOW}External: Route ldaps not found — kubectl apply -f ${SCRIPT_DIR}/01-ldap-server.yaml${NC}"
+    fi
     echo ""
     echo -e "${YELLOW}Note: For production use, consider configuring proper SSL certificates${NC}"
 }

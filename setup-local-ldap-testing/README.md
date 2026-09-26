@@ -39,7 +39,7 @@ it carries that name. Edit the source and run `helm upgrade`.
 
 | File | Description |
 |------|-------------|
-| `01-ldap-server.yaml` | Complete OpenLDAP deployment (primary infrastructure) |
+| `01-ldap-server.yaml` | Complete OpenLDAP deployment (primary infrastructure), plus Route `ldaps` — the [public LDAPS endpoint](#-public-ldaps-endpoint) on 443 |
 | `02-phpldapadmin.yaml` | Optional web GUI for LDAP management |
 | `03-ldap-bootstrap-job.yaml` | Alternative K8s Job-based data import |
 
@@ -48,13 +48,13 @@ it carries that name. Edit the source and run `helm upgrade`.
 | File | Description |
 |------|-------------|
 | `10-setup-oauth-secrets.sh` | Creates the source OAuth secret and a demo CA. The CA is **generated on first run**, not committed — `ca-cert.pem` / `ca-key.pem` are gitignored. It feeds `ca-config-map-test`, which the LDAPS path does not use; the serving chain comes from `15-bootstrap-cert-manager-ca.sh` |
-| `15-bootstrap-cert-manager-ca.sh` | **LDAPS only**: `apply` builds the cert-manager PKI and serving certificate — must run BEFORE the server manifest. `verify` proves the chain from inside the cluster. `trust-cluster` publishes the root to `proxy/cluster.spec.trustedCA` for the injected path |
+| `15-bootstrap-cert-manager-ca.sh` | **LDAPS only**: `apply` builds the cert-manager PKI and serving certificate — must run BEFORE the server manifest. Its third SAN is the host of Route `ldaps` (`LDAP_PUBLIC_HOST`), and it restarts slapd only when the certificate slapd serves differs from the Secret's. `verify` proves the chain from inside the cluster. `trust-cluster` publishes the root to `proxy/cluster.spec.trustedCA` for the injected path |
 | `20-import-ldap-data.sh` | Imports the RBAC groups and test users |
 | `30-manage-ldap-server.sh` | Server lifecycle: deploy, test, restart, logs |
-| `40-setup-oauth-ldap-login.sh` | Adds the directory to `oauth/cluster` as an LDAP identity provider, so you can **log in** with it and not just sync groups from it. Auto-detects LDAPS vs plain LDAP. `bind-account` creates the bind service account and the login gate group; `apply` writes the provider; `verify` checks it. **Additive** — the existing HTPasswd/kubeadmin login is preserved |
+| `40-setup-oauth-ldap-login.sh` | Adds the directory to `oauth/cluster` as an LDAP identity provider, so you can **log in** with it and not just sync groups from it. Auto-detects LDAPS vs plain LDAP. `bind-account` creates the bind service accounts (OAuth and Keycloak) and the login gate group; `apply` writes the provider; `verify` checks it. **Additive** — the existing HTPasswd/kubeadmin login is preserved |
 | `50-simulate-ldap-operations.sh` | Adds/removes members to exercise sync |
 | `60-force-groupsync.sh` | Forces a GroupSync now instead of waiting for its schedule |
-| `90-verify-all-resources.sh` | Verifies all resources and configuration |
+| `90-verify-all-resources.sh` | Verifies all resources and configuration, including the public LDAPS endpoint (Route, certificate, served-vs-Secret serial, Keycloak bind account, a GroupSync since slapd started; skipped without cert-manager) and a real `ldap-local` token request (skipped without that provider). Run it after Helm |
 | `99-cleanup-everything.sh` | Complete test environment cleanup |
 
 ### 📊 Data Files
@@ -67,7 +67,9 @@ it carries that name. Edit the source and run `helm upgrade`.
 | `ldap-rbac-groups-ocp.ldif` | The `ocp` mnemonic's groups, one duty each: `…-ocp-cluster-admin` (ClusterRole `admin`, via GroupConfig), `…-ocp-ns-developer` / `…-ocp-ns-audit` (`edit` / `view` in `ocp` namespaces, via NamespaceConfig), and `…-ocp-keycloak-admin` — an application group with **no** OpenShift permission (`sarah.jones` is its test case). Never nest groups |
 | `ldap-normalize-user-dns.ldif` | One-time migration: renames the 5 `cn=` users to `uid=` so all member DNs resolve |
 | `ldap-oauth-login-gate.ldif` | The OAuth bind service account and `app-ssb-autobahnusers`, the group you must be in to log in. Re-runnable |
-| `configure-acls.ldif` | Service account ACL permissions — **two** accounts: one for group sync, one for OAuth login |
+| `configure-acls.ldif` | Service account ACL permissions — **three** accounts: group sync, OAuth login, Keycloak. Replaces the **whole** `olcAccess` list |
+| `configure-acls-keycloak-only.ldif` | Adds the Keycloak grant to a running server: changes rules `{1}` and `{2}` only, in one atomic modify that fails closed if either has drifted |
+| `ldap-keycloak-bind.ldif` | `keycloak-bind-serviceid`, the bind account for Keycloak's LDAP federation — reads People and Groups, never `userPassword`. Re-runnable |
 | `kubectl-import-commands.md` | Manual import command documentation |
 | `README.md` | This comprehensive documentation |
 
@@ -236,12 +238,15 @@ starts whether or not the PKI exists. On path A the initContainer logs
 ./10-setup-oauth-secrets.sh                 # source OAuth secret + demo CA
 ./30-manage-ldap-server.sh deploy           # first start takes 2-4 min, see note below
 ./20-import-ldap-data.sh                    # RBAC groups and users
-./90-verify-all-resources.sh
 
-helm install group-sync ../charts/group-sync-operator-helm -n group-sync-operator --create-namespace \
+helm upgrade --install group-sync ../charts/group-sync-operator-helm -n group-sync-operator --create-namespace \
   -f ../charts/group-sync-operator-helm/environments/ldap-plain-values.yaml
 helm test group-sync -n group-sync-operator --logs
+./90-verify-all-resources.sh                # after Helm: it checks the Secret and GroupSync the chart makes
 ```
+
+Without cert-manager the verify script **skips** its public-LDAPS checks, with a note, and skips the
+`ldap-local` login check while no `ldap-local` provider exists.
 
 ### Path B — LDAPS with cert-manager
 
@@ -252,12 +257,13 @@ Same, with the PKI created **before** the server, because the server mounts the 
 ./15-bootstrap-cert-manager-ca.sh apply     # ClusterIssuers, root CA, serving cert, ca-config-map
 ./30-manage-ldap-server.sh deploy
 ./20-import-ldap-data.sh
-./90-verify-all-resources.sh
+./40-setup-oauth-ldap-login.sh bind-account # bind accounts (OAuth, Keycloak), gate group, ACL
 
-helm install group-sync ../charts/group-sync-operator-helm -n group-sync-operator --create-namespace \
+helm upgrade --install group-sync ../charts/group-sync-operator-helm -n group-sync-operator --create-namespace \
   -f ../charts/group-sync-operator-helm/crc-values.yaml
 helm test group-sync -n group-sync-operator --logs
 ./15-bootstrap-cert-manager-ca.sh verify    # proves the chain and SAN from inside the cluster
+./90-verify-all-resources.sh                # after Helm, and after the first GroupSync has run
 ```
 
 `apply` is idempotent, so re-running it is safe. cert-manager must already be installed:
@@ -279,10 +285,12 @@ label — so it is worth exercising even though the chart defaults to the copy.
 ./15-bootstrap-cert-manager-ca.sh trust-cluster    # <-- the only extra step
 ./30-manage-ldap-server.sh deploy
 ./20-import-ldap-data.sh
+./40-setup-oauth-ldap-login.sh bind-account
 
-helm install group-sync ../charts/group-sync-operator-helm -n group-sync-operator --create-namespace \
+helm upgrade --install group-sync ../charts/group-sync-operator-helm -n group-sync-operator --create-namespace \
   -f ../charts/group-sync-operator-helm/crc-injected-values.yaml
 helm test group-sync -n group-sync-operator --logs
+./90-verify-all-resources.sh
 ```
 
 `trust-cluster` publishes the root to `openshift-config/ldap-enterprise-ca-bundle` under the key
@@ -326,6 +334,146 @@ Both extra steps are load-bearing:
   next sync recreates them, and the label selector leaves hand-made groups alone.
 - **`--reset-values`** — `helm upgrade` otherwise reuses the values file from the previous revision and
   silently keeps you on plain LDAP.
+
+## 🌐 Public LDAPS endpoint
+
+`ldaps://ldaps-ldap-testing.apps-crc.testing:443` — for a client **outside** the cluster, the way Keycloak's
+LDAP federation reaches this directory. In-cluster clients (`ldap-local`, the group-sync operator) keep using
+`ldaps://openldap-service.ldap-testing.svc.cluster.local:636`, and `ldap-route` stays as it is.
+
+| | |
+|---|---|
+| Route | `ldaps` in `01-ldap-server.yaml`: `tls.termination: passthrough`, `port.targetPort: ldaps`, explicit `spec.host` |
+| Certificate | `openldap-serving-cert-cm`, SANs = both Service names + the Route host, same issuer and root as before |
+| CA | `LDAP Enterprise Root CA`, SHA-256 `0E:1F:4B:E3:E3:05:86:8C:85:3B:FA:63:6E:B2:EB:8D:BC:06:1A:96:13:37:54:66:D2:5F:AD:46:A7:0E:14:26` |
+| Bind account | `cn=keycloak-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com` / `keycloakbindpassword123` (lab value) |
+
+### Why passthrough
+
+The router forwards a passthrough connection by its TLS SNI without terminating it, so the client talks TLS
+to slapd itself and verifies slapd's own certificate. Edge termination does not carry LDAP: an edge Route,
+and an `Ingress` (which OpenShift turns into an edge Route), both verified TLS and then answered a raw LDAP
+bind with `HTTP/1.1 400 Bad request` — once the router terminates TLS it speaks HTTP (measured,
+group-sync-operator-helm-chart#71). Nor can an `Ingress` stand in for the Route: annotated
+`route.openshift.io/termination: passthrough` with `path: /`, its conversion was refused
+(`FailedIngressToRouteConversion: … spec.path`).
+
+Because routing is by SNI, the client **must send it**. Without SNI the router presents its own
+`CN=*.apps-crc.testing` certificate. Java's LDAP client (Keycloak) sends it; `openssl s_client -servername`
+sends it. macOS `ldapsearch` 2.4.28 and the pod's `ldapsearch` 2.4.57 both failed through the Route while
+`openssl -servername` succeeded — whether those builds send SNI was not measured further, so test the
+endpoint with `openssl`, not `ldapsearch`.
+
+### The host is one value in two places
+
+A hostname-checking client refuses a certificate that does not name the host it dialled, and Keycloak cannot
+turn that check off for LDAP. So the Route's `spec.host` and the certificate's third SAN must be the same
+name. `15-bootstrap-cert-manager-ca.sh` reads it from `LDAP_PUBLIC_HOST` (default
+`ldaps-<namespace>.<ingress domain>`, which on CRC is the Route's host), and `apply` **refuses to run** when
+the live Route names a different host. On another cluster, set `spec.host` in `01-ldap-server.yaml` and
+`LDAP_PUBLIC_HOST` to the same name.
+
+### Fetch the CA the production way
+
+A client outside the cluster gets the CA from the endpoint and checks it against a source it already trusts
+— here `openshift-config/ca-config-map`, where `15-bootstrap-cert-manager-ca.sh` publishes the root. slapd
+sends the leaf and the root:
+
+```bash
+HOST=ldaps-ldap-testing.apps-crc.testing
+openssl s_client -showcerts -servername "$HOST" -connect "$HOST:443" </dev/null 2>/dev/null \
+  | awk '/-----BEGIN CERTIFICATE-----/{n++; f=1} f{print > ("chain-" n ".pem")} /-----END CERTIFICATE-----/{f=0}'
+
+# The root is the self-signed one (subject == issuer):
+for f in chain-*.pem; do
+  s=$(openssl x509 -in "$f" -noout -subject); i=$(openssl x509 -in "$f" -noout -issuer)
+  [ "${s#subject=}" = "${i#issuer=}" ] && ROOT="$f"
+done
+openssl x509 -in "$ROOT" -noout -subject -fingerprint -sha256
+
+# ...and must be the enterprise CA the cluster already trusts:
+oc extract configmap/ca-config-map -n openshift-config --keys=ca.crt --to=- | openssl x509 -noout -fingerprint -sha256
+
+# Then verify the endpoint by name against it (OpenSSL, not macOS LibreSSL — it has no -verify_hostname):
+openssl s_client -connect "$HOST:443" -servername "$HOST" -CAfile "$ROOT" \
+  -verify_hostname "$HOST" -verify_return_error </dev/null 2>&1 | grep 'Verify return code'
+# Verify return code: 0 (ok)
+```
+
+Both fingerprints must be the `0E:1F:4B:…:14:26` above. A root taken from the handshake and **not** compared
+with a source you already trust proves only that the server sent a chain. If a server sends only the leaf,
+there is no root to take: use the PKI owner's copy (`ca-config-map` here) as `-CAfile` directly.
+
+### The Keycloak bind account
+
+Reads `ou=People` and `ou=Groups` (rules `{1}` and `{2}` in `configure-acls.ldif`) and nothing else: not
+`ou=TrustedApplications`, not `userPassword`, no writes. Keycloak checks a user's password by binding as that
+user, which rule `{0}` already allows.
+
+`./40-setup-oauth-ldap-login.sh bind-account` creates the entry (re-runnable) and applies the full
+`configure-acls.ldif`, which already carries the grant — that is all a fresh directory needs. By hand, on a
+running server that still has the pre-Keycloak rules, create the entry, then add only the grant — the admin
+password is read inside the pod, not typed here:
+
+```bash
+oc exec -i -c openldap -n ldap-testing deploy/openldap-server -- \
+  sh -c 'ldapmodify -c -x -H ldap://localhost:389 -D "cn=admin,dc=ephico2real,dc=com" -w "$LDAP_ADMIN_PASSWORD"' \
+  < ldap-keycloak-bind.ldif
+oc exec -i -c openldap -n ldap-testing deploy/openldap-server -- \
+  ldapmodify -Y EXTERNAL -H ldapi:/// < configure-acls-keycloak-only.ldif
+```
+
+`configure-acls-keycloak-only.ldif` is one modify: it deletes the exact current `{1}` and `{2}` and adds the
+new ones, so it changes both or neither, and it **fails closed** — `No such attribute (16)`, nothing
+changed — if either rule is not exactly the pre-Keycloak value, including on a second run; read the live
+rules before doing anything else. The bind LDIF converges on a re-run but `ldapmodify -c` then exits 68
+for its `add`; `bind-account` applies its two records separately, so only the `add` may return 68.
+
+### How a renewed certificate reaches slapd
+
+slapd reads its certificate only when it starts: the `install-certs` init container copies Secret
+`openldap-certmanager-tls` into an `emptyDir` at pod start, and a container restart does not re-run it. So
+when cert-manager renews the certificate (`oc get certificate openldap-serving-cert-cm -n ldap-testing -o
+jsonpath='{.status.renewalTime}'`), the Secret changes and slapd keeps serving the old one. Re-run
+
+```bash
+./15-bootstrap-cert-manager-ca.sh apply
+```
+
+It compares the serial slapd serves on 636 with the Secret's and restarts `deploy/openldap-server` only when
+they differ (`Recreate`, so LDAP is down until the new pod is Ready — 2-4 minutes on a first start); with
+nothing new it says so and leaves slapd alone. `90-verify-all-resources.sh` fails while the two serials
+differ, and names that command. A restart is an outage for `ldap-local` and group sync, so run the verify
+script afterwards: it requests a real `ldap-local` token (a throwaway kubeconfig, revoked afterwards), and
+fails until every GroupSync has succeeded **after** slapd started (`./60-force-groupsync.sh <cr>` forces one).
+
+### Never delete Secret `openldap-certmanager-tls`
+
+Not even to force a renewal. The pod mounts it `optional: true`, so a pod that starts while it is missing
+gets osixia's self-signed certificate for the **pod** name — `ldap-local` login and group sync, which
+verify `openldap-service.ldap-testing.svc.cluster.local`, both break. To force a renewal, set the
+Certificate's `Issuing` condition, which is what `cmctl renew` does (`cmctl` is not installed here). Run
+it as one subshell with `set -e`, so a failed step stops the ones after it — above all `apply`, which must
+not compare serials before the new certificate is in the Secret (it would find nothing to do, and slapd
+would keep the old one):
+
+```bash
+(
+  set -e
+  CERT=openldap-serving-cert-cm NS=ldap-testing
+  # Refuse while an issuance is already in progress (an Issuing condition is present):
+  [ -z "$(oc get certificate "$CERT" -n "$NS" -o jsonpath='{.status.conditions[?(@.type=="Issuing")].type}')" ] \
+    || { echo "an issuance is already in progress — wait for it" >&2; exit 1; }
+  BEFORE=$(oc get certificate "$CERT" -n "$NS" -o jsonpath='{.status.revision}')
+  oc patch certificate "$CERT" -n "$NS" --subresource=status --type=json -p "[{\"op\":\"add\",\"path\":\"/status/conditions/-\",\"value\":{\"type\":\"Issuing\",\"status\":\"True\",\"reason\":\"ManuallyTriggered\",\"message\":\"Certificate re-issuance manually triggered\",\"lastTransitionTime\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"observedGeneration\":$(oc get certificate "$CERT" -n "$NS" -o jsonpath='{.metadata.generation}')}}]"
+  # cert-manager writes the new Secret first, then bumps status.revision and drops Issuing — so the next
+  # revision means the Secret already holds the new certificate.
+  oc wait "certificate/${CERT}" -n "$NS" --timeout=180s --for=jsonpath='{.status.revision}'="$((BEFORE + 1))"
+  oc wait "certificate/${CERT}" -n "$NS" --timeout=180s --for=condition=Ready
+  ./15-bootstrap-cert-manager-ca.sh apply     # now slapd is rolled onto it
+  ./90-verify-all-resources.sh
+)
+```
 
 ## Manual LDAP Structure Import (If Bootstrap Fails)
 
@@ -443,26 +591,18 @@ kubectl exec -n ldap-testing deployment/openldap-server -- ldapadd -x -H ldap://
 
 ### 3. Configure service account ACLs
 
+Apply `configure-acls.ldif` from this directory — do not retype it. It is `replace: olcAccess`, so it sets
+the **whole** list at once: a copy that leaves out a rule or an account deletes it, and an older copy of this
+step did exactly that (it had no `ocp-oauth-bind-serviceid` grants, so applying it broke `ldap-local` login).
+EXTERNAL over `ldapi://`, as `40-setup-oauth-ldap-login.sh` applies it:
+
 ```bash
-# Create ACL configuration file
-cat > configure-acls.ldif << 'EOF'
-# Configure OpenLDAP ACLs to grant service account read access
-dn: olcDatabase={1}mdb,cn=config
-changetype: modify
-replace: olcAccess
-olcAccess: {0}to attrs=userPassword by self write by dn="cn=admin,dc=ephico2real,dc=com" write by dn="cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com" read by anonymous auth by * none
-olcAccess: {1}to dn.subtree="ou=People,dc=ephico2real,dc=com" by dn="cn=admin,dc=ephico2real,dc=com" write by dn="cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com" read by * none  
-olcAccess: {2}to dn.subtree="ou=Groups,dc=ephico2real,dc=com" by dn="cn=admin,dc=ephico2real,dc=com" write by dn="cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com" read by * none
-olcAccess: {3}to dn.subtree="ou=TrustedApplications,dc=ephico2real,dc=com" by dn="cn=admin,dc=ephico2real,dc=com" write by dn="cn=ocp-ldap-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com" read by * none
-olcAccess: {4}to * by dn="cn=admin,dc=ephico2real,dc=com" write by * read
-EOF
-
-# Copy ACL config to container
-kubectl cp configure-acls.ldif ldap-testing/$(kubectl get pods -n ldap-testing -l app=openldap-server -o jsonpath='{.items[0].metadata.name}'):/tmp/
-
-# Apply ACL configuration
-kubectl exec -n ldap-testing deployment/openldap-server -- ldapmodify -x -H ldap://localhost:389 -D "cn=admin,cn=config" -w "config123" -f /tmp/configure-acls.ldif
+oc exec -i -c openldap -n ldap-testing deploy/openldap-server -- \
+  ldapmodify -Y EXTERNAL -H ldapi:/// < configure-acls.ldif
 ```
+
+To add only the Keycloak grant to a server that already has the other rules, use
+`configure-acls-keycloak-only.ldif` instead — see [Public LDAPS endpoint](#-public-ldaps-endpoint).
 
 ### 4. Test service account access
 
