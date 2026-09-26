@@ -18,8 +18,8 @@
 # chart, and pointing a local runner at it — with whatever credentials happen to be in the
 # environment — has no upside.
 #
-# The event is pull_request, not push, and that is load-bearing. version-bump is gated on
-# `if: github.event_name == 'pull_request'` (ci.yaml:151), so under `act push` act skips it without
+# The event is pull_request, not push, and that is load-bearing. The version-bump job in ci.yaml is
+# gated on `if: github.event_name == 'pull_request'`, so under `act push` act skips it without
 # creating a container and exits 0 — which reads as a pass while nothing was checked. The job also
 # diffs against `github.event.pull_request.base.sha`, which act leaves empty, so the payload written
 # below names the merge-base with the default branch.
@@ -286,8 +286,9 @@ fi
 # ubuntu-latest in two ways this workflow depends on. Both are patched here rather than in ci.yaml,
 # because the point is to run the workflow AS GITHUB RUNS IT:
 #
-#   1. PyYAML. The docs and test-scripts jobs `import yaml` without installing it (ci.yaml:262, 289,
-#      320) and rely on the runner image having it. render-matrix installs it explicitly at line 33.
+#   1. PyYAML. The docs and test-scripts jobs `import yaml` without installing it (the steps "README
+#      parameter tables match values.yaml", "ConfigMap data is non-empty" and "Shell syntax — …") and rely
+#      on the runner image having it; render-matrix installs it itself, in its `pip install` step.
 #      Without this the two jobs die on ModuleNotFoundError.
 #   2. PEP 668. Ubuntu 24.04's pip refuses system-wide installs with
 #      "error: externally-managed-environment", so render-matrix's own `pip install --quiet pyyaml`

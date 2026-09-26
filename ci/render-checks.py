@@ -335,15 +335,26 @@ POLLER = 'dashboard-cluster-poller'
 POLLER_OAUTHS = {'apiGroups': {'config.openshift.io'}, 'resources': {'oauths'},
                  'resourceNames': {'cluster'}, 'verbs': {'get'}}
 
-def oauths_wider(rule):
-    """None when an oauths rule is exactly the poller's get oauths/cluster, else what it has beyond it."""
+def oauths_rule(rule):
+    """Whether a rule grants oauths: by name in any API group, or as a '*' resource in one that covers it.
+
+    RBAC matches '*' against every resource (grants() above treats it so), and a literal-only test left a
+    `resources: ['*']` rule invisible — beside the poller's exact rule it widened the poller, and on any
+    other role it was an unused oauths grant. A '*' confined to another API group grants no oauths.
+    """
+    resources, groups = rule.get('resources') or [], rule.get('apiGroups') or []
+    return 'oauths' in resources or ('*' in resources and bool({'config.openshift.io', '*'} & set(groups)))
+
+def oauths_difference(rule):
+    """None when an oauths rule is exactly the poller's get oauths/cluster, else how it differs."""
     got = {k: set(rule.get(k) or []) for k in POLLER_OAUTHS}
     extra_keys = set(rule) - set(POLLER_OAUTHS)
     if got == POLLER_OAUTHS and not extra_keys:
         return None
     bits = []
     extra_v = got['verbs'] - POLLER_OAUTHS['verbs']
-    miss_v = POLLER_OAUTHS['verbs'] - got['verbs']
+    # A '*' verb includes get: it widens the rule, it does not take get away.
+    miss_v = set() if '*' in got['verbs'] else POLLER_OAUTHS['verbs'] - got['verbs']
     if extra_v:
         bits.append(f"verbs also {sorted(extra_v)}")
     if miss_v:
@@ -401,8 +412,10 @@ def oauth_cr_read(docs):
     the ServiceAccount labelled app.kubernetes.io/component: dashboard-cluster-poller, and its oauths rule
     must be EXACTLY get on config.openshift.io/oauths with resourceNames [cluster] — asserted on every
     render, not only the ones it is exempted in, or a widened rule would pass wherever a Job also reaches
-    the API. Wider fails naming what is wider; no oauths rule at all fails as a reduction of the
-    dashboard's grants.
+    the API. Any other oauths rule on it fails as not exactly get oauths/cluster, naming how it differs;
+    no oauths rule at all fails as a reduction of the dashboard's grants. A rule grants oauths when it
+    names them or when its resources are '*' in an API group that covers config.openshift.io — see
+    oauths_rule.
 
     Reachability is read off the RENDERED script rather than inferred from values: the extraction Job's
     calls all sit inside `if [[ -z "$BIND_DN" || -z "$SRC_SECRET" ]]` and the template writes both as
@@ -431,15 +444,15 @@ def oauth_cr_read(docs):
             bad.append(f"Job/{n} {why} as sa/{sa} but nothing grants get oauths/cluster")
     pollers = poller_cluster_roles(docs)
     for name, d in pollers.items():
-        rules = [r for r in d.get('rules') or [] if 'oauths' in (r.get('resources') or [])]
+        rules = [r for r in d.get('rules') or [] if oauths_rule(r)]
         if not rules:
             bad.append(f"ClusterRole/{name} is bound to the dashboard poller ServiceAccount but grants no "
                        f"oauths — the poller's get oauths/cluster was reduced")
         for r in rules:
-            wider = oauths_wider(r)
-            if wider:
-                bad.append(f"ClusterRole/{name} is the dashboard poller but its oauths rule is wider: "
-                           f"{wider}")
+            diff = oauths_difference(r)
+            if diff:
+                bad.append(f"ClusterRole/{name} is the dashboard poller but its oauths rule is not exactly "
+                           f"get oauths/cluster: {diff}")
     if not reach:
         for d in docs:
             if d.get('kind') not in ('Role', 'ClusterRole'):
@@ -448,7 +461,7 @@ def oauth_cr_read(docs):
             if d['kind'] == 'ClusterRole' and d['metadata']['name'] in pollers:
                 continue
             for r in d.get('rules') or []:
-                if 'oauths' in (r.get('resources') or []):
+                if oauths_rule(r):
                     bad.append(f"{d['kind']}/{d['metadata']['name']} grants oauths but no rendered Job can "
                                f"reach `oc get oauth cluster` — a cluster-scoped grant nothing uses")
     return bad

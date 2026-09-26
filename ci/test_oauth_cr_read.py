@@ -2,8 +2,9 @@
 """oauth_cr_read against hand-built renders — the cases the chart's own values cannot produce.
 
 The render matrix only ever renders the poller ClusterRole exactly as the template writes it, so it can
-show that the exact grant passes but never that a widened, reduced or unbound one fails. These are the
-eight cases that pin that, in memory: no helm, no cluster. Exits 1 if any case does not hold.
+show that the exact grant passes but never that a widened, reduced or unbound one fails, or that a '*'
+resource counts as an oauths grant. These cases pin that, in memory: no helm, no cluster. Exits 1 if any
+case does not hold.
 """
 import copy, importlib.util, sys
 from pathlib import Path
@@ -83,10 +84,12 @@ def job(body, name="group-sync-operator-oauth-secret-extraction"):
 REACH = "BIND_DN=''\nSRC_SECRET=''\noc get oauth cluster -o json\n"
 
 
-def expect(name, docs, problems, contains=None):
+def expect(name, docs, problems, contains=None, absent=None):
     got = rc.oauth_cr_read(copy.deepcopy(docs))
     ok = (bool(got) == bool(problems))
     if contains and not any(contains in g for g in got):
+        ok = False
+    if absent and any(absent in g for g in got):
         ok = False
     print(f"[{'OK' if ok else 'FAIL'}] {name}  got={got}")
     return ok
@@ -96,12 +99,12 @@ def main():
     ok = True
     # A — the three CI failures: exact bound poller, no Job reach. Must PASS after the fix.
     ok &= expect("A poller exact+bound, no reach", poller(), problems=False)
-    # B — wider verbs still fail, and the message names what is wider.
+    # B — wider verbs still fail, and the message names what differs.
     ok &= expect(
         "B poller verbs also list",
         poller(rule={**EXACT, "verbs": ["get", "list"]}),
         problems=True,
-        contains="verbs also ['list']",
+        contains="not exactly get oauths/cluster: verbs also ['list']",
     )
     # C — any other oauths grant with no reaching Job still fails (unchanged).
     ok &= expect(
@@ -121,7 +124,7 @@ def main():
         "G wider poller + reach",
         poller(rule={**EXACT, "verbs": ["get", "list"]}) + extraction() + [job(REACH)],
         problems=True,
-        contains="verbs also ['list']",
+        contains="not exactly get oauths/cluster: verbs also ['list']",
     )
     # H — Job-reachability half unchanged.
     ok &= expect(
@@ -129,6 +132,49 @@ def main():
         poller() + [job(REACH)],
         problems=True,
         contains="nothing grants get oauths/cluster",
+    )
+    # I — a '*' resource rule beside the exact pin grants oauths too: the poller is widened.
+    star = {"apiGroups": ["config.openshift.io"], "resources": ["*"], "verbs": ["get"]}
+    docs = poller()
+    docs[1]["rules"].append(copy.deepcopy(star))
+    ok &= expect(
+        "I poller exact + sibling resources '*'", docs, problems=True, contains="extra resources ['*']"
+    )
+    # J — a '*' resource rule on any other role is an unused oauths grant when no Job reaches the API.
+    ok &= expect(
+        "J leftover resources '*', no reach",
+        [{"kind": "ClusterRole", "metadata": {"name": "wildcard-reader"}, "rules": [copy.deepcopy(star)]}],
+        problems=True,
+        contains="wildcard-reader grants oauths",
+    )
+    # K — apiGroups '*' with a literal oauths resource is still caught.
+    ok &= expect(
+        "K poller apiGroups '*' + oauths",
+        poller(rule={**EXACT, "apiGroups": ["*"]}),
+        problems=True,
+        contains="apiGroups ['*']",
+    )
+    # L — a '*' resource confined to another API group grants no oauths, beside the poller or anywhere.
+    core = {"apiGroups": [""], "resources": ["*"], "verbs": ["get"]}
+    docs = poller()
+    docs[1]["rules"].append(copy.deepcopy(core))
+    docs.append({"kind": "ClusterRole", "metadata": {"name": "core-reader"}, "rules": [copy.deepcopy(core)]})
+    ok &= expect("L core-group resources '*' is not oauths", docs, problems=False)
+    # M — a narrower rule fails as not exact, and is not called wider.
+    ok &= expect(
+        "M poller verbs missing get",
+        poller(rule={**EXACT, "verbs": ["list"]}),
+        problems=True,
+        contains="not exactly get oauths/cluster: verbs also ['list'], verbs missing ['get']",
+        absent="wider",
+    )
+    # N — a '*' verb includes get: reported as an extra verb, not as get missing.
+    ok &= expect(
+        "N poller verbs '*'",
+        poller(rule={**EXACT, "verbs": ["*"]}),
+        problems=True,
+        contains="verbs also ['*']",
+        absent="verbs missing",
     )
     sys.exit(0 if ok else 1)
 
