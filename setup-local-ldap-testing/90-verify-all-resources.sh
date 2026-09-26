@@ -199,10 +199,12 @@ if kubectl get pods -n ldap-testing -l app=openldap-server --field-selector=stat
         echo "❌ Service account access: Failed"
         echo "   Run: kubectl cp configure-acls.ldif ldap-testing/$LDAP_POD:$TMP_DIR/"
         echo "   Then: kubectl exec -n ldap-testing $LDAP_POD -- ldapmodify -x -H ldap://localhost:389 -D 'cn=admin,cn=config' -w 'config123' -f $TMP_DIR/configure-acls.ldif"
+        VERIFY_FAILED=1
     fi
 else
     echo "❌ LDAP Server: Not running"
     echo "   Deploy with: ./30-manage-ldap-server.sh deploy-all"
+    VERIFY_FAILED=1
 fi
 echo
 
@@ -350,7 +352,10 @@ echo
 #   - the password goes to oc login on stdin, never on a command line (oc reads one whitespace-free word
 #     from a non-terminal stdin, so the password must have no spaces);
 #   - the login must map to an ldap-local identity, not the HTPasswd provider;
-#   - THIS CHECK WRITES: one OAuthAccessToken, revoked with oc logout before the kubeconfig is deleted.
+#   - THIS CHECK WRITES: one OAuthAccessToken. A trap on EXIT, INT and TERM — installed before the login,
+#     removed afterwards, with whatever traps were there before put back — revokes it (oc logout) and deletes
+#     the kubeconfig on every path, an interrupt included. A revocation that fails is a failure, never
+#     swallowed: the token would stay valid.
 # Skipped, with a note, when oauth/cluster has no ldap-local provider (it is optional; see the README).
 echo "🔑 ldap-local login:"
 echo "--------------------"
@@ -363,6 +368,39 @@ elif [ -z "$LDAP_LOCAL_IDP" ]; then
 else
     LDAP_LOCAL_USER="${LDAP_LOCAL_USER:-john.doe}"          # in the login gate group, ldap-oauth-login-gate.ldif
     LDAP_LOCAL_PASSWORD="${LDAP_LOCAL_PASSWORD:-Ldap123!}"  # lab value, ldap-oauth-login-gate.ldif
+    LOGIN_DIR=""
+    LOGIN_KC=""
+
+    # Revokes the token if the throwaway kubeconfig holds one, then deletes the kubeconfig. Idempotent: an
+    # INT runs it, and the EXIT that follows runs it again with nothing left to do. The token is read only
+    # to test that it is there; it is never printed.
+    login_cleanup() {
+        local rc=0 token
+        if [ -n "$LOGIN_KC" ] && [ -s "$LOGIN_KC" ]; then
+            token=$(oc --kubeconfig="$LOGIN_KC" config view --raw -o jsonpath='{.users[0].user.token}' 2>/dev/null) || token=""
+            if [ -n "$token" ] && ! oc --kubeconfig="$LOGIN_KC" logout >/dev/null 2>&1; then
+                echo "❌ could not revoke the OAuth token issued to ${LDAP_LOCAL_USER}; it stays valid until it expires. Remove it with:"
+                echo "     oc get oauthaccesstokens -o jsonpath='{range .items[?(@.userName==\"${LDAP_LOCAL_USER}\")]}{.metadata.name}{\"\\n\"}{end}'"
+                echo "     oc delete oauthaccesstoken <name>     # every name listed is one of ${LDAP_LOCAL_USER}'s tokens"
+                rc=1
+            fi
+        fi
+        if [ -n "$LOGIN_DIR" ]; then
+            rm -rf "$LOGIN_DIR" || { echo "❌ could not remove ${LOGIN_DIR}"; rc=1; }
+        fi
+        LOGIN_DIR=""
+        LOGIN_KC=""
+        [ "$rc" -eq 0 ] || { LOGIN_STATE=failed; VERIFY_FAILED=1; }
+        return "$rc"
+    }
+    login_on_exit() { local status=$?; login_cleanup || status=1; exit "$status"; }
+    login_on_signal() { login_cleanup || true; exit "$1"; }    # the signal's own status wins; the ❌ is printed
+
+    PREV_TRAPS=$(trap -p EXIT INT TERM)
+    trap login_on_exit EXIT
+    trap 'login_on_signal 130' INT
+    trap 'login_on_signal 143' TERM
+
     LOGIN_DIR=$(mktemp -d)
     LOGIN_KC="${LOGIN_DIR}/kubeconfig"
     if ! oc config view --minify --flatten --raw -o json 2>/dev/null | python3 -c '
@@ -382,11 +420,14 @@ print(json.dumps({"apiVersion": "v1", "kind": "Config", "clusters": [cluster], "
     elif ! oc get user "$LDAP_LOCAL_USER" -o jsonpath='{.identities}' 2>/dev/null | grep -q '"ldap-local:'; then
         echo "❌ ${LDAP_LOCAL_USER} logged in, but has no ldap-local identity — another provider answered"; LOGIN_STATE=failed
     else
-        echo "✅ ldap-local issued a token for ${LDAP_LOCAL_USER} (throwaway kubeconfig; token revoked)"
+        echo "✅ ldap-local issued a token for ${LDAP_LOCAL_USER} (throwaway kubeconfig)"
     fi
-    # Revoke whatever was issued, then remove the kubeconfig; neither may fail the run.
-    oc --kubeconfig="$LOGIN_KC" logout >/dev/null 2>&1 || true
-    rm -rf "$LOGIN_DIR"
+
+    if login_cleanup && [ "$LOGIN_STATE" = ok ]; then
+        echo "✅ token revoked and the throwaway kubeconfig removed"
+    fi
+    trap - EXIT INT TERM
+    eval "$PREV_TRAPS"
     [ "$LOGIN_STATE" = ok ] || VERIFY_FAILED=1
 fi
 echo
