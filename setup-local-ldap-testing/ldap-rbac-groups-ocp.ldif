@@ -1,7 +1,11 @@
 # =============================================================================
-# Platform admin groups for the OCP and Keycloak labs
+# The `ocp` mnemonic's groups: OpenShift duties and a Keycloak application group
 # =============================================================================
-# Two groups, both synced by GroupSync/app-ocp-rbac-group-groupsync (filter
+# Separation of duties: who administers the cluster, who develops and who audits
+# in the ocp namespaces, and who administers Keycloak are four different groups,
+# and a person is added only to the ones their job needs.
+#
+# Four groups, all synced by GroupSync/app-ocp-rbac-group-groupsync (filter
 # (cn=app-ocp-rbac-*), every 30 minutes) into OpenShift Groups of the same name:
 #
 #   app-ocp-rbac-ocp-cluster-admin
@@ -9,6 +13,15 @@
 #     namespace-configuration-operator binds it to ClusterRole/admin cluster-wide —
 #     the same grant every other app-ocp-rbac-*-cluster-admin group gets. This is
 #     ClusterRole/admin, NOT ClusterRole/cluster-admin.
+#
+#   app-ocp-rbac-ocp-ns-developer   (jeff)
+#   app-ocp-rbac-ocp-ns-audit       (lateef.o)
+#     NamespaceConfig baseline-nonprod-rbac binds them in every namespace labelled
+#     company.net/mnemonic=ocp with a non-prod company.net/app-environment
+#     (envoy-tutorial's keycloak namespace: rnd): ClusterRole edit to ns-developer,
+#     ClusterRole view to ns-audit. In a prod namespace baseline-prod-rbac binds
+#     only view, to ns-audit. Keycloak may also map ns-developer to a realm role
+#     (admin or another) in the corp realm — a Keycloak-side decision, made there.
 #
 #   app-ocp-rbac-ocp-keycloak-admin
 #     An APPLICATION group: Keycloak reads it, OpenShift grants it nothing. A special
@@ -45,10 +58,13 @@
 # environment, so it never appears in a command line or the API server's audit log:
 #   oc exec -i -n ldap-testing deploy/openldap-server -c openldap -- \
 #     sh -c 'ldapadd -x -H ldap://localhost:389 -D "cn=admin,dc=ephico2real,dc=com" \
-#            -w "$LDAP_ADMIN_PASSWORD"' < ldap-rbac-groups-ocp-admins.ldif
+#            -w "$LDAP_ADMIN_PASSWORD"' < ldap-rbac-groups-ocp.ldif
 #
 # Then force the sync rather than waiting out the */30 schedule:
 #   ./60-force-groupsync.sh app-ocp-rbac-group-groupsync
+#
+# Every group needs at least one member (groupOfNames), and every member must be a
+# user: a placeholder or a group DN fails the whole sync (see DO NOT NEST above).
 # =============================================================================
 
 dn: cn=app-ocp-rbac-ocp-cluster-admin,ou=Groups,dc=ephico2real,dc=com
@@ -65,3 +81,15 @@ description: Keycloak administrators - an application group (realm role admin in
 member: uid=john.doe,ou=People,dc=ephico2real,dc=com
 member: uid=alice.cooper,ou=People,dc=ephico2real,dc=com
 member: uid=sarah.jones,ou=People,dc=ephico2real,dc=com
+
+dn: cn=app-ocp-rbac-ocp-ns-developer,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-ocp-ns-developer
+description: OCP namespace developers (ClusterRole edit in non-prod ocp namespaces, via NamespaceConfig)
+member: uid=jeff,ou=People,dc=ephico2real,dc=com
+
+dn: cn=app-ocp-rbac-ocp-ns-audit,ou=Groups,dc=ephico2real,dc=com
+objectClass: groupOfNames
+cn: app-ocp-rbac-ocp-ns-audit
+description: OCP namespace auditors (ClusterRole view in ocp namespaces, via NamespaceConfig)
+member: uid=lateef.o,ou=People,dc=ephico2real,dc=com
