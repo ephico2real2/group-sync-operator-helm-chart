@@ -69,6 +69,12 @@ jobs:
       - name: artifacthub.io/changes parses as YAML
         run: python3 ci/check-artifacthub-changes.py "$CHART"
 
+      # Not a render either. The matrix below only ever renders the dashboard poller's oauths grant
+      # exactly as the template writes it, so it can show the exact grant passes oauth-cr-read but never
+      # that a widened, reduced or unbound one fails. These hand-built cases do.
+      - name: oauth-cr-read fails what the renders cannot produce
+        run: python3 ci/test_oauth_cr_read.py
+
       - name: Render every combination and assert coherence
         run: |
           set -uo pipefail

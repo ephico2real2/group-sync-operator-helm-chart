@@ -331,14 +331,78 @@ def no_artifacts_text(path):
             bad.append(f"line {i}: Go template artifact: {line.strip()}")
     return bad
 
+POLLER = 'dashboard-cluster-poller'
+POLLER_OAUTHS = {'apiGroups': {'config.openshift.io'}, 'resources': {'oauths'},
+                 'resourceNames': {'cluster'}, 'verbs': {'get'}}
+
+def oauths_wider(rule):
+    """None when an oauths rule is exactly the poller's get oauths/cluster, else what it has beyond it."""
+    got = {k: set(rule.get(k) or []) for k in POLLER_OAUTHS}
+    extra_keys = set(rule) - set(POLLER_OAUTHS)
+    if got == POLLER_OAUTHS and not extra_keys:
+        return None
+    bits = []
+    extra_v = got['verbs'] - POLLER_OAUTHS['verbs']
+    miss_v = POLLER_OAUTHS['verbs'] - got['verbs']
+    if extra_v:
+        bits.append(f"verbs also {sorted(extra_v)}")
+    if miss_v:
+        bits.append(f"verbs missing {sorted(miss_v)}")
+    if got['resourceNames'] != POLLER_OAUTHS['resourceNames']:
+        if not got['resourceNames']:
+            bits.append("no resourceNames")
+        else:
+            bits.append(f"resourceNames {sorted(got['resourceNames'])} (not just ['cluster'])")
+    extra_r = got['resources'] - POLLER_OAUTHS['resources']
+    if extra_r:
+        bits.append(f"extra resources {sorted(extra_r)}")
+    if got['apiGroups'] != POLLER_OAUTHS['apiGroups']:
+        bits.append(f"apiGroups {sorted(got['apiGroups'])}")
+    if extra_keys:
+        bits.append(f"extra fields {sorted(extra_keys)}")
+    return ', '.join(bits) or "differs from get oauths/cluster"
+
+def poller_cluster_roles(docs):
+    """{name: ClusterRole} for every ClusterRole a ClusterRoleBinding grants the dashboard poller's SA.
+
+    Found through the BINDING, not the ClusterRole's own label: a label can be copied, and a copy on a
+    ClusterRole nothing binds to the poller is exactly the unused grant oauth_cr_read exists to catch.
+    """
+    sas = {(d['metadata']['name'], d['metadata'].get('namespace')) for d in docs
+           if d.get('kind') == 'ServiceAccount'
+           and (d['metadata'].get('labels') or {}).get('app.kubernetes.io/component') == POLLER}
+    croles = {d['metadata']['name']: d for d in docs if d.get('kind') == 'ClusterRole'}
+    out = {}
+    for d in docs:
+        if d.get('kind') != 'ClusterRoleBinding' or (d.get('roleRef') or {}).get('kind') != 'ClusterRole':
+            continue
+        if not any(s.get('kind') == 'ServiceAccount' and (s.get('name'), s.get('namespace')) in sas
+                   for s in d.get('subjects') or []):
+            continue
+        r = croles.get(d['roleRef'].get('name'))
+        if r:
+            out[r['metadata']['name']] = r
+    return out
+
 def oauth_cr_read(docs):
-    """The single oauths grant must match exactly the Jobs that can reach `oc get oauth cluster`.
+    """Every Job that can reach `oc get oauth cluster` is granted it, and no oauths grant goes unused.
 
     Two hook Jobs call that API for different reasons — the extraction Job to resolve an empty bindDN or
     sourceSecret.name, the CA Job to discover the source CA's name — and one cluster-scoped rule serves
     both. Gate it on the wrong flag and a Job calls an API it has no permission for; an earlier version of
     this bug measured 0 oauths rules against 2 reachable calls. The opposite error is a cluster-scoped grant
-    nothing uses, which is what the Role-not-ClusterRole work exists to prevent.
+    nothing uses, which is what the Role-not-ClusterRole work exists to prevent: with no reaching Job, a
+    Role or ClusterRole granting oauths is one.
+
+    WITH ONE EXCEPTION: the dashboard's cluster poller (03.1-dashboard-cluster-poller-rbac.yaml). Its grant
+    IS used, from outside the chart — group-sync-dashboard reads the OAuth CR with the poller
+    ServiceAccount's token. Before this check knew that, three renders with no reaching Job failed on the
+    poller alone, and main was red from #68 on. The poller is the ClusterRole a ClusterRoleBinding grants
+    the ServiceAccount labelled app.kubernetes.io/component: dashboard-cluster-poller, and its oauths rule
+    must be EXACTLY get on config.openshift.io/oauths with resourceNames [cluster] — asserted on every
+    render, not only the ones it is exempted in, or a widened rule would pass wherever a Job also reaches
+    the API. Wider fails naming what is wider; no oauths rule at all fails as a reduction of the
+    dashboard's grants.
 
     Reachability is read off the RENDERED script rather than inferred from values: the extraction Job's
     calls all sit inside `if [[ -z "$BIND_DN" || -z "$SRC_SECRET" ]]` and the template writes both as
@@ -365,9 +429,23 @@ def oauth_cr_read(docs):
     for n, sa, ns, why in reach:
         if not grants(rules_for_sa(docs, sa, ns), 'config.openshift.io', 'oauths', 'get', name='cluster'):
             bad.append(f"Job/{n} {why} as sa/{sa} but nothing grants get oauths/cluster")
+    pollers = poller_cluster_roles(docs)
+    for name, d in pollers.items():
+        rules = [r for r in d.get('rules') or [] if 'oauths' in (r.get('resources') or [])]
+        if not rules:
+            bad.append(f"ClusterRole/{name} is bound to the dashboard poller ServiceAccount but grants no "
+                       f"oauths — the poller's get oauths/cluster was reduced")
+        for r in rules:
+            wider = oauths_wider(r)
+            if wider:
+                bad.append(f"ClusterRole/{name} is the dashboard poller but its oauths rule is wider: "
+                           f"{wider}")
     if not reach:
         for d in docs:
             if d.get('kind') not in ('Role', 'ClusterRole'):
+                continue
+            # Used by the dashboard, and held to the exact rule above.
+            if d['kind'] == 'ClusterRole' and d['metadata']['name'] in pollers:
                 continue
             for r in d.get('rules') or []:
                 if 'oauths' in (r.get('resources') or []):
