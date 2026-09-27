@@ -481,10 +481,11 @@ def rbac_config_source(docs):
     fine.
     """
     want = yaml.safe_load(CHART_YAML.read_text())['name']
+    rbac = [d for d in docs if d.get('kind') in RBAC_KINDS]
+    if not rbac:
+        return ['no RBAC objects rendered; rbac-config-source checked nothing']
     bad = []
-    for d in docs:
-        if d.get('kind') not in RBAC_KINDS:
-            continue
+    for d in rbac:
         got = (d['metadata'].get('labels') or {}).get(CONFIG_SOURCE)
         if got != want:
             bad.append(f"{d['kind']}/{d['metadata']['name']}: {CONFIG_SOURCE} is {got!r}, want {want!r} "
