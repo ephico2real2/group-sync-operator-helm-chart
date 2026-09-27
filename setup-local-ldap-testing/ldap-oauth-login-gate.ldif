@@ -136,6 +136,12 @@ uniqueMember: cn=ocp-oauth-bind-serviceid,ou=TrustedApplications,dc=ephico2real,
 # ── Re-run safety ────────────────────────────────────────────────────────────────────────────────
 # `replace` reaches the intended state whether or not the adds above did anything, so an existing
 # directory converges instead of being left half-updated.
+#
+# The uniqueMember `replace` below also drops every member this file does not list - shop.alice and
+# shop.bob, which ldap-shop-users.ldif adds (envoy-tutorial#8). `./40-setup-oauth-ldap-login.sh
+# bind-account` applies that file right after this one; by hand, apply it next
+# (`./40-setup-oauth-ldap-login.sh shop-users`). They are not listed here on purpose: this file runs
+# first, before those people exist.
 dn: cn=ocp-oauth-bind-serviceid,ou=TrustedApplications,dc=ephico2real,dc=com
 changetype: modify
 replace: objectClass

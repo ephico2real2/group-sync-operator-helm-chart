@@ -21,6 +21,12 @@
 #     OpenShift grants this group nothing (ldap-rbac-groups-ocp.ldif). It is a
 #     groupOfNames, so the member DN is a USER, never a group: a nested group
 #     fails the whole GroupSync (DO NOT NEST, in ldap-rbac-groups-ocp.ldif).
+#   - OpenShift login (both): ldap-local's URL ends in the same filter,
+#     (&(uid=*)(memberOf=cn=app-ssb-autobahnusers,...)), so it finds them as soon
+#     as they are in the gate (read from oauth/cluster; a login as either was not
+#     tried). autobahnusers-onboarding-groupsync also lists them in
+#     Group/app-ssb-autobahnusers - a copy of the membership that grants nothing.
+#     Neither user is in an ocp RBAC group OpenShift binds.
 #
 # Every attribute the existing people carry (inetOrgPerson + posixAccount +
 # shadowAccount, as sarah.jones), including cn, sn, givenName and mail: realm
@@ -35,29 +41,29 @@
 # A test-directory credential; never point this file at a real directory.
 #
 # Apply AFTER ldap-structure-combined.ldif, ldap-rbac-groups-ocp.ldif and
-# ldap-oauth-login-gate.ldif - it adds to the groups those files create. And
-# re-apply it after re-running ldap-oauth-login-gate.ldif: that file `replace`s the
-# gate's whole uniqueMember list, which takes these two users out of the gate.
+# ldap-oauth-login-gate.ldif - it adds to the groups those files create:
+#   ./40-setup-oauth-ldap-login.sh shop-users
+# That sends one record at a time and checks each result against what that
+# record may return on a re-run: a user `add` 0 or "Already exists (68)", a
+# membership `add` 0 or "Type or value exists (20)", a `replace` 0 only; anything
+# else stops it, naming the record. Not one `ldapmodify -c` over the whole file:
+# that exits with the LAST failure's code only, so the 20 a re-run's last record
+# returns would hide a real failure earlier (the admin password is read from the
+# pod's own environment either way, never from this machine's command line).
 #
-# Import (the admin password is read from the pod's own environment, so it never
-# appears on this machine's command line or in the API server's audit log):
-#   oc exec -i -n ldap-testing deploy/openldap-server -c openldap -- \
-#     sh -c 'ldapmodify -c -x -H ldap://localhost:389 -D "cn=admin,dc=ephico2real,dc=com" \
-#            -w "$LDAP_ADMIN_PASSWORD"' < ldap-shop-users.ldif
+# ldap-oauth-login-gate.ldif `replace`s the gate's whole uniqueMember list, which
+# takes these two users out of the gate. `./40-setup-oauth-ldap-login.sh
+# bind-account`, which applies that file, applies this one right after it. Apply
+# this one again after any other re-run of the gate file.
 #
 # Then sync shop.bob into the OpenShift group rather than waiting out */30:
 #   ./60-force-groupsync.sh app-ocp-rbac-group-groupsync
 #
-# Re-runnable, the way ldap-oauth-login-gate.ldif and ldap-keycloak-bind.ldif are:
-# ldapmodify with -c. On a second run each `add` of a user fails harmlessly with
-# "Already exists (68)", and each membership `add` with "Type or value exists
-# (20)"; -c carries on past both, and ldapmodify exits with the last failure's
-# code - 20 (measured on the second run; the first exits 0). Any other code is a
-# real failure. The `replace` records reach the same end state whether or not the values
-# were already there. One membership value per record, so a value that is already
-# present cannot hold back another that is not (a modify is all-or-nothing). A
-# membership is added, never `replace`d: replacing uniqueMember or member would
-# drop every other person in the group.
+# One membership value per record, so a value that is already present cannot hold
+# back another that is not (a modify is all-or-nothing). A membership is added,
+# never `replace`d: replacing uniqueMember or member would drop every other person
+# in the group. The `replace` records reach the same end state whether or not the
+# values were already there.
 # =============================================================================
 
 # ── The two people ──────────────────────────────────────────────────────────────
