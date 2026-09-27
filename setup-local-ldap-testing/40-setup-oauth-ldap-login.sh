@@ -16,7 +16,8 @@
 #
 #   ./40-setup-oauth-ldap-login.sh status        what the directory offers and what the OAuth CR has now
 #   ./40-setup-oauth-ldap-login.sh bind-account  create the OAuth and Keycloak bind accounts, gate group,
-#                                                ACL and Secret
+#                                                ACL and Secret; then re-apply ldap-shop-users.ldif, if present
+#   ./40-setup-oauth-ldap-login.sh shop-users    apply ldap-shop-users.ldif, checking every record's result
 #   ./40-setup-oauth-ldap-login.sh apply         add (or update) the LDAP identity provider
 #   ./40-setup-oauth-ldap-login.sh verify        the operator settled, and a real user can bind
 #   ./40-setup-oauth-ldap-login.sh delete        remove only our provider, leave the others
@@ -97,6 +98,8 @@ KEYCLOAK_LDIF="${KEYCLOAK_LDIF:-ldap-keycloak-bind.ldif}"
 KEYCLOAK_BIND_DN="${KEYCLOAK_BIND_DN:-cn=keycloak-bind-serviceid,ou=TrustedApplications,${BASE_DN}}"
 KEYCLOAK_BIND_PASSWORD="${KEYCLOAK_BIND_PASSWORD:-keycloakbindpassword123}"
 ACL_LDIF="${ACL_LDIF:-configure-acls.ldif}"
+# envoy-tutorial module 17's shop users (envoy-tutorial#8): members of the gate that GATE_LDIF does not list.
+SHOP_LDIF="${SHOP_LDIF:-ldap-shop-users.ldif}"
 LDAP_ADMIN_PW="${LDAP_ADMIN_PW:-admin123}"
 
 # Which membership attribute the user entry carries. Detected at runtime; this is only the preference
@@ -318,6 +321,40 @@ apply_keycloak_bind() {
   done
 }
 
+# Applies ldap-shop-users.ldif one record at a time, and checks each result against what THAT record may
+# return on a re-run: a user `add` 0 or "Already exists (68)"; a membership `add` 0 or "Type or value exists
+# (20)"; an attribute `replace` 0 only. Sent as one file under -c, ldapmodify exits with the LAST failure's
+# code, so an expected 20 at the end would hide a real failure earlier in the file. The allowed codes are
+# read from each record's own operations, not its position, so the file can grow without this changing.
+# The admin password is the pod's own LDAP_ADMIN_PASSWORD, expanded inside the pod, as apply_keycloak_bind.
+apply_shop_users() {
+  local pod="$1" file="${SCRIPT_DIR}/${SHOP_LDIF}" records i record allowed out rc
+  [ -f "$file" ] || die "${SHOP_LDIF} not found next to this script"
+  records=$(grep -c '^dn:' "$file")
+  [ "$records" -gt 0 ] || die "${SHOP_LDIF} has no records"
+  for i in $(seq 1 "$records"); do
+    record=$(awk -v want="$i" '/^dn:/ {n++} n == want' "$file")
+    if grep -qx 'changetype: add' <<<"$record"; then allowed="0 68"
+    elif grep -Eq '^(replace|delete):' <<<"$record"; then allowed="0"
+    else allowed="0 20"; fi
+    out=$(printf '%s\n' "$record" \
+          | oc exec -i -c openldap -n "$LDAP_NS" "$pod" -- \
+              sh -c 'ldapmodify -x -H ldap://localhost:389 -D "$1" -w "$LDAP_ADMIN_PASSWORD"' \
+              sh "cn=admin,${BASE_DN}" 2>&1) && rc=0 || rc=$?
+    printf '%s\n' "$out" | sed 's/^/  /'
+    case " ${allowed} " in
+      *" ${rc} "*) ;;
+      *) die "${SHOP_LDIF} record ${i} ($(sed -n 's/^dn: //p' <<<"$record")) failed (exit ${rc}; allowed: ${allowed}) — see above" ;;
+    esac
+  done
+  log "${SHOP_LDIF}: ${records} record(s), every result allowed"
+}
+
+cmd_shop_users() {
+  step "shop users (${SHOP_LDIF})"
+  apply_shop_users "$(ldap_pod)"
+}
+
 # Creates the directory-side prerequisites for login: a dedicated bind service account, the gate group,
 # the ACL grant that lets the new account read, and the openshift-config Secret holding its password.
 # Also Keycloak's bind account, which the same ACL file grants. Idempotent — an entry that already exists
@@ -343,6 +380,14 @@ cmd_bind_account() {
     *) printf '%s' "$out" | grep -q 'Already exists' \
          || die "ldapmodify failed (exit ${rc}) — see above" ;;
   esac
+
+  # The gate file `replace`s the gate's whole uniqueMember list, which takes out the members only
+  # SHOP_LDIF adds (shop.alice, shop.bob). Put them straight back. They are deliberately not listed in the
+  # gate file: it is applied first, before those people exist.
+  if [ -f "${SCRIPT_DIR}/${SHOP_LDIF}" ]; then
+    step "shop users (${SHOP_LDIF}): back into the gate"
+    apply_shop_users "$pod"
+  fi
 
   step "Keycloak bind service account"
   apply_keycloak_bind "$pod"
@@ -776,8 +821,9 @@ print("REMOVED, keeping: " + ",".join(p.get("name") for p in kept), file=sys.std
 case "${1:-status}" in
   status)       cmd_status ;;
   bind-account) cmd_bind_account ;;
+  shop-users)   cmd_shop_users ;;
   apply)        cmd_apply ;;
   verify)       cmd_verify ;;
   delete)       cmd_delete ;;
-  *) die "unknown command '${1}'. Use: status | bind-account | apply | verify | delete" ;;
+  *) die "unknown command '${1}'. Use: status | bind-account | shop-users | apply | verify | delete" ;;
 esac
