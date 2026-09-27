@@ -27,7 +27,7 @@ kind: ClusterRole
 metadata:
   name: {{ .Values.groupSyncDashboard.name }}
   labels:
-    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    {{- include "group-sync-operator-helm.rbacLabels" . | nindent 4 }}
     app.kubernetes.io/component: dashboard-cluster-poller
   annotations:
     argocd.argoproj.io/sync-wave: "3"
@@ -124,7 +124,7 @@ kind: ClusterRoleBinding
 metadata:
   name: {{ .Values.groupSyncDashboard.name }}
   labels:
-    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    {{- include "group-sync-operator-helm.rbacLabels" . | nindent 4 }}
     app.kubernetes.io/component: dashboard-cluster-poller
   annotations:
     argocd.argoproj.io/sync-wave: "3"

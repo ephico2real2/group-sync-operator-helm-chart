@@ -74,12 +74,15 @@ jobs:
       # that a widened, reduced or unbound one fails. These hand-built cases do.
       - name: oauth-cr-read fails what the renders cannot produce
         run: python3 ci/test_oauth_cr_read.py
+      - name: rbac-config-source fails an empty match and a missing Chart.yaml
+        run: python3 ci/test_rbac_config_source.py
 
       - name: Render every combination and assert coherence
         run: |
           set -uo pipefail
           CHECKS="source-secret-rbac ca-coherence ca-copy-kind oauth-cr-read test-env-matches-cr
-                  no-cluster-wide-secret-read no-cluster-wide-credential-write olm-name-consistent no-artifacts"
+                  no-cluster-wide-secret-read no-cluster-wide-credential-write olm-name-consistent no-artifacts
+                  rbac-config-source"
           fails=0
 
           # must_render <label> -- <helm args...>

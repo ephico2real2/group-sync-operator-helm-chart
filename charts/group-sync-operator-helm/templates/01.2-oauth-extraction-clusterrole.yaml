@@ -4,7 +4,7 @@ kind: ClusterRole
 metadata:
   name: {{ include "group-sync-operator-helm.fullname" . }}-oauth-secret-extraction
   labels:
-    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    {{- include "group-sync-operator-helm.rbacLabels" . | nindent 4 }}
     app.kubernetes.io/component: oauth-secret-extraction
   annotations:
     argocd.argoproj.io/sync-wave: "1"
@@ -88,7 +88,7 @@ metadata:
   name: {{ include "group-sync-operator-helm.fullname" . }}-oauth-ca-read
   namespace: {{ .Values.oauthSecretExtraction.caCopy.sourceCa.namespace }}
   labels:
-    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    {{- include "group-sync-operator-helm.rbacLabels" . | nindent 4 }}
     app.kubernetes.io/component: oauth-secret-extraction
   annotations:
     argocd.argoproj.io/sync-wave: "1"
@@ -103,7 +103,7 @@ metadata:
   name: {{ include "group-sync-operator-helm.fullname" . }}-oauth-ca-read
   namespace: {{ .Values.oauthSecretExtraction.caCopy.sourceCa.namespace }}
   labels:
-    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    {{- include "group-sync-operator-helm.rbacLabels" . | nindent 4 }}
     app.kubernetes.io/component: oauth-secret-extraction
   annotations:
     argocd.argoproj.io/sync-wave: "1"
@@ -131,7 +131,7 @@ metadata:
   name: {{ include "group-sync-operator-helm.fullname" . }}-oauth-ca-load
   namespace: {{ include "group-sync-operator-helm.caNamespace" . }}
   labels:
-    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    {{- include "group-sync-operator-helm.rbacLabels" . | nindent 4 }}
     app.kubernetes.io/component: oauth-secret-extraction
   annotations:
     argocd.argoproj.io/sync-wave: "1"
@@ -149,7 +149,7 @@ metadata:
   name: {{ include "group-sync-operator-helm.fullname" . }}-oauth-ca-load
   namespace: {{ include "group-sync-operator-helm.caNamespace" . }}
   labels:
-    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    {{- include "group-sync-operator-helm.rbacLabels" . | nindent 4 }}
     app.kubernetes.io/component: oauth-secret-extraction
   annotations:
     argocd.argoproj.io/sync-wave: "1"
@@ -174,7 +174,7 @@ metadata:
   name: {{ include "group-sync-operator-helm.fullname" . }}-oauth-secret-read
   namespace: {{ .Values.oauthSecretExtraction.sourceSecret.namespace }}
   labels:
-    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    {{- include "group-sync-operator-helm.rbacLabels" . | nindent 4 }}
     app.kubernetes.io/component: oauth-secret-extraction
   annotations:
     argocd.argoproj.io/sync-wave: "1"
@@ -199,7 +199,7 @@ metadata:
   name: {{ include "group-sync-operator-helm.fullname" . }}-oauth-secret-read
   namespace: {{ .Values.oauthSecretExtraction.sourceSecret.namespace }}
   labels:
-    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    {{- include "group-sync-operator-helm.rbacLabels" . | nindent 4 }}
     app.kubernetes.io/component: oauth-secret-extraction
   annotations:
     argocd.argoproj.io/sync-wave: "1"
@@ -232,7 +232,7 @@ metadata:
   name: {{ include "group-sync-operator-helm.fullname" . }}-oauth-target-create
   namespace: {{ .Values.oauthSecretExtraction.targetSecret.namespace }}
   labels:
-    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    {{- include "group-sync-operator-helm.rbacLabels" . | nindent 4 }}
     app.kubernetes.io/component: oauth-secret-extraction
   annotations:
     argocd.argoproj.io/sync-wave: "1"
@@ -264,7 +264,7 @@ metadata:
   name: {{ include "group-sync-operator-helm.fullname" . }}-oauth-target-create
   namespace: {{ .Values.oauthSecretExtraction.targetSecret.namespace }}
   labels:
-    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    {{- include "group-sync-operator-helm.rbacLabels" . | nindent 4 }}
     app.kubernetes.io/component: oauth-secret-extraction
   annotations:
     argocd.argoproj.io/sync-wave: "1"
@@ -293,7 +293,7 @@ metadata:
   name: {{ include "group-sync-operator-helm.fullname" . }}-oauth-ca-create
   namespace: {{ .Values.oauthSecretExtraction.caCopy.destinationCa.namespace | default .Values.groupSync.namespace }}
   labels:
-    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    {{- include "group-sync-operator-helm.rbacLabels" . | nindent 4 }}
     app.kubernetes.io/component: ldap-ca
   annotations:
     argocd.argoproj.io/sync-wave: "1"
@@ -316,7 +316,7 @@ metadata:
   name: {{ include "group-sync-operator-helm.fullname" . }}-oauth-ca-create
   namespace: {{ .Values.oauthSecretExtraction.caCopy.destinationCa.namespace | default .Values.groupSync.namespace }}
   labels:
-    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    {{- include "group-sync-operator-helm.rbacLabels" . | nindent 4 }}
     app.kubernetes.io/component: oauth-secret-extraction
   annotations:
     argocd.argoproj.io/sync-wave: "1"
