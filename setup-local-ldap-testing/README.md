@@ -70,6 +70,7 @@ it carries that name. Edit the source and run `helm upgrade`.
 | `configure-acls.ldif` | Service account ACL permissions — **three** accounts: group sync, OAuth login, Keycloak. Replaces the **whole** `olcAccess` list |
 | `configure-acls-keycloak-only.ldif` | Adds the Keycloak grant to a running server: changes rules `{1}` and `{2}` only, in one atomic modify that fails closed if either has drifted |
 | `ldap-keycloak-bind.ldif` | `keycloak-bind-serviceid`, the bind account for Keycloak's LDAP federation — reads People and Groups, never `userPassword`. Re-runnable |
+| `ldap-shop-users.ldif` | `shop.alice` and `shop.bob` (`Ldap123!`, lab value), envoy-tutorial module 17's shop users: both in the login gate `app-ssb-autobahnusers`, `shop.bob` also in `…-ocp-keycloak-admin` (Keycloak realm role `admin`). Apply after the gate and `ocp` group files, and again after re-running `ldap-oauth-login-gate.ldif`, which replaces the gate's members. Re-runnable: a second run exits 20 |
 | `kubectl-import-commands.md` | Manual import command documentation |
 | `README.md` | This comprehensive documentation |
 

@@ -1,0 +1,148 @@
+# =============================================================================
+# The shop's users: two ordinary directory people for envoy-tutorial module 17
+# =============================================================================
+# Module 17 (ephico2real2/envoy-tutorial#8) puts a Gateway in front of a shop API
+# and accepts tokens from Keycloak's realm `corp`, whose people come from this
+# directory (module 18). These two users mirror realm `tutorial`'s alice and bob:
+#
+#   shop.alice   may log in, and nothing more   -> /api 200, /admin 403
+#   shop.bob     may log in, and is an admin    -> /api 200, /admin 200
+#
+# What each needs, and where it comes from:
+#
+#   - app-ssb-autobahnusers (both): the login gate. realm corp's LDAP provider
+#     searches people through (memberOf=cn=app-ssb-autobahnusers,...), and so does
+#     OpenShift's ldap-local provider: a person outside it cannot log in to either.
+#     The gate is a groupOfUniqueNames, the one class the memberof overlay watches
+#     (see ldap-oauth-login-gate.ldif), so memberOf appears on each user the moment
+#     the uniqueMember value is added.
+#   - app-ocp-rbac-ocp-keycloak-admin (shop.bob only): the application group realm
+#     corp maps to the realm role `admin` - the role module 17's /admin requires.
+#     OpenShift grants this group nothing (ldap-rbac-groups-ocp.ldif). It is a
+#     groupOfNames, so the member DN is a USER, never a group: a nested group
+#     fails the whole GroupSync (DO NOT NEST, in ldap-rbac-groups-ocp.ldif).
+#
+# Every attribute the existing people carry (inetOrgPerson + posixAccount +
+# shadowAccount, as sarah.jones), including cn, sn, givenName and mail: realm
+# corp's mappers make first name <- cn and last name <- sn, and Keycloak's user
+# profile refuses a password login to a user without a first name, last name and
+# email ("Account is not fully set up"). uidNumber 10006/10007 continue the
+# 10001-10005 series of ldap-structure-combined.ldif; no entry in this directory
+# used them (measured with (uidNumber=*) before this file was written).
+#
+# Password: Ldap123! - LAB ONLY, the published test value ldap-oauth-login-gate.ldif
+# gives john.doe, jane.smith and alice.cooper, set as cleartext exactly as there.
+# A test-directory credential; never point this file at a real directory.
+#
+# Apply AFTER ldap-structure-combined.ldif, ldap-rbac-groups-ocp.ldif and
+# ldap-oauth-login-gate.ldif - it adds to the groups those files create. And
+# re-apply it after re-running ldap-oauth-login-gate.ldif: that file `replace`s the
+# gate's whole uniqueMember list, which takes these two users out of the gate.
+#
+# Import (the admin password is read from the pod's own environment, so it never
+# appears on this machine's command line or in the API server's audit log):
+#   oc exec -i -n ldap-testing deploy/openldap-server -c openldap -- \
+#     sh -c 'ldapmodify -c -x -H ldap://localhost:389 -D "cn=admin,dc=ephico2real,dc=com" \
+#            -w "$LDAP_ADMIN_PASSWORD"' < ldap-shop-users.ldif
+#
+# Then sync shop.bob into the OpenShift group rather than waiting out */30:
+#   ./60-force-groupsync.sh app-ocp-rbac-group-groupsync
+#
+# Re-runnable, the way ldap-oauth-login-gate.ldif and ldap-keycloak-bind.ldif are:
+# ldapmodify with -c. On a second run each `add` of a user fails harmlessly with
+# "Already exists (68)", and each membership `add` with "Type or value exists
+# (20)"; -c carries on past both, and ldapmodify exits with the last failure's
+# code - 20 (measured on the second run; the first exits 0). Any other code is a
+# real failure. The `replace` records reach the same end state whether or not the values
+# were already there. One membership value per record, so a value that is already
+# present cannot hold back another that is not (a modify is all-or-nothing). A
+# membership is added, never `replace`d: replacing uniqueMember or member would
+# drop every other person in the group.
+# =============================================================================
+
+# ── The two people ──────────────────────────────────────────────────────────────
+dn: uid=shop.alice,ou=People,dc=ephico2real,dc=com
+changetype: add
+objectClass: inetOrgPerson
+objectClass: posixAccount
+objectClass: shadowAccount
+uid: shop.alice
+cn: Alice Shop
+sn: Shop
+givenName: Alice
+mail: shop.alice@ephico2real.com
+description: Shop user for envoy-tutorial module 17 - may log in, no admin role
+uidNumber: 10006
+gidNumber: 1000
+homeDirectory: /home/shop.alice
+loginShell: /bin/bash
+userPassword: Ldap123!
+
+dn: uid=shop.bob,ou=People,dc=ephico2real,dc=com
+changetype: add
+objectClass: inetOrgPerson
+objectClass: posixAccount
+objectClass: shadowAccount
+uid: shop.bob
+cn: Bob Shop
+sn: Shop
+givenName: Bob
+mail: shop.bob@ephico2real.com
+description: Shop user for envoy-tutorial module 17 - may log in, Keycloak realm role admin
+uidNumber: 10007
+gidNumber: 1000
+homeDirectory: /home/shop.bob
+loginShell: /bin/bash
+userPassword: Ldap123!
+
+# ── Re-run safety: the attributes module 17 depends on ─────────────────────────
+dn: uid=shop.alice,ou=People,dc=ephico2real,dc=com
+changetype: modify
+replace: cn
+cn: Alice Shop
+-
+replace: sn
+sn: Shop
+-
+replace: givenName
+givenName: Alice
+-
+replace: mail
+mail: shop.alice@ephico2real.com
+-
+replace: userPassword
+userPassword: Ldap123!
+
+dn: uid=shop.bob,ou=People,dc=ephico2real,dc=com
+changetype: modify
+replace: cn
+cn: Bob Shop
+-
+replace: sn
+sn: Shop
+-
+replace: givenName
+givenName: Bob
+-
+replace: mail
+mail: shop.bob@ephico2real.com
+-
+replace: userPassword
+userPassword: Ldap123!
+
+# ── The login gate: both ───────────────────────────────────────────────────────
+dn: cn=app-ssb-autobahnusers,ou=Groups,dc=ephico2real,dc=com
+changetype: modify
+add: uniqueMember
+uniqueMember: uid=shop.alice,ou=People,dc=ephico2real,dc=com
+
+dn: cn=app-ssb-autobahnusers,ou=Groups,dc=ephico2real,dc=com
+changetype: modify
+add: uniqueMember
+uniqueMember: uid=shop.bob,ou=People,dc=ephico2real,dc=com
+
+# ── The group realm corp maps to the role admin: shop.bob only ─────────────────
+dn: cn=app-ocp-rbac-ocp-keycloak-admin,ou=Groups,dc=ephico2real,dc=com
+changetype: modify
+add: member
+member: uid=shop.bob,ou=People,dc=ephico2real,dc=com
