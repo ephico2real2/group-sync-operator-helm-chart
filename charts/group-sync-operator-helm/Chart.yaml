@@ -115,7 +115,20 @@ type: application
 # New values: groupSyncDashboard.{enabled,name,oauthBindUser.{enabled,name},nodeAndPodReads,
 # extraSubjects,token.{create,name,allowRequest,readers}} and a second template, 03.2-…-token.yaml,
 # for the token Secret and the narrow grant that fetches it. No existing template or default changes.
-version: 0.14.0
+# 0.14.1 (2026-09-26), PATCH: every Role, ClusterRole, RoleBinding and ClusterRoleBinding the chart
+# renders — hook, Job and helm-test RBAC included, 30 objects across 9 templates — now carries
+# rbac.ocp.io/config-source: group-sync-operator-helm, through a new helper, rbacLabels. group-sync-dashboard
+# reports a binding without that label as an unmanaged grant, so it reported 03.1's binding of the fleet
+# bind account, ocp-oauth-bind-serviceid, as one. The operator's ruling (group-sync-dashboard#255): a
+# chart labels its own RBAC, as the dashboard's chart already does (gsd.rbacLabels, fixed to its chart
+# name). The value is fixed here too, with no values key. Rendered before and after in 28 combinations
+# (the 24 that CI, ci/check-ordering.py and the hook-scripts harness render, plus 4 that switch on the
+# gated subjects): each RBAC object gains that one line and nothing else in any object changes; rules,
+# subjects, roleRefs, names, annotations and hook weights are identical. The version bump itself moves
+# helm.sh/chart and the extraction Job's checksum/config, which hashes the rendered Subscription and its
+# labels, as every bump does. CI's new rbac-config-source check holds every RBAC object in every render
+# to the label.
+version: 0.14.1
 appVersion: "1.1"
 home: https://github.com/ephico2real2/group-sync-operator-helm-chart
 icon: https://raw.githubusercontent.com/redhat-cop/group-sync-operator/master/assets/logo.png
@@ -142,6 +155,8 @@ annotations:
   # discarded now take effect, and trustedCA.injected now wins over a custom groupSync.ca.name. Anyone
   # moving from 0.3.x or 0.4.x still needs to read them.
   artifacthub.io/changes: |
+    - kind: changed
+      description: "Every Role, ClusterRole, RoleBinding and ClusterRoleBinding the chart renders now carries rbac.ocp.io/config-source: group-sync-operator-helm, so group-sync-dashboard no longer reports the chart's own bindings, among them the fleet bind account's, as unmanaged grants. The value is the chart name, fixed; nothing else in the RBAC changes."
     - kind: added
       description: "The dashboard's token, and who may fetch it: 03.2-dashboard-cluster-poller-token.yaml creates the kubernetes.io/service-account-token Secret (Kubernetes stopped minting one per ServiceAccount in 1.24, so it exists only because the chart makes it) and grants the identity provider's bind account exactly enough to fetch it - otherwise registering this cluster as a remote source is a cluster-admin errand. A ROLE, not a ClusterRole: resourceNames pins the NAME and says nothing about the NAMESPACE, so a name-pinned rule in a ClusterRole grants that Secret name in EVERY namespace (the trap 01.2 already records). And `get`, never `list`: RBAC honours resourceNames for get and ignores it for list and watch, so a list grant would expose every Secret in the namespace. Measured on 4.22.7 with SubjectAccessReviews for user ocp-oauth-bind-serviceid, after applying: get the token Secret allowed=true, get a different Secret allowed=false, list secrets allowed=false, create serviceaccounts/token for the poller SA allowed=true (before: get the token Secret was denied). groupSyncDashboard.token.{create,name,allowRequest,readers}; allowRequest also permits `oc create token <sa>`, a short-lived token that reads no Secret at all and is the better path when the reader can use it. The Secret carries helm.sh/resource-policy keep and Argo's IgnoreExtraneous so neither tool fights the token controller that fills in .data.token."
     - kind: added

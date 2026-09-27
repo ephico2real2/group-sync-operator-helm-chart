@@ -34,7 +34,7 @@ metadata:
   name: {{ include "group-sync-operator-helm.fullname" . }}-installplan-approver
   namespace: {{ .Values.groupSync.namespace }}
   labels:
-    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    {{- include "group-sync-operator-helm.rbacLabels" . | nindent 4 }}
   annotations:
     argocd.argoproj.io/sync-wave: "0"
 rules:
@@ -59,7 +59,7 @@ metadata:
   name: {{ include "group-sync-operator-helm.fullname" . }}-installplan-approver
   namespace: {{ .Values.groupSync.namespace }}
   labels:
-    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    {{- include "group-sync-operator-helm.rbacLabels" . | nindent 4 }}
   annotations:
     argocd.argoproj.io/sync-wave: "0"
 roleRef:

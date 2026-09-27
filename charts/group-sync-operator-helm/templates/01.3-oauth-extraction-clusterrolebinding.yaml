@@ -5,7 +5,7 @@ kind: ClusterRoleBinding
 metadata:
   name: {{ include "group-sync-operator-helm.fullname" . }}-oauth-secret-extraction
   labels:
-    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    {{- include "group-sync-operator-helm.rbacLabels" . | nindent 4 }}
     app.kubernetes.io/component: oauth-secret-extraction
   annotations:
     argocd.argoproj.io/sync-wave: "1"
