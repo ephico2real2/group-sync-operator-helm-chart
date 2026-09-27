@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Assertions for the CI render matrix. usage: check.py <check> <rendered.yaml>"""
-import re, sys, yaml
+import os, pathlib, re, sys, yaml
 
 def load(p):
     return [d for d in yaml.safe_load_all(open(p)) if d]
@@ -466,6 +466,31 @@ def oauth_cr_read(docs):
                                f"reach `oc get oauth cluster` — a cluster-scoped grant nothing uses")
     return bad
 
+RBAC_KINDS = {'Role', 'ClusterRole', 'RoleBinding', 'ClusterRoleBinding'}
+CONFIG_SOURCE = 'rbac.ocp.io/config-source'
+CHART_YAML = (pathlib.Path(__file__).resolve().parent.parent
+              / os.environ.get('CHART', 'charts/group-sync-operator-helm') / 'Chart.yaml')
+
+def rbac_config_source(docs):
+    """Every Role, ClusterRole and binding carries rbac.ocp.io/config-source: <the chart's name>.
+
+    group-sync-dashboard reports a binding without that label as an unmanaged grant, made outside the
+    policy system, and the label is the only thing that silences one. Without it the dashboard reported
+    03.1's binding of the fleet bind account as one. Asserted on every RBAC object rather than on that
+    binding, because a new template that includes the plain labels helper instead of rbacLabels renders
+    fine.
+    """
+    want = yaml.safe_load(CHART_YAML.read_text())['name']
+    bad = []
+    for d in docs:
+        if d.get('kind') not in RBAC_KINDS:
+            continue
+        got = (d['metadata'].get('labels') or {}).get(CONFIG_SOURCE)
+        if got != want:
+            bad.append(f"{d['kind']}/{d['metadata']['name']}: {CONFIG_SOURCE} is {got!r}, want {want!r} "
+                       f"— include group-sync-operator-helm.rbacLabels in its labels")
+    return bad
+
 ## 'oauth-rbac' was registered here too, pointing at the same oauth_cr_read function, so CI ran one
 ## assertion twice under two names and reported 10 checks where there are 9. Removed rather than aliased:
 ## a list whose length overstates its coverage is worse than a shorter honest one.
@@ -475,7 +500,8 @@ CHECKS = {'source-secret-rbac': source_secret_rbac,
           'test-env-matches-cr': test_env_matches_cr,
           'no-cluster-wide-secret-read': no_cluster_wide_secret_read,
           'no-cluster-wide-credential-write': no_cluster_wide_credential_write,
-          'olm-name-consistent': olm_name_consistent}
+          'olm-name-consistent': olm_name_consistent,
+          'rbac-config-source': rbac_config_source}
 
 if __name__ == '__main__':
     name, path = sys.argv[1], sys.argv[2]

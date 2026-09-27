@@ -32,7 +32,7 @@ kind: ClusterRole
 metadata:
   name: {{ include "group-sync-operator-helm.fullname" . }}-{{ .Release.Namespace }}-provenance-relabel
   labels:
-    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    {{- include "group-sync-operator-helm.rbacLabels" . | nindent 4 }}
   annotations:
     argocd.argoproj.io/sync-wave: "2"
 rules:
@@ -65,7 +65,7 @@ metadata:
   # release name is used in two namespaces, which is the normal way to run this chart twice.
   name: {{ include "group-sync-operator-helm.fullname" . }}-{{ .Release.Namespace }}-provenance-relabel
   labels:
-    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    {{- include "group-sync-operator-helm.rbacLabels" . | nindent 4 }}
   annotations:
     argocd.argoproj.io/sync-wave: "2"
 roleRef:

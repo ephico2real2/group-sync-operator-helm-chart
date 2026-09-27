@@ -22,7 +22,7 @@ kind: ClusterRole
 metadata:
   name: {{ include "group-sync-operator-helm.fullname" . }}-operator-wait
   labels:
-    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    {{- include "group-sync-operator-helm.rbacLabels" . | nindent 4 }}
   annotations:
     argocd.argoproj.io/sync-wave: "0"
 rules:
@@ -48,7 +48,7 @@ kind: ClusterRoleBinding
 metadata:
   name: {{ include "group-sync-operator-helm.fullname" . }}-operator-wait
   labels:
-    {{- include "group-sync-operator-helm.labels" . | nindent 4 }}
+    {{- include "group-sync-operator-helm.rbacLabels" . | nindent 4 }}
   annotations:
     argocd.argoproj.io/sync-wave: "0"
 roleRef:

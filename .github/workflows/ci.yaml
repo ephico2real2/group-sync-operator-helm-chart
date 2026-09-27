@@ -79,7 +79,8 @@ jobs:
         run: |
           set -uo pipefail
           CHECKS="source-secret-rbac ca-coherence ca-copy-kind oauth-cr-read test-env-matches-cr
-                  no-cluster-wide-secret-read no-cluster-wide-credential-write olm-name-consistent no-artifacts"
+                  no-cluster-wide-secret-read no-cluster-wide-credential-write olm-name-consistent no-artifacts
+                  rbac-config-source"
           fails=0
 
           # must_render <label> -- <helm args...>

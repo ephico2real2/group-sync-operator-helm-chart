@@ -34,6 +34,19 @@ app.kubernetes.io/name: {{ include "group-sync-operator-helm.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
+# Labels for every Role, ClusterRole, RoleBinding and ClusterRoleBinding this chart renders: the common
+# labels plus rbac.ocp.io/config-source, the policy system's provenance label. group-sync-dashboard reports
+# a binding without it as an unmanaged grant, made outside the policy system, and only a decision recorded
+# on the binding silences one (its UNMANAGED_GRANT_EXCLUSIONS.md; ruled on group-sync-dashboard#255).
+# Without it the dashboard reported 03.1's binding of the fleet bind account as one. The value is fixed to
+# the chart name, as the dashboard's own gsd.rbacLabels is: this chart renders these objects, so it is
+# their config source, and a configurable provenance invites a wrong one. ci/render-checks.py
+# rbac-config-source holds every RBAC object in every render to it.
+{{- define "group-sync-operator-helm.rbacLabels" -}}
+{{ include "group-sync-operator-helm.labels" . }}
+rbac.ocp.io/config-source: {{ .Chart.Name }}
+{{- end }}
+
 # Selector labels
 {{- define "group-sync-operator-helm.selectorLabels" -}}
 app.kubernetes.io/name: {{ include "group-sync-operator-helm.name" . }}
