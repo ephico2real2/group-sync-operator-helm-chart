@@ -138,10 +138,13 @@ Every member of the gate group can log in. Pick **ldap-local** on the chooser, t
 | `john.doe` | `Ldap123!` | `ldap-oauth-login-gate.ldif` |
 | `jane.smith` | `Ldap123!` | `ldap-oauth-login-gate.ldif` |
 | `alice.cooper` | `Ldap123!` | `ldap-oauth-login-gate.ldif` |
-| `lateef.o` | `newuser123` | the earlier LDIFs |
+| `sarah.jones` | `Ldap123!` | Quick Start, after `ldap-missing-from-seeds.ldif` |
+| `dana.lee` | `Ldap123!` | Quick Start, after `ldap-missing-from-seeds.ldif` |
+| `jeff` | `Ldap123!` | Quick Start, after `ldap-missing-from-seeds.ldif` |
+| `lateef.o` | `newuser123` | Quick Start, after `ldap-missing-from-seeds.ldif` |
 | `ocp-oauth-bind-serviceid` | `oauthbindpassword123` | `ldap-oauth-login-gate.ldif` |
 
-All five verified with a real `oc login`. **`bob.wilson` is the denial case** — give him a password and he
+All eight verified with a real `oc login` (sarah.jones, dana.lee, jeff and lateef.o on OpenShift Local 4.22.14, 2026-10-28). **`bob.wilson` is the denial case** — give him a password and he
 is *still* refused, because he is not in the gate:
 
 ```bash
@@ -265,6 +268,12 @@ for f in ldap-normalize-user-dns.ldif ldap-rbac-groups-ocp.ldif ldap-missing-fro
   oc exec -i -c openldap -n ldap-testing deploy/openldap-server -- \
     ldapmodify -a -c -x -H ldap://localhost:389 -D "cn=admin,dc=ephico2real,dc=com" -w admin123 < "$f"
 done
+# ldap-missing-from-seeds.ldif carries no passwords: give the four people who log in their lab values (Test
+# logins). bob.wilson and charlie.brown stay without one: they are the refusal fixtures.
+for up in sarah.jones:'Ldap123!' dana.lee:'Ldap123!' jeff:'Ldap123!' lateef.o:newuser123; do
+  oc exec -c openldap -n ldap-testing deploy/openldap-server -- ldappasswd -x -H ldap://localhost:389 \
+    -D "cn=admin,dc=ephico2real,dc=com" -w admin123 -s "${up#*:}" "uid=${up%%:*},ou=People,dc=ephico2real,dc=com"
+done
 ./40-setup-oauth-ldap-login.sh bind-account # bind accounts (OAuth, Keycloak), gate group, ACL
 
 helm upgrade --install group-sync ../charts/group-sync-operator-helm -n group-sync-operator --create-namespace \
@@ -299,6 +308,12 @@ label — so it is worth exercising even though the chart defaults to the copy.
 for f in ldap-normalize-user-dns.ldif ldap-rbac-groups-ocp.ldif ldap-missing-from-seeds.ldif; do
   oc exec -i -c openldap -n ldap-testing deploy/openldap-server -- \
     ldapmodify -a -c -x -H ldap://localhost:389 -D "cn=admin,dc=ephico2real,dc=com" -w admin123 < "$f"
+done
+# ldap-missing-from-seeds.ldif carries no passwords: give the four people who log in their lab values (Test
+# logins). bob.wilson and charlie.brown stay without one: they are the refusal fixtures.
+for up in sarah.jones:'Ldap123!' dana.lee:'Ldap123!' jeff:'Ldap123!' lateef.o:newuser123; do
+  oc exec -c openldap -n ldap-testing deploy/openldap-server -- ldappasswd -x -H ldap://localhost:389 \
+    -D "cn=admin,dc=ephico2real,dc=com" -w admin123 -s "${up#*:}" "uid=${up%%:*},ou=People,dc=ephico2real,dc=com"
 done
 ./40-setup-oauth-ldap-login.sh bind-account
 

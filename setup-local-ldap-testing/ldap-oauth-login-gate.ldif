@@ -68,9 +68,9 @@
 #                                       {SSHA} prefix, not a hash: the base64 body is 11 bytes and
 #                                       decodes to nothing usable, so slapd rejects EVERY bind for them.
 #
-#   lateef.o, dana.lee, sarah.jones     cleartext `newuser123`, from the later LDIFs. These bind fine,
-#                                       and lateef.o is in the gate group below — so it is a working
-#                                       console login with no extra setup.
+#   lateef.o, dana.lee, sarah.jones     no userPassword from ldap-missing-from-seeds.ldif; the README's
+#                                       Quick Start sets them after it (Test logins lists the values),
+#                                       and lateef.o is in the gate group below.
 #
 # Give one of the malformed ones a usable password when you want a specific username:
 #   ldappasswd -x -D "cn=admin,dc=ephico2real,dc=com" -w admin123 \
@@ -117,8 +117,8 @@ userPassword: oauthbindpassword123
 #                               added here and can never acquire a name. A third distinct state
 #                               from "has not logged in yet".
 #
-# dana.lee, sarah.jones and jeff needed no ldappasswd: all three already carry cleartext
-# `newuser123` from the later LDIFs, unlike the five with the malformed {SSHA} value below.
+# dana.lee, sarah.jones and jeff get their passwords from the README's Quick Start (Test logins),
+# unlike the five with the malformed {SSHA} value below.
 dn: cn=app-ssb-autobahnusers,ou=Groups,dc=ephico2real,dc=com
 changetype: add
 objectClass: groupOfUniqueNames
