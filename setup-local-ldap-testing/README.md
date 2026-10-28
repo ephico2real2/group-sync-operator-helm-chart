@@ -308,10 +308,12 @@ helm test group-sync -n group-sync-operator --logs
 ./90-verify-all-resources.sh
 ```
 
-`trust-cluster` publishes the root to `openshift-config/ldap-enterprise-ca-bundle` under the key
+`trust-cluster` publishes the root to `openshift-config/enterprise-ca-bundle` under the key
 `ca-bundle.crt` — which is what `proxy.spec.trustedCA` requires, not `ca.crt` — points the proxy at it,
 and waits for the validator to merge it. It backs up `proxy/cluster` first and **refuses** to replace a
-`trustedCA` the cluster already has, since that is the corporate bundle every workload depends on.
+`trustedCA` the cluster already has, since that is the corporate bundle every workload depends on. A bundle it
+published itself under another name (`TRUST_BUNDLE_CM`) is its own: it publishes the new one, points the proxy at
+it, waits for the merge, then deletes the old one.
 
 On a real enterprise cluster you skip `trust-cluster` entirely: the root is already there.
 

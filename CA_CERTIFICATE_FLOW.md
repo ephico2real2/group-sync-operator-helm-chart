@@ -58,10 +58,10 @@ Only needed on a cluster that does not already have one — a lab, or CRC. `prox
 requires the key **`ca-bundle.crt`**, not `ca.crt`:
 
 ```bash
-oc create configmap ldap-enterprise-ca-bundle -n openshift-config \
+oc create configmap enterprise-ca-bundle -n openshift-config \
   --from-file=ca-bundle.crt=/path/to/root.pem
 oc patch proxy cluster --type=merge \
-  -p '{"spec":{"trustedCA":{"name":"ldap-enterprise-ca-bundle"}}}'
+  -p '{"spec":{"trustedCA":{"name":"enterprise-ca-bundle"}}}'
 ```
 
 For the local cert-manager PKI, the bootstrap script does both, with a backup and a guard that refuses
