@@ -9,7 +9,8 @@
 #
 #   ClusterIssuer/ldap-selfsigned-bootstrap   selfSigned, signs nothing but the root
 #     -> Certificate/ldap-enterprise-root-ca  isCA, in the cert-manager namespace
-#          -> ClusterIssuer/ldap-enterprise-ca            the CA that signs leaves
+#          -> ClusterIssuer/enterprise-ca                 the CA that signs leaves: this directory's and every
+#                                                         other workload's (Keycloak, envoy-tutorial module 16)
 #               -> Certificate/openldap-serving-cert-cm   CN + both Service DNS SANs + the public
 #                                                          host of Route ldaps (LDAP_PUBLIC_HOST)
 #          -> ConfigMap openshift-config/<CA_CONFIGMAP_NAME>  the enterprise CA source
@@ -54,7 +55,12 @@ CM_NS="${CM_NS:-cert-manager}"
 BOOTSTRAP_ISSUER="ldap-selfsigned-bootstrap"
 ROOT_CERT="ldap-enterprise-root-ca"
 ROOT_SECRET="ldap-enterprise-root-ca"
-CA_ISSUER="ldap-enterprise-ca"
+# The cluster's one CA issuer, named as the workloads that share this root expect it (envoy-tutorial modules 08, 09,
+# 15 and 16 name enterprise-ca). Before 2026-10-28 it was ldap-enterprise-ca: apply re-issues the serving certificate
+# from the new name (same root, so no trust changes) and rolls slapd onto it; `oc delete clusterissuer
+# ldap-enterprise-ca` then removes the old one. delete removes this issuer too, so certificates other workloads hold
+# from it stay valid but can no longer renew.
+CA_ISSUER="${CA_ISSUER:-enterprise-ca}"
 LEAF_CERT="openldap-serving-cert-cm"
 LEAF_SECRET="openldap-certmanager-tls"
 
