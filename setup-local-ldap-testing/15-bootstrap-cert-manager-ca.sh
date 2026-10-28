@@ -9,7 +9,8 @@
 #
 #   ClusterIssuer/ldap-selfsigned-bootstrap   selfSigned, signs nothing but the root
 #     -> Certificate/ldap-enterprise-root-ca  isCA, in the cert-manager namespace
-#          -> ClusterIssuer/ldap-enterprise-ca            the CA that signs leaves
+#          -> ClusterIssuer/enterprise-ca                 the CA that signs leaves: this directory's and every
+#                                                         other workload's (Keycloak, envoy-tutorial module 16)
 #               -> Certificate/openldap-serving-cert-cm   CN + both Service DNS SANs + the public
 #                                                          host of Route ldaps (LDAP_PUBLIC_HOST)
 #          -> ConfigMap openshift-config/<CA_CONFIGMAP_NAME>  the enterprise CA source
@@ -54,7 +55,10 @@ CM_NS="${CM_NS:-cert-manager}"
 BOOTSTRAP_ISSUER="ldap-selfsigned-bootstrap"
 ROOT_CERT="ldap-enterprise-root-ca"
 ROOT_SECRET="ldap-enterprise-root-ca"
-CA_ISSUER="ldap-enterprise-ca"
+# The cluster's one CA issuer, named as the workloads that share this root expect it (envoy-tutorial modules 08, 09,
+# 15 and 16 name enterprise-ca). delete removes it too: certificates other workloads hold from it stay valid but can
+# no longer renew.
+CA_ISSUER="${CA_ISSUER:-enterprise-ca}"
 LEAF_CERT="openldap-serving-cert-cm"
 LEAF_SECRET="openldap-certmanager-tls"
 
@@ -75,7 +79,7 @@ COPY_NAME="${COPY_NAME:-ca-config-map-copy}"
 
 # Referenced by proxy/cluster.spec.trustedCA, which requires the key ca-bundle.crt. Separate from
 # CA_CONFIGMAP_NAME because that one uses ca.crt.
-TRUST_BUNDLE_CM="${TRUST_BUNDLE_CM:-ldap-enterprise-ca-bundle}"
+TRUST_BUNDLE_CM="${TRUST_BUNDLE_CM:-enterprise-ca-bundle}"
 # Anchored to this script's directory, not the caller's. As ./.ca-configmap-backup it followed the
 # working directory, so running the script from the repo root dropped cluster material outside the one
 # path .gitignore covers.
@@ -501,9 +505,15 @@ cmd_trust_cluster() {
   # Check and back up BEFORE writing anything. The write used to come first, so on the abort path below
   # the script had already overwritten openshift-config/${TRUST_BUNDLE_CM} — a cluster-wide object it then
   # refuses to touch — with no copy of the previous contents anywhere.
-  local current
+  local current previous=""
   current=$(oc get proxy cluster -o jsonpath='{.spec.trustedCA.name}' 2>/dev/null)
-  if [ -n "$current" ] && [ "$current" != "$TRUST_BUNDLE_CM" ]; then
+  if [ -n "$current" ] && [ "$current" != "$TRUST_BUNDLE_CM" ] \
+     && [ "$(configmap_owner "$current" openshift-config)" = "$OWNED_VAL" ]; then
+    # Our own bundle under another TRUST_BUNDLE_CM: replaced by this run, and removed only once the
+    # proxy names the new one and the validator has merged it, so the root is never out of the bundle.
+    previous="$current"
+    log "proxy/cluster trusts '${previous}', this script's own bundle: moving it to '${TRUST_BUNDLE_CM}'"
+  elif [ -n "$current" ] && [ "$current" != "$TRUST_BUNDLE_CM" ]; then
     die "proxy/cluster already trusts ConfigMap '${current}'.
   Refusing to replace it — that is the cluster's corporate trust bundle and every workload depends on
   it. Add this root to that bundle instead, or on a throwaway cluster:
@@ -545,6 +555,11 @@ cmd_trust_cluster() {
   done
   [ "${subject:-0}" -gt 0 ] || die "the root did not appear in openshift-config-managed/trusted-ca-bundle.
   Check: oc get proxy cluster -o yaml"
+
+  if [ -n "$previous" ]; then
+    step "removing openshift-config/${previous}, which nothing names any more"
+    oc delete configmap "$previous" -n openshift-config --ignore-not-found 2>&1 | sed 's/^/  /'
+  fi
 
   step "MachineConfigPool state"
   oc get mcp master -o jsonpath='  updated={.status.conditions[?(@.type=="Updated")].status} updating={.status.conditions[?(@.type=="Updating")].status}{"\n"}' 2>/dev/null

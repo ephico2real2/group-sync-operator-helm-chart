@@ -237,7 +237,7 @@ starts whether or not the PKI exists. On path A the initContainer logs
 
 ```bash
 ./10-setup-oauth-secrets.sh                 # source OAuth secret + demo CA
-./30-manage-ldap-server.sh deploy           # first start takes 2-4 min, see note below
+./30-manage-ldap-server.sh deploy-all       # bootstrap (namespace, data Job), then the server: 2-4 min, see below
 ./20-import-ldap-data.sh                    # RBAC groups and users
 
 helm upgrade --install group-sync ../charts/group-sync-operator-helm -n group-sync-operator --create-namespace \
@@ -255,9 +255,16 @@ Same, with the PKI created **before** the server, because the server mounts the 
 
 ```bash
 ./10-setup-oauth-secrets.sh
-./15-bootstrap-cert-manager-ca.sh apply     # ClusterIssuers, root CA, serving cert, ca-config-map
+./30-manage-ldap-server.sh bootstrap        # namespace ldap-testing and the data Job; 15 needs the namespace
+./15-bootstrap-cert-manager-ca.sh apply     # ClusterIssuers (enterprise-ca), root CA, serving cert, ca-config-map
 ./30-manage-ldap-server.sh deploy
 ./20-import-ldap-data.sh
+# bind-account sets passwords on uid= users and fills groups the bootstrap does not create: rename the
+# seeded cn= users to uid=, add the ocp groups, then the people and groups no seed makes (MISSING-STEPS.md)
+for f in ldap-normalize-user-dns.ldif ldap-rbac-groups-ocp.ldif ldap-missing-from-seeds.ldif; do
+  oc exec -i -c openldap -n ldap-testing deploy/openldap-server -- \
+    ldapmodify -a -c -x -H ldap://localhost:389 -D "cn=admin,dc=ephico2real,dc=com" -w admin123 < "$f"
+done
 ./40-setup-oauth-ldap-login.sh bind-account # bind accounts (OAuth, Keycloak), gate group, ACL
 
 helm upgrade --install group-sync ../charts/group-sync-operator-helm -n group-sync-operator --create-namespace \
@@ -282,10 +289,17 @@ label — so it is worth exercising even though the chart defaults to the copy.
 
 ```bash
 ./10-setup-oauth-secrets.sh
+./30-manage-ldap-server.sh bootstrap
 ./15-bootstrap-cert-manager-ca.sh apply
 ./15-bootstrap-cert-manager-ca.sh trust-cluster    # <-- the only extra step
 ./30-manage-ldap-server.sh deploy
 ./20-import-ldap-data.sh
+# bind-account sets passwords on uid= users and fills groups the bootstrap does not create: rename the
+# seeded cn= users to uid=, add the ocp groups, then the people and groups no seed makes (MISSING-STEPS.md)
+for f in ldap-normalize-user-dns.ldif ldap-rbac-groups-ocp.ldif ldap-missing-from-seeds.ldif; do
+  oc exec -i -c openldap -n ldap-testing deploy/openldap-server -- \
+    ldapmodify -a -c -x -H ldap://localhost:389 -D "cn=admin,dc=ephico2real,dc=com" -w admin123 < "$f"
+done
 ./40-setup-oauth-ldap-login.sh bind-account
 
 helm upgrade --install group-sync ../charts/group-sync-operator-helm -n group-sync-operator --create-namespace \
@@ -294,10 +308,12 @@ helm test group-sync -n group-sync-operator --logs
 ./90-verify-all-resources.sh
 ```
 
-`trust-cluster` publishes the root to `openshift-config/ldap-enterprise-ca-bundle` under the key
+`trust-cluster` publishes the root to `openshift-config/enterprise-ca-bundle` under the key
 `ca-bundle.crt` — which is what `proxy.spec.trustedCA` requires, not `ca.crt` — points the proxy at it,
 and waits for the validator to merge it. It backs up `proxy/cluster` first and **refuses** to replace a
-`trustedCA` the cluster already has, since that is the corporate bundle every workload depends on.
+`trustedCA` the cluster already has, since that is the corporate bundle every workload depends on. A bundle it
+published itself under another name (`TRUST_BUNDLE_CM`) is its own: it publishes the new one, points the proxy at
+it, waits for the merge, then deletes the old one.
 
 On a real enterprise cluster you skip `trust-cluster` entirely: the root is already there.
 
@@ -311,6 +327,25 @@ to make casually on a busy cluster.
 The bundle went from 148 to 149 certificates, with the local root present.
 
 Undo with `./15-bootstrap-cert-manager-ca.sh untrust-cluster`.
+
+### On a fresh cluster: what the order above depends on
+
+Measured on OpenShift Local 4.22.14 (2026-10-28), Path B then C, from an empty cluster with cert-manager:
+
+| Step | Why it is there, and what happens without it |
+|---|---|
+| `30-manage-ldap-server.sh bootstrap` before `15 … apply` | `03-ldap-bootstrap-job.yaml` creates namespace `ldap-testing`. Without it `15 … apply` stops at the serving certificate: `namespace ldap-testing not found`, and `30 … deploy` refuses with `Bootstrap job not found` |
+| the three seed LDIFs before `40 … bind-account` | `ldap-oauth-login-gate.ldif` sets the passwords of `uid=john.doe`, `uid=jane.smith` and `uid=alice.cooper`, which the bootstrap creates as `cn=`; `ldap-shop-users.ldif` adds `shop.bob` to `…-ocp-keycloak-admin`, which only `ldap-rbac-groups-ocp.ldif` creates. Without them: `ldapmodify failed (exit 32)`, No such object |
+| `40 … status` shows `636 verifies: yes` before `40 … apply` | `apply` picks the transport from what answers **now**. Right after `30 … deploy` the first `apply` measured here found 636 not yet verifying and wrote `ldap://…:389` with `insecure: true`; run a minute later it wrote `ldaps://…:636` with `ca: ca-config-map`. Check first, or force it: `TRANSPORT=ldaps ./40-setup-oauth-ldap-login.sh apply` |
+| `40 … apply`, then a real login | Adds `ldap-local` to `oauth/cluster`. Proof: `oc login -u john.doe -p 'Ldap123!'` succeeds; `bob.wilson` (not in the gate) is refused |
+| the chart: operator first | A single `helm upgrade --install` on a cluster without the operator fails at `no matches for kind "GroupSync"` ([Install ordering](../README.md#install-ordering-and-why-helm-install-used-to-fail)). One release, two steps: `--set groupSync.enabled=false --set customGroupSyncs.enabled=false` until `crd/groupsyncs.redhatcop.redhat.io` exists, then the same command without them |
+| Helm 4: `--force-conflicts` after another writer | Helm 4 applies server-side, and `.spec.providers` is one field to it (a list). Two writers take it over: the operator, once, right after it creates each GroupSync (field manager `manager`), and `60-force-groupsync.sh`, whose `pageSize` toggle is a patch (`kubectl-patch`). The next `helm upgrade` then fails with `conflict with "manager"` or `conflict with "kubectl-patch" … .spec.providers`. `helm upgrade --force-conflicts` takes the field back and restores the declared values (`pageSize: 0`); an upgrade with no writer in between needs no flag |
+| `90-verify-all-resources.sh` last | After the first GroupSync since slapd started; it requests a real `ldap-local` token |
+
+**One CA issuer for the cluster.** `15 … apply` makes the CA issuer `enterprise-ca` (set `CA_ISSUER` for another
+name), the name envoy-tutorial's modules 08, 09, 15 and 16 (Keycloak) ask for. Every certificate it signs chains to
+`LDAP Enterprise Root CA`, which Path C's `trust-cluster` puts in the cluster trust bundle: Keycloak's certificate,
+and an application that calls Keycloak, need nothing else to be trusted.
 
 ### ⏱️ The first start takes 2-4 minutes — this is normal
 
