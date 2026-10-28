@@ -56,10 +56,8 @@ BOOTSTRAP_ISSUER="ldap-selfsigned-bootstrap"
 ROOT_CERT="ldap-enterprise-root-ca"
 ROOT_SECRET="ldap-enterprise-root-ca"
 # The cluster's one CA issuer, named as the workloads that share this root expect it (envoy-tutorial modules 08, 09,
-# 15 and 16 name enterprise-ca). Before 2026-10-28 it was ldap-enterprise-ca: apply re-issues the serving certificate
-# from the new name (same root, so no trust changes) and rolls slapd onto it; `oc delete clusterissuer
-# ldap-enterprise-ca` then removes the old one. delete removes this issuer too, so certificates other workloads hold
-# from it stay valid but can no longer renew.
+# 15 and 16 name enterprise-ca). delete removes it too: certificates other workloads hold from it stay valid but can
+# no longer renew.
 CA_ISSUER="${CA_ISSUER:-enterprise-ca}"
 LEAF_CERT="openldap-serving-cert-cm"
 LEAF_SECRET="openldap-certmanager-tls"

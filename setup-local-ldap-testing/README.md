@@ -343,9 +343,7 @@ Measured on OpenShift Local 4.22.14 (2026-10-28), Path B then C, from an empty c
 **One CA issuer for the cluster.** `15 … apply` makes the CA issuer `enterprise-ca` (set `CA_ISSUER` for another
 name), the name envoy-tutorial's modules 08, 09, 15 and 16 (Keycloak) ask for. Every certificate it signs chains to
 `LDAP Enterprise Root CA`, which Path C's `trust-cluster` puts in the cluster trust bundle: Keycloak's certificate,
-and an application that calls Keycloak, need nothing else to be trusted. A directory set up before this change has
-`ldap-enterprise-ca`: run `15 … apply` (it re-issues the serving certificate from `enterprise-ca` and rolls slapd
-onto it; the root does not change, so nothing else does), then `oc delete clusterissuer ldap-enterprise-ca`.
+and an application that calls Keycloak, need nothing else to be trusted.
 
 ### ⏱️ The first start takes 2-4 minutes — this is normal
 
